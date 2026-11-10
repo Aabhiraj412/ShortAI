@@ -64,6 +64,7 @@ Desktop.ini
 # Runtime logs, caches, and temporary files
 logs/
 *.log
+*.lock
 cache/
 **/.cache/
 tmp/

@@ -265,12 +265,32 @@ class ProductionHealthDashboard:
         )
 
     def get_windows_task_status(self) -> Dict[str, Any]:
-        """Queries Windows scheduled task state."""
+        """Queries Windows scheduled task state for both CrazzyDocs tasks."""
         try:
-            from backend.scripts.manage_windows_startup import get_task_status
-            return get_task_status()
+            from backend.scripts.manage_windows_startup import get_all_tasks_status
+            return get_all_tasks_status()
         except Exception as e:
             return {"is_registered": False, "opt_in_enabled": False, "error": str(e)}
+
+    def get_services_status(self) -> Dict[str, Any]:
+        """Reports execution state of scheduler daemon and dashboard service."""
+        hb = self._get_scheduler_heartbeat()
+        scheduler_running = hb.get("is_running", False)
+        dashboard_pid = os.getpid()
+        return {
+            "scheduler_daemon": {
+                "state": "RUNNING" if scheduler_running else "STOPPED",
+                "is_running": scheduler_running,
+                "pid": hb.get("pid"),
+            },
+            "scheduler_heartbeat": hb,
+            "dashboard_service": {
+                "state": "RUNNING",
+                "is_running": True,
+                "pid": dashboard_pid,
+                "port": 8000,
+            },
+        }
 
     def get_database_health(self) -> Dict[str, Any]:
         """Validates SQLite database integrity and table structure."""

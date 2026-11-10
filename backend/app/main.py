@@ -256,15 +256,20 @@ async def get_dashboard_stats(filter: str = "all"):
 async def get_dashboard_health():
     from backend.app.services.production_health_dashboard import production_health_dashboard
     m = production_health_dashboard.get_health_metrics()
+    services = production_health_dashboard.get_services_status()
+    tasks = production_health_dashboard.get_windows_task_status()
     return {
         "overall_health": m.overall_health,
         "recovery_status": m.recovery_status,
         "network_status": m.network_status,
         "scheduler_heartbeat": m.scheduler_heartbeat,
+        "scheduler_daemon": services["scheduler_daemon"],
+        "dashboard_service": services["dashboard_service"],
         "publishing_queue": m.publishing_queue,
         "failed_qc_count": m.failed_qc_jobs["count"],
         "email_notifications": m.email_notifications,
-        "windows_task": production_health_dashboard.get_windows_task_status(),
+        "windows_task": tasks,
+        "windows_tasks": tasks,
         "database": production_health_dashboard.get_database_health(),
         "disk": production_health_dashboard.get_disk_health(),
     }

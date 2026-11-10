@@ -5,6 +5,13 @@ with single-instance process lock and startup reconciliation.
 """
 import os
 import sys
+
+# pythonw.exe execution guard: sys.stdout and sys.stderr are None in windowless mode
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 import time
 import signal
 import asyncio

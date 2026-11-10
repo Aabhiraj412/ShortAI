@@ -447,12 +447,28 @@
     </div>
     <div class="health-grid">
       <div class="health-item">
-        <span class="health-label">Scheduler Heartbeat</span>
-        <span class="health-val text-success" id="healthHeartbeat">IDLE (PID: None)</span>
+        <span class="health-label">Scheduler Daemon Process</span>
+        <span class="health-val text-warning" id="healthSchedulerProc">STOPPED</span>
       </div>
       <div class="health-item">
-        <span class="health-label">Windows Task Scheduler</span>
-        <span class="health-val" id="healthWindowsTask">OPTED-OUT / UNINSTALLED</span>
+        <span class="health-label">Scheduler Heartbeat</span>
+        <span class="health-val text-warning" id="healthHeartbeat">IDLE (PID: None)</span>
+      </div>
+      <div class="health-item">
+        <span class="health-label">Dashboard Service Process</span>
+        <span class="health-val text-success" id="healthDashboardProc">RUNNING (Port 8000)</span>
+      </div>
+      <div class="health-item">
+        <span class="health-label">Windows Task: Scheduler</span>
+        <span class="health-val" id="healthTaskScheduler">CHECKING...</span>
+      </div>
+      <div class="health-item">
+        <span class="health-label">Windows Task: Dashboard</span>
+        <span class="health-val" id="healthTaskDashboard">CHECKING...</span>
+      </div>
+      <div class="health-item" style="display:none;">
+        <span class="health-label">Windows Task Scheduler (Legacy)</span>
+        <span class="health-val" id="healthWindowsTask">OPTED-OUT</span>
       </div>
       <div class="health-item">
         <span class="health-label">Database Health</span>
@@ -609,14 +625,51 @@
         document.getElementById('statMissed').textContent = statsRes.missed;
         document.getElementById('statRecovered').textContent = statsRes.recovered;
 
-        // Health Items
+        // Health Items: Scheduler Heartbeat
         const hb = healthRes.scheduler_heartbeat || {};
         document.getElementById('healthHeartbeat').textContent = hb.state + (hb.pid ? ' (PID: ' + hb.pid + ')' : '');
         document.getElementById('healthHeartbeat').className = 'health-val ' + (hb.state === 'RUNNING' ? 'text-success' : 'text-warning');
 
-        const win = healthRes.windows_task || {};
-        document.getElementById('healthWindowsTask').textContent = win.is_registered ? 'REGISTERED (ONLOGON)' : 'OPTED-OUT / NOT REGISTERED';
-        document.getElementById('healthWindowsTask').className = 'health-val ' + (win.is_registered ? 'text-success' : 'text-warning');
+        // Scheduler Daemon Process
+        const sProc = healthRes.scheduler_daemon || {};
+        const sProcEl = document.getElementById('healthSchedulerProc');
+        if (sProcEl) {
+          sProcEl.textContent = sProc.is_running ? ('RUNNING (PID: ' + sProc.pid + ')') : 'STOPPED (Standby)';
+          sProcEl.className = 'health-val ' + (sProc.is_running ? 'text-success' : 'text-warning');
+        }
+
+        // Dashboard Service Process
+        const dProc = healthRes.dashboard_service || {};
+        const dProcEl = document.getElementById('healthDashboardProc');
+        if (dProcEl) {
+          dProcEl.textContent = dProc.is_running ? ('RUNNING (PID: ' + (dProc.pid || 'Active') + ', Port: ' + (dProc.port || 8000) + ')') : 'STOPPED';
+          dProcEl.className = 'health-val ' + (dProc.is_running ? 'text-success' : 'text-danger');
+        }
+
+        // Windows Tasks Status
+        const win = healthRes.windows_task || healthRes.windows_tasks || {};
+        const sTask = win.scheduler_task || {};
+        const dTask = win.dashboard_task || {};
+
+        const sTaskEl = document.getElementById('healthTaskScheduler');
+        if (sTaskEl) {
+          const sLabel = sTask.is_registered ? ('REGISTERED (' + (sTask.status || sTask.task_state || 'Ready') + ')') : 'NOT REGISTERED';
+          sTaskEl.textContent = sLabel;
+          sTaskEl.className = 'health-val ' + (sTask.is_registered ? (sTask.status === 'Disabled' ? 'text-warning' : 'text-success') : 'text-danger');
+        }
+
+        const dTaskEl = document.getElementById('healthTaskDashboard');
+        if (dTaskEl) {
+          const dLabel = dTask.is_registered ? ('REGISTERED (' + (dTask.status || dTask.task_state || 'Ready') + ')') : 'NOT REGISTERED';
+          dTaskEl.textContent = dLabel;
+          dTaskEl.className = 'health-val ' + (dTask.is_registered ? (dTask.status === 'Disabled' ? 'text-warning' : 'text-success') : 'text-danger');
+        }
+
+        const winLegacyEl = document.getElementById('healthWindowsTask');
+        if (winLegacyEl) {
+          winLegacyEl.textContent = win.is_registered ? 'REGISTERED' : 'NOT REGISTERED';
+          winLegacyEl.className = 'health-val ' + (win.is_registered ? 'text-success' : 'text-warning');
+        }
 
         const db = healthRes.database || {};
         document.getElementById('healthDb').textContent = db.status + ' (' + (db.journal_mode || 'WAL').toUpperCase() + ', ' + db.table_count + ' tables)';

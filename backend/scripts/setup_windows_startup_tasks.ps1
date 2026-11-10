@@ -6,7 +6,7 @@
 # ==============================================================================
 
 param(
-    [ValidateSet("Register", "Unregister", "Start", "Stop", "Status")]
+    [ValidateSet("Register", "Unregister", "Start", "Stop", "Status", "Enable-Scheduler", "Disable-Scheduler")]
     [string]$Action = "Register"
 )
 
@@ -79,6 +79,28 @@ if ($Action -eq "Stop") {
         } catch {
             Write-Host "Failed to stop task $name : $_" -ForegroundColor DarkGray
         }
+    }
+    exit 0
+}
+
+if ($Action -eq "Disable-Scheduler") {
+    Write-Host "`n[DISABLING PRODUCTION SCHEDULER TASK (SAFETY GUARD)]" -ForegroundColor Yellow
+    try {
+        Disable-ScheduledTask -TaskName $SchedulerTaskName | Out-Null
+        Write-Host "Task '$SchedulerTaskName' has been DISABLED. It will NOT run on logon until re-enabled." -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to disable task $SchedulerTaskName : $_" -ForegroundColor Red
+    }
+    exit 0
+}
+
+if ($Action -eq "Enable-Scheduler") {
+    Write-Host "`n[ENABLING PRODUCTION SCHEDULER TASK]" -ForegroundColor Yellow
+    try {
+        Enable-ScheduledTask -TaskName $SchedulerTaskName | Out-Null
+        Write-Host "Task '$SchedulerTaskName' has been ENABLED. Automatic logon execution is active." -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to enable task $SchedulerTaskName : $_" -ForegroundColor Red
     }
     exit 0
 }

@@ -56,3 +56,24 @@ def test_scheduler_daemon_heartbeat():
     assert "periodic_heartbeat_loop" in script_content
     assert "SchedulerProcessLock" in script_content
     assert "scheduler_daemon.log" in script_content
+
+
+def test_granular_task_and_service_reporting():
+    """Verify separate reporting for Windows tasks, scheduler daemon, and dashboard service."""
+    from backend.scripts.manage_windows_startup import get_all_tasks_status
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+
+    tasks = get_all_tasks_status()
+    assert "scheduler_task" in tasks
+    assert "dashboard_task" in tasks
+    assert tasks["scheduler_task"]["task_name"] == "CrazzyDocs-Production-Scheduler"
+    assert tasks["dashboard_task"]["task_name"] == "CrazzyDocs-Health-Dashboard"
+    assert tasks["scheduler_task"]["is_registered"] is True
+    assert tasks["dashboard_task"]["is_registered"] is True
+
+    services = production_health_dashboard.get_services_status()
+    assert "scheduler_daemon" in services
+    assert "scheduler_heartbeat" in services
+    assert "dashboard_service" in services
+    assert services["dashboard_service"]["is_running"] is True
+    assert services["dashboard_service"]["port"] == 8000

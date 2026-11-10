@@ -37,7 +37,7 @@ def main():
         "action",
         nargs="?",
         default="Status",
-        choices=["Register", "Unregister", "Start", "Stop", "Status"],
+        choices=["Register", "Unregister", "Start", "Stop", "Status", "Enable-Scheduler", "Disable-Scheduler"],
         help="Action to execute (default: Status)",
     )
     args = parser.parse_args()

@@ -1,10 +1,10 @@
 """
 Windows Startup & Scheduled Task Management Utility for CrazzyDocs.
-Phase 5, Stage 3.10 Production Standard.
+Phase 5 Production Standard (Stage 3.20B).
 
-Registers or unregisters an opt-in user-level Windows Scheduled Task to launch
-the autonomous studio scheduler on Windows user logon.
-Does not require admin privileges, modify Windows Registry, or alter execution policies.
+Inspects, registers, and manages user-level Windows Scheduled Tasks for:
+  - CrazzyDocs-Production-Scheduler (Autonomous 4-Cycle Scheduler Engine)
+  - CrazzyDocs-Health-Dashboard     (FastAPI Server & Browser Dashboard Auto-Launch)
 """
 
 import argparse
@@ -13,7 +13,7 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
 if WORKSPACE_ROOT not in sys.path:
@@ -23,7 +23,10 @@ from backend.app.database.db import SessionLocal, StudioSettingModel
 
 logger = logging.getLogger(__name__)
 
-TASK_NAME = "CrazzyDocsStudioScheduler"
+SCHEDULER_TASK_NAME = "CrazzyDocs-Production-Scheduler"
+DASHBOARD_TASK_NAME = "CrazzyDocs-Health-Dashboard"
+LEGACY_TASK_NAME = "CrazzyDocsStudioScheduler"
+TASK_NAME = SCHEDULER_TASK_NAME
 DEFAULT_LAUNCHER_BAT = os.path.join(WORKSPACE_ROOT, "start_studio.bat")
 
 
@@ -61,25 +64,78 @@ def set_opt_in_setting(enabled: bool):
         logger.warning("Could not persist startup setting: %s", e)
 
 
-def get_task_status(task_name: str = TASK_NAME) -> Dict:
-    """Queries Windows schtasks.exe for task registration status."""
-    cmd = ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST"]
+def query_task_details(task_name: str) -> Dict[str, Any]:
+    """Queries schtasks /Query /TN <task_name> /FO LIST /V for granular task details."""
+    cmd = ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        is_registered = (res.returncode == 0)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        if res.returncode != 0:
+            return {
+                "task_name": task_name,
+                "is_registered": False,
+                "status": "NOT_REGISTERED",
+                "task_state": "Not Registered",
+                "last_run_time": None,
+                "last_result": None,
+                "details": "Not registered in Windows Task Scheduler",
+            }
+        data = {}
+        for line in res.stdout.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                data[k.strip()] = v.strip()
+
+        status = data.get("Status", "Unknown")
+        task_state = data.get("Scheduled Task State", "Unknown")
+        last_run = data.get("Last Run Time")
+        last_res = data.get("Last Result")
+        has_never_run = "1999" in (last_run or "") or last_res == "267011"
+
         return {
             "task_name": task_name,
-            "is_registered": is_registered,
-            "opt_in_enabled": get_opt_in_setting(),
-            "details": res.stdout.strip() if is_registered else "Not registered in Windows Task Scheduler",
+            "is_registered": True,
+            "status": status,
+            "task_state": task_state,
+            "has_never_run": has_never_run,
+            "last_run_time": "Never" if has_never_run else last_run,
+            "last_result": last_res,
+            "task_to_run": data.get("Task To Run"),
+            "schedule_type": data.get("Schedule Type"),
+            "details": res.stdout.strip(),
         }
     except Exception as e:
         return {
             "task_name": task_name,
             "is_registered": False,
-            "opt_in_enabled": get_opt_in_setting(),
+            "status": "ERROR",
             "error": str(e),
+            "details": f"Error querying task: {e}",
         }
+
+
+def get_task_status(task_name: str = TASK_NAME) -> Dict:
+    """Queries task status with backward compatibility for Stage 3.10 interface."""
+    info = query_task_details(task_name)
+    info["opt_in_enabled"] = get_opt_in_setting()
+    return info
+
+
+def get_all_tasks_status() -> Dict[str, Any]:
+    """Queries both CrazzyDocs production scheduled tasks."""
+    s_info = query_task_details(SCHEDULER_TASK_NAME)
+    d_info = query_task_details(DASHBOARD_TASK_NAME)
+
+    # Check if either or both are registered
+    any_registered = s_info.get("is_registered", False) or d_info.get("is_registered", False)
+
+    return {
+        "task_name": SCHEDULER_TASK_NAME,
+        "is_registered": any_registered,
+        "opt_in_enabled": get_opt_in_setting(),
+        "scheduler_task": s_info,
+        "dashboard_task": d_info,
+        "details": f"Scheduler: {s_info.get('status')}; Dashboard: {d_info.get('status')}",
+    }
 
 
 def install_startup_task(
@@ -122,7 +178,6 @@ def uninstall_startup_task(task_name: str = TASK_NAME) -> Tuple[bool, str]:
         if res.returncode == 0:
             return True, f"Successfully unregistered Windows Scheduled Task '{task_name}'."
         else:
-            # If task was not found, treat as already uninstalled
             if "cannot find the file" in res.stderr.lower() or "not found" in res.stderr.lower():
                 return True, f"Task '{task_name}' was not registered."
             return False, f"schtasks failed: {res.stderr.strip()}"
@@ -132,8 +187,7 @@ def uninstall_startup_task(task_name: str = TASK_NAME) -> Tuple[bool, str]:
 
 
 if __name__ == "__main__":
-    from typing import Tuple
-    parser = argparse.ArgumentParser(description="Manage CrazzyDocs Windows Startup Scheduled Task")
+    parser = argparse.ArgumentParser(description="Manage CrazzyDocs Windows Startup Scheduled Tasks")
     parser.add_argument("--status", action="store_true", help="Check current task status")
     parser.add_argument("--install", action="store_true", help="Opt-in and register task on Windows user logon")
     parser.add_argument("--uninstall", action="store_true", help="Opt-out and unregister task")
@@ -142,11 +196,11 @@ if __name__ == "__main__":
     if args.install:
         ok, msg = install_startup_task()
         print(f"Result: {msg}")
-        exit(0 if ok else 1)
+        sys.exit(0 if ok else 1)
     elif args.uninstall:
         ok, msg = uninstall_startup_task()
         print(f"Result: {msg}")
-        exit(0 if ok else 1)
+        sys.exit(0 if ok else 1)
     else:
-        st = get_task_status()
+        st = get_all_tasks_status()
         print(json.dumps(st, indent=2))
