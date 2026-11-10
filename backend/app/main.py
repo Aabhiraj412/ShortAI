@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -48,9 +48,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static media directories for direct in-browser streaming and thumbnail display
+# Mount static directories for assets, branding, and media streaming
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 app.mount("/thumbnails", StaticFiles(directory=settings.THUMB_DIR), name="thumbnails")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def get_favicon():
+    """Serves the official YouTube icon as browser favicon."""
+    icon_path = os.path.join(STATIC_DIR, "branding", "Youtube-Icon.png")
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(settings.BASE_DIR, "media", "source", "branding", "Youtube-Icon.png")
+    if not os.path.exists(icon_path):
+        raise HTTPException(status_code=404, detail="Favicon not found")
+    return FileResponse(
+        icon_path,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400, must-revalidate"}
+    )
 
 # Request Models
 class PipelineTriggerRequest(BaseModel):
