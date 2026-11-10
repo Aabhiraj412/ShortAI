@@ -21,4 +21,4 @@ $env:TMP = "$baseDir\cache\temp"
 $env:PYTHONPATH = "$baseDir\backend"
 $env:PATH = "$baseDir\.venv\Scripts;$baseDir\tools\nodejs;$baseDir\tools\ffmpeg\bin;$baseDir\tools\uv;$baseDir\tools\python;$env:PATH"
 
-& "$baseDir\tools\python\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& "$baseDir\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000

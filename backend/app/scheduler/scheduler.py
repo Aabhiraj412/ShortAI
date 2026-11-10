@@ -250,8 +250,20 @@ async def run_cycle_publishing(cycle_id: str, test_ist_now: Optional[datetime] =
     return res
 
 
+async def run_daily_summary_dispatch(test_date_str: Optional[str] = None) -> Dict:
+    """Dispatches the consolidated 24h publishing summary email in Asia/Kolkata timezone."""
+    from backend.app.services.daily_publishing_summary import daily_publishing_summary_service
+    try:
+        res = daily_publishing_summary_service.send_daily_summary(date_str=test_date_str)
+        logger.info("[SCHEDULER] Daily publishing summary dispatched: %s (date=%s)", res.get("status"), res.get("date"))
+        return res
+    except Exception as e:
+        logger.error("[SCHEDULER] Daily publishing summary dispatch error: %s", e)
+        return {"status": "ERROR", "error": str(e)}
+
+
 def configure_scheduler_jobs():
-    """Configures independent generation and publishing cron jobs for the active profile."""
+    """Configures independent generation, publishing, and daily summary cron jobs for the active profile."""
     profile = get_active_profile()
     logger.info(
         "[SCHEDULER] Configuring jobs for active profile '%s' (%d cycles)...",
@@ -295,6 +307,23 @@ def configure_scheduler_jobs():
             replace_existing=True,
             name=f"Publishing Queue: {cycle.name}",
         )
+
+    # 3. Daily Publishing Summary Email Job (default 06:00 IST, configurable)
+    summary_hour = int(os.getenv("DAILY_SUMMARY_HOUR_IST", "6"))
+    summary_min = int(os.getenv("DAILY_SUMMARY_MIN_IST", "0"))
+    summary_job_id = "daily_publishing_summary_job"
+    summary_trigger = CronTrigger(
+        hour=summary_hour,
+        minute=summary_min,
+        timezone=profile.tz,
+    )
+    scheduler.add_job(
+        run_daily_summary_dispatch,
+        summary_trigger,
+        id=summary_job_id,
+        replace_existing=True,
+        name="Daily Publishing Summary Email",
+    )
 
 
 def start_scheduler(skip_lock_for_tests: bool = False):
@@ -381,6 +410,10 @@ def get_scheduler_status() -> Dict:
         "publishing_mode": settings.PUBLISHING_MODE,
     }
 
+    summary_job = scheduler.get_job("daily_publishing_summary_job")
+    summary_next_dt = getattr(summary_job, "next_run_time", None)
+    summary_next = summary_next_dt.isoformat() if summary_next_dt else None
+
     return {
         "is_running": scheduler.running,
         "active_profile": profile.name,
@@ -390,5 +423,9 @@ def get_scheduler_status() -> Dict:
         "publishing_mode": settings.PUBLISHING_MODE,
         "generation_job": legacy_gen,
         "publishing_job": legacy_pub,
+        "daily_summary_job": {
+            "cron_ist": f"{int(os.getenv('DAILY_SUMMARY_HOUR_IST', '6')):02d}:{int(os.getenv('DAILY_SUMMARY_MIN_IST', '0')):02d} IST",
+            "next_run": summary_next,
+        },
         "cycles": jobs_info,
     }

@@ -18,5 +18,5 @@ set TMP=%BASEDIR%\cache\temp
 set PYTHONPATH=%BASEDIR%\backend
 set PATH=%BASEDIR%\.venv\Scripts;%BASEDIR%\tools\nodejs;%BASEDIR%\tools\ffmpeg\bin;%BASEDIR%\tools\uv;%BASEDIR%\tools\python;%PATH%
 
-"%BASEDIR%\tools\python\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+"%BASEDIR%\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 pause

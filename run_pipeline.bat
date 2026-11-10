@@ -11,7 +11,7 @@ set TMP=%BASEDIR%\cache\temp
 set PYTHONPATH=%BASEDIR%\backend
 set PATH=%BASEDIR%\.venv\Scripts;%BASEDIR%\tools\nodejs;%BASEDIR%\tools\ffmpeg\bin;%BASEDIR%\tools\uv;%BASEDIR%\tools\python;%PATH%
 
-"%BASEDIR%\tools\python\python.exe" -c "
+"%BASEDIR%\.venv\Scripts\python.exe" -c "
 import asyncio
 from app.workers.pipeline import pipeline
 asyncio.run(pipeline.run_pipeline())

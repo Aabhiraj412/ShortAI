@@ -161,21 +161,39 @@
     "publication_status": "produced"
   },
   {
-    "topic_id": "topic_test_auto_job_001",
-    "topic_title": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
-    "opening_hook": "He survived the atomic blast in Hiroshima. Three days later, he was in Nagasaki.",
-    "main_subject": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
-    "key_entities": [
-      "Tsutomu Yamaguchi",
-      "Hiroshima",
-      "Nagasaki",
-      "Mitsubishi Heavy Industries",
-      "Atomic Bomb"
-    ],
-    "script_fingerprint": "4ab19655e30b28c81d5c4f80cde033f5323bfd76f093e206fbcdd4ac16598cff",
-    "category": "Unbelievable Real-Life Stories",
+    "topic_id": "topic_test_checkpoint_job_001",
+    "topic_title": "Tsutomu Yamaguchi Resumed Story",
+    "opening_hook": "He lived through two nuclear blasts.",
+    "main_subject": "Tsutomu Yamaguchi Resumed Story",
+    "key_entities": [],
+    "script_fingerprint": "c6042594b215e88bf15f776b33c6e6a262537fbb154c223cd8410fe3216da4c0",
+    "category": "history",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:26:14.439525Z",
+    "created_at": "2026-11-10T19:40:33.494923Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_interrupted_render_job",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T19:40:33.783215Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_interrupted_tts_job",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T19:40:35.310973Z",
     "publication_status": "produced"
   },
   {
@@ -193,43 +211,7 @@
     "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:26.240890Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_checkpoint_job_001",
-    "topic_title": "Tsutomu Yamaguchi Resumed Story",
-    "opening_hook": "He lived through two nuclear blasts.",
-    "main_subject": "Tsutomu Yamaguchi Resumed Story",
-    "key_entities": [],
-    "script_fingerprint": "c6042594b215e88bf15f776b33c6e6a262537fbb154c223cd8410fe3216da4c0",
-    "category": "history",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:42.947828Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_interrupted_render_job",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "history",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:43.278791Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_interrupted_tts_job",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "history",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:44.806269Z",
+    "created_at": "2026-11-10T19:40:36.480960Z",
     "publication_status": "produced"
   },
   {
@@ -241,7 +223,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:45.312713Z",
+    "created_at": "2026-11-10T19:40:42.657501Z",
     "publication_status": "produced"
   },
   {
@@ -253,7 +235,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:45.461987Z",
+    "created_at": "2026-11-10T19:40:42.891731Z",
     "publication_status": "produced"
   },
   {
@@ -265,7 +247,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:45.600435Z",
+    "created_at": "2026-11-10T19:40:43.046910Z",
     "publication_status": "produced"
   },
   {
@@ -277,7 +259,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:45.757967Z",
+    "created_at": "2026-11-10T19:40:43.208282Z",
     "publication_status": "produced"
   },
   {
@@ -289,7 +271,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:45.911520Z",
+    "created_at": "2026-11-10T19:40:43.344377Z",
     "publication_status": "produced"
   },
   {
@@ -301,7 +283,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:46.063480Z",
+    "created_at": "2026-11-10T19:40:43.495855Z",
     "publication_status": "produced"
   },
   {
@@ -313,7 +295,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:46.212107Z",
+    "created_at": "2026-11-10T19:40:43.628687Z",
     "publication_status": "produced"
   },
   {
@@ -325,7 +307,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:46.361385Z",
+    "created_at": "2026-11-10T19:40:43.757233Z",
     "publication_status": "produced"
   },
   {
@@ -337,7 +319,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "history",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:46.499211Z",
+    "created_at": "2026-11-10T19:40:43.891555Z",
     "publication_status": "produced"
   },
   {
@@ -349,7 +331,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "history",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:46.628489Z",
+    "created_at": "2026-11-10T19:40:44.033477Z",
     "publication_status": "produced"
   },
   {
@@ -367,7 +349,25 @@
     "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T18:56:46.780288Z",
+    "created_at": "2026-11-10T19:40:44.196813Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_auto_job_001",
+    "topic_title": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
+    "opening_hook": "He survived the atomic blast in Hiroshima. Three days later, he was in Nagasaki.",
+    "main_subject": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
+    "key_entities": [
+      "Tsutomu Yamaguchi",
+      "Hiroshima",
+      "Nagasaki",
+      "Mitsubishi Heavy Industries",
+      "Atomic Bomb"
+    ],
+    "script_fingerprint": "4ab19655e30b28c81d5c4f80cde033f5323bfd76f093e206fbcdd4ac16598cff",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T19:40:50.740015Z",
     "publication_status": "produced"
   }
 ]

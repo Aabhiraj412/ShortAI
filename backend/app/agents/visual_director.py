@@ -85,46 +85,30 @@ class VisualDirector:
             "SUBSCRIBE FOR MORE",
         ]
 
-        pose_map = [
-            "pose_idle_welcoming",
-            "pose_thinking_chin",
-            "pose_presenting_left",
-            "pose_presenting_right",
-            "pose_pointing_up",
-            "pose_shocked_hands",
-        ]
+        # Scientific/astrophysics visual motifs
+        is_space_or_black_hole = any(k in title.lower() for k in ("black hole", "space", "star", "physics", "singularity", "gravity"))
 
         scenes = []
         for i, (st, et, badge, trans, left, right, brows, cx) in enumerate(stage_boundaries):
             dur = round(et - st, 2)
             headline = default_headlines[min(i, len(default_headlines) - 1)]
-            doc_pose = pose_map[i % len(pose_map)]
 
-            scenes.append({
+            scene_dict = {
                 "id": i + 1,
                 "start_time": round(st, 2),
                 "duration": dur,
                 "headline": headline,
                 "badge": badge,
                 "background": chosen_bg,
-                "pose": doc_pose,
-                "talking": True,
-                "left_arm": left,
-                "right_arm": right,
-                "eyebrows": brows,
-                "char_x": cx,
-                "char_y": 760,
+                "visual_style": visual_style,
                 "camera_zoom_speed": 0.02,
                 "particles": True,
                 "transition": trans,
-            })
-            
-        storyboard = {
-            "title": title,
-            "total_duration": total_duration,
-            "scenes": scenes
-        }
-        return storyboard
+            }
+            if is_space_or_black_hole:
+                scene_dict["motifs"] = ["accretion disk", "event horizon", "gravitational lensing", "scientific visualization"]
+
+            scenes.append(scene_dict)
             
         storyboard = {
             "title": title,

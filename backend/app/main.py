@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -26,7 +27,8 @@ from app.services.youtube_service import YouTubePublisherService
 async def lifespan(app: FastAPI):
     # Startup
     init_db()
-    start_scheduler()
+    if os.getenv("ENABLE_EMBEDDED_SCHEDULER", "true").lower() in ("true", "1"):
+        start_scheduler()
     yield
     # Shutdown
 
@@ -49,11 +51,6 @@ app.add_middleware(
 # Mount static media directories for direct in-browser streaming and thumbnail display
 app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 app.mount("/thumbnails", StaticFiles(directory=settings.THUMB_DIR), name="thumbnails")
-
-# Mount frontend production build
-DIST_DIR = os.path.join(settings.BASE_DIR, "frontend", "dist")
-if os.path.exists(DIST_DIR):
-    app.mount("/", StaticFiles(directory=DIST_DIR, html=True), name="frontend")
 
 # Request Models
 class PipelineTriggerRequest(BaseModel):
@@ -119,12 +116,14 @@ async def get_overview(db: Session = Depends(get_db)):
     
     sched = get_scheduler_status()
     
+    next_pub = sched.get("next_scheduled_run") or sched.get("publishing_job", {}).get("next_run")
+    
     return {
         "total_created": total_created,
         "published": published,
         "pending": pending,
         "failed": failed,
-        "next_publication": sched["next_scheduled_run"],
+        "next_publication": next_pub,
         "pipeline_state": pipeline.current_stage,
         "publishing_mode": settings.PUBLISHING_MODE
     }
@@ -201,6 +200,98 @@ async def update_settings(req: SettingsUpdateRequest):
     if req.default_voice is not None:
         settings.DEFAULT_VOICE = req.default_voice
     return {"status": "success", "message": "Settings updated successfully."}
+
+# --- Browser Production Health Dashboard Endpoints ---
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard():
+    """Serves the rich, browser-accessible CrazzyDocs production health dashboard."""
+    tmpl_path = os.path.join(os.path.dirname(__file__), "templates", "dashboard.html")
+    if not os.path.exists(tmpl_path):
+        raise HTTPException(status_code=404, detail="Dashboard template not found.")
+    with open(tmpl_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
+
+
+@app.get("/api/dashboard/overview")
+async def get_dashboard_overview():
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    from backend.app.scheduler.schedule_profiles import get_active_profile, IST_TZ
+    from datetime import datetime, timedelta
+    
+    m = production_health_dashboard.get_health_metrics()
+    profile = get_active_profile()
+    now_ist = datetime.now(IST_TZ)
+    
+    # Calculate target publishing time
+    next_pub_str = "Calculating..."
+    for cycle in profile.cycles:
+        c_start, c_pub, _, _ = cycle.calculate_datetimes(now_ist)
+        if c_pub > now_ist:
+            next_pub_str = f"{c_pub.strftime('%Y-%m-%d %H:%M:%S IST')} ({cycle.name})"
+            break
+    if next_pub_str == "Calculating...":
+        tomorrow = now_ist + timedelta(days=1)
+        _, c_pub, _, _ = profile.cycles[0].calculate_datetimes(tomorrow)
+        next_pub_str = f"{c_pub.strftime('%Y-%m-%d %H:%M:%S IST')} ({profile.cycles[0].name})"
+
+    return {
+        "current_cycle": m.current_cycle,
+        "next_production_ist": m.next_production_ist,
+        "target_publishing_ist": next_pub_str,
+        "pipeline_stage": m.pipeline_stage,
+        "active_profile": profile.name,
+        "overall_health": m.overall_health,
+        "timestamp_ist": m.timestamp_ist,
+    }
+
+
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(filter: str = "all"):
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    return production_health_dashboard.get_production_statistics(time_filter=filter)
+
+
+@app.get("/api/dashboard/health")
+async def get_dashboard_health():
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    m = production_health_dashboard.get_health_metrics()
+    return {
+        "overall_health": m.overall_health,
+        "recovery_status": m.recovery_status,
+        "network_status": m.network_status,
+        "scheduler_heartbeat": m.scheduler_heartbeat,
+        "publishing_queue": m.publishing_queue,
+        "failed_qc_count": m.failed_qc_jobs["count"],
+        "email_notifications": m.email_notifications,
+        "windows_task": production_health_dashboard.get_windows_task_status(),
+        "database": production_health_dashboard.get_database_health(),
+        "disk": production_health_dashboard.get_disk_health(),
+    }
+
+
+@app.get("/api/dashboard/history")
+async def get_dashboard_history(limit: int = 25):
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    return production_health_dashboard.get_publishing_history(limit=limit)
+
+
+@app.get("/api/dashboard/recovery")
+async def get_dashboard_recovery(limit: int = 15):
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    return production_health_dashboard.get_recovery_history(limit=limit)
+
+
+@app.get("/api/dashboard/activity")
+async def get_dashboard_activity(limit: int = 25):
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    return production_health_dashboard.get_recent_activity(limit=limit)
+
+
+# Mount frontend production build as fallback
+DIST_DIR = os.path.join(settings.BASE_DIR, "frontend", "dist")
+if os.path.exists(DIST_DIR):
+    app.mount("/", StaticFiles(directory=DIST_DIR, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

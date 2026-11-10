@@ -94,6 +94,7 @@ media/frames/
 media/audit/
 media/temp/
 media/tmp/
+media/subtitles/
 thumbnails/generated/
 thumbnails/tmp/
 *.mp4

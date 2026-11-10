@@ -79,6 +79,8 @@ class ProductionHealthDashboard:
             pid = data.get("pid")
             acquired_at = data.get("acquired_at")
 
+            last_hb = data.get("last_heartbeat", acquired_at)
+
             if not pid:
                 return {"state": "STALE_LOCK", "is_running": False, "pid": None, "last_heartbeat": None}
 
@@ -90,14 +92,14 @@ class ProductionHealthDashboard:
                     "state": "RUNNING",
                     "is_running": True,
                     "pid": pid,
-                    "last_heartbeat": acquired_at,
+                    "last_heartbeat": last_hb,
                 }
             else:
                 return {
                     "state": "STALE_LOCK",
                     "is_running": False,
                     "pid": pid,
-                    "last_heartbeat": acquired_at,
+                    "last_heartbeat": last_hb,
                 }
         except Exception as e:
             return {"state": f"ERROR: {e}", "is_running": False, "pid": None, "last_heartbeat": None}
@@ -261,6 +263,224 @@ class ProductionHealthDashboard:
             scheduler_heartbeat=heartbeat,
             overall_health=overall_health,
         )
+
+    def get_windows_task_status(self) -> Dict[str, Any]:
+        """Queries Windows scheduled task state."""
+        try:
+            from backend.scripts.manage_windows_startup import get_task_status
+            return get_task_status()
+        except Exception as e:
+            return {"is_registered": False, "opt_in_enabled": False, "error": str(e)}
+
+    def get_database_health(self) -> Dict[str, Any]:
+        """Validates SQLite database integrity and table structure."""
+        if not os.path.exists(self.db_path):
+            return {"status": "MISSING", "integrity": "File not found"}
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("PRAGMA integrity_check;")
+            row = cur.fetchone()
+            integrity = row[0] if row else "unknown"
+            cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            table_count = cur.fetchone()[0]
+            cur.execute("PRAGMA journal_mode;")
+            journal_mode = cur.fetchone()[0]
+            conn.close()
+            return {
+                "status": "HEALTHY" if integrity == "ok" else "DEGRADED",
+                "integrity": integrity,
+                "table_count": table_count,
+                "journal_mode": journal_mode,
+            }
+        except Exception as e:
+            return {"status": "ERROR", "integrity": str(e)}
+
+    def get_disk_health(self) -> Dict[str, Any]:
+        """Measures disk free space and media directory footprint."""
+        try:
+            drive_letter = self.workspace[:2] if len(self.workspace) >= 2 else "D:"
+            usage = shutil.disk_usage(drive_letter)
+            free_gb = round(usage.free / (1024 ** 3), 2)
+            total_gb = round(usage.total / (1024 ** 3), 2)
+            used_pct = round(((usage.total - usage.free) / usage.total) * 100, 1)
+
+            media_dir = os.path.join(self.workspace, "media")
+            media_size = 0
+            if os.path.exists(media_dir):
+                for root, _, files in os.walk(media_dir):
+                    for f in files:
+                        try:
+                            media_size += os.path.getsize(os.path.join(root, f))
+                        except Exception:
+                            pass
+            media_mb = round(media_size / (1024 * 1024), 2)
+            return {
+                "free_gb": free_gb,
+                "total_gb": total_gb,
+                "used_pct": used_pct,
+                "media_size_mb": media_mb,
+                "status": "HEALTHY" if free_gb > 5.0 else "WARNING",
+            }
+        except Exception as e:
+            return {
+                "free_gb": 0.0,
+                "total_gb": 0.0,
+                "used_pct": 0.0,
+                "media_size_mb": 0.0,
+                "status": "UNKNOWN",
+                "error": str(e),
+            }
+
+    def get_production_statistics(self, time_filter: str = "all") -> Dict[str, Any]:
+        """Calculates accurate production metrics from persistent_jobs and publishing_ledger."""
+        now_ist = datetime.now(IST_TZ)
+        cutoff_date = None
+        if time_filter == "today":
+            cutoff_date = now_ist.strftime("%Y-%m-%d")
+        elif time_filter == "7d":
+            cutoff_date = (now_ist - timedelta(days=7)).strftime("%Y-%m-%d")
+        elif time_filter == "30d":
+            cutoff_date = (now_ist - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        with SessionLocal() as db_session:
+            query = db_session.query(JobModel)
+            if cutoff_date and time_filter == "today":
+                query = query.filter(JobModel.date_str == cutoff_date)
+            elif cutoff_date:
+                query = query.filter(JobModel.date_str >= cutoff_date)
+
+            jobs = query.all()
+            attempted = len(jobs)
+            completed = len([j for j in jobs if j.status == "COMPLETED"])
+            qc_failed = len([j for j in jobs if j.status in ("BLOCKED_QC", "FAILED_QC")])
+            missed = len([j for j in jobs if j.status == "MISSED"])
+            recovered = len([j for j in jobs if "RECOVER" in (j.id or "") or (j.retry_count or 0) > 0])
+
+        published = 0
+        if os.path.exists(self.db_path):
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cur = conn.cursor()
+                base_sql = "SELECT count(*) FROM publishing_ledger WHERE visibility = 'public' AND upload_status IN ('uploaded_public', 'published')"
+                if cutoff_date and time_filter == "today":
+                    cur.execute(f"{base_sql} AND upload_timestamp LIKE ?", (f"{cutoff_date}%",))
+                elif cutoff_date:
+                    cur.execute(f"{base_sql} AND upload_timestamp >= ?", (cutoff_date,))
+                else:
+                    cur.execute(base_sql)
+                row = cur.fetchone()
+                published = row[0] if row else 0
+            finally:
+                conn.close()
+
+        return {
+            "time_filter": time_filter,
+            "attempted": attempted,
+            "completed": completed,
+            "published": published,
+            "qc_failed": qc_failed,
+            "missed": missed,
+            "recovered": recovered,
+        }
+
+    def get_publishing_history(self, limit: int = 25) -> List[Dict[str, Any]]:
+        """Retrieves recent publishing ledger entries without exposing sensitive credentials."""
+        results = []
+        if not os.path.exists(self.db_path):
+            return results
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, topic_title, upload_status, visibility, youtube_video_id, upload_timestamp, scheduled_timestamp, error_details
+                FROM publishing_ledger
+                ORDER BY id DESC
+                LIMIT ?;
+            """, (limit,))
+            for row in cur.fetchall():
+                results.append({
+                    "id": row[0],
+                    "topic_title": row[1] or "Topic Untitled",
+                    "upload_status": row[2] or "unknown",
+                    "visibility": row[3] or "private",
+                    "youtube_video_id": row[4],
+                    "upload_timestamp": row[5],
+                    "scheduled_timestamp": row[6],
+                    "error_details": row[7],
+                })
+        finally:
+            conn.close()
+        return results
+
+    def get_recovery_history(self, limit: int = 15) -> List[Dict[str, Any]]:
+        """Retrieves recovery events and checkpoint resumption records."""
+        results = []
+        with SessionLocal() as db_session:
+            jobs = (
+                db_session.query(JobModel)
+                .filter(
+                    (JobModel.recovery_reason.isnot(None))
+                    | ((JobModel.retry_count or 0) > 0)
+                    | (JobModel.status.in_(["RETRYING", "RECOVERED"]))
+                )
+                .order_by(JobModel.updated_at.desc())
+                .limit(limit)
+                .all()
+            )
+            for j in jobs:
+                results.append({
+                    "job_id": j.id,
+                    "topic": j.topic_title or "Untitled Recovery",
+                    "recovery_reason": j.recovery_reason or "Interrupted Execution / Timeout",
+                    "status": j.status,
+                    "recovered_stage": j.current_stage or "CHECKPOINT_RESUME",
+                    "retry_count": j.retry_count or 0,
+                    "updated_at": j.updated_at.isoformat() if j.updated_at else "Not recorded",
+                    "operator_intervention_needed": (True if j.status in ("FAILED", "BLOCKED_QC") else False),
+                })
+        return results
+
+    def get_recent_activity(self, limit: int = 25) -> List[Dict[str, Any]]:
+        """Compiles latest operational activity from database."""
+        events = []
+        with SessionLocal() as db_session:
+            jobs = db_session.query(JobModel).order_by(JobModel.updated_at.desc()).limit(limit).all()
+            for j in jobs:
+                ts = j.updated_at.strftime("%Y-%m-%d %H:%M:%S IST") if j.updated_at else "Recent"
+                level = "danger" if j.status in ("FAILED", "BLOCKED_QC") else ("warning" if j.status in ("RETRYING", "MISSED") else "success")
+                events.append({
+                    "timestamp": ts,
+                    "type": "JOB_STATUS",
+                    "title": f"Job {j.id} -> {j.status}",
+                    "details": f"Stage: {j.current_stage} ({j.progress_pct:.0f}%) | Topic: {j.topic_title or 'N/A'}",
+                    "level": level,
+                })
+
+        if os.path.exists(self.db_path):
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id, topic_title, youtube_video_id, upload_status, visibility, upload_timestamp
+                    FROM publishing_ledger
+                    ORDER BY id DESC LIMIT 10;
+                """)
+                for row in cur.fetchall():
+                    st = row[3] or ""
+                    level = "success" if "uploaded" in st else ("danger" if "failed" in st else "info")
+                    events.append({
+                        "timestamp": (row[5] or "")[:19] + " UTC",
+                        "type": "PUBLISHING",
+                        "title": f"Publishing Queue #{row[0]} -> {row[3]}",
+                        "details": f"Topic: {row[1]} | Video ID: {row[2] or 'None'} | Visibility: {row[4]}",
+                        "level": level,
+                    })
+            finally:
+                conn.close()
+
+        events.sort(key=lambda x: x["timestamp"], reverse=True)
+        return events[:limit]
 
     def render_console_dashboard(self, metrics: Optional[ProductionHealthMetrics] = None) -> str:
         """Formats health metrics into an operational ASCII status table."""

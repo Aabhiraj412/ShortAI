@@ -35,7 +35,7 @@ from backend.app.services.notification_service import (
 
 WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
 HIST_MANIFEST = os.path.join(WORKSPACE_ROOT, "media", "images", "historical", "attribution_manifest.json")
-THUMBNAIL_PATH = os.path.join(WORKSPACE_ROOT, "media", "thumbnails", "showcase_stage_3_3_molasses_flood.png")
+THUMBNAIL_PATH = os.path.join(WORKSPACE_ROOT, "media", "thumbnails", "showcase_stage_3_5_yamaguchi_refined.png")
 
 
 def test_text_boundaries_no_overflow():

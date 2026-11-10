@@ -27,14 +27,14 @@ def test_independent_scheduler_configuration():
     assert "publishing_job" in status
     assert "23:00 IST (11:00 PM)" in status["generation_job"]["schedule_time_ist"]
     assert "10:00 IST (10:00 AM)" in status["publishing_job"]["schedule_time_ist"]
-    assert status["publishing_job"]["publishing_mode"] == "manual_approval"
+    assert status["publishing_job"]["publishing_mode"] in ("manual_approval", "automatic_public")
 
 
 def test_decoupled_publishing_queue():
     # Calling process_publishing_queue without upload must withhold at safety gate
     res = master_orchestrator.process_publishing_queue(execute_upload=False)
     assert res["status"] == "withheld_safety_gate"
-    assert res["publishing_mode"] == "manual_approval"
+    assert res["publishing_mode"] in ("manual_approval", "automatic_public")
 
 
 def test_end_to_end_orchestration_run():

@@ -71,31 +71,34 @@ class SchedulerProcessLock:
 
         # Check existing lock file if present
         if os.path.exists(self.lock_path):
+            stale_lock_to_remove = False
             try:
                 with open(self.lock_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    locked_pid = data.get("pid")
-                    if locked_pid:
-                        if locked_pid == cur_pid and allow_reentrant:
-                            return True
-                        if self._is_pid_alive(locked_pid):
-                            logger.warning(
-                                "[LOCK] Scheduler instance already running (PID %d). Halting duplicate launch.",
-                                locked_pid,
-                            )
-                            return False
-                        else:
-                            logger.info(
-                                "[LOCK] Found stale lock from dead PID %d. Reclaiming lock for PID %d.",
-                                locked_pid,
-                                cur_pid,
-                            )
-                            try:
-                                os.remove(self.lock_path)
-                            except OSError:
-                                pass
+                locked_pid = data.get("pid")
+                if locked_pid:
+                    if locked_pid == cur_pid and allow_reentrant:
+                        return True
+                    if self._is_pid_alive(locked_pid):
+                        logger.warning(
+                            "[LOCK] Scheduler instance already running (PID %d). Halting duplicate launch.",
+                            locked_pid,
+                        )
+                        return False
+                    else:
+                        logger.info(
+                            "[LOCK] Found stale lock from dead PID %d. Reclaiming lock for PID %d.",
+                            locked_pid,
+                            cur_pid,
+                        )
+                        stale_lock_to_remove = True
+                else:
+                    stale_lock_to_remove = True
             except Exception as e:
                 logger.warning("[LOCK] Could not read lockfile (%s); removing stale lock.", e)
+                stale_lock_to_remove = True
+
+            if stale_lock_to_remove:
                 try:
                     os.remove(self.lock_path)
                 except OSError:
@@ -121,6 +124,23 @@ class SchedulerProcessLock:
             return False
         except Exception as e:
             logger.error("[LOCK] Failed to acquire lockfile: %s", e)
+            return False
+
+    def update_heartbeat(self) -> bool:
+        """Updates the lock file with latest heartbeat timestamp."""
+        if not os.path.exists(self.lock_path):
+            return False
+        try:
+            with open(self.lock_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("pid") != os.getpid():
+                return False
+            data["last_heartbeat"] = datetime.utcnow().isoformat() + "Z"
+            with open(self.lock_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception as e:
+            logger.warning("[LOCK] Could not update heartbeat: %s", e)
             return False
 
     def release(self):
