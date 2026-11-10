@@ -69,30 +69,44 @@ class ProductionHealthDashboard:
         self.db_path = db_path
 
     def _get_scheduler_heartbeat(self) -> Dict[str, Any]:
-        """Inspects lockfile and process state."""
+        """Inspects lockfile, heartbeat freshness, and process liveness."""
         if not os.path.exists(LOCK_PATH):
-            return {"state": "IDLE", "is_running": False, "pid": None, "last_heartbeat": None}
+            return {"state": "IDLE", "is_running": False, "pid": None, "last_heartbeat": None, "age_seconds": None}
 
         try:
             with open(LOCK_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             pid = data.get("pid")
             acquired_at = data.get("acquired_at")
-
             last_hb = data.get("last_heartbeat", acquired_at)
 
             if not pid:
-                return {"state": "STALE_LOCK", "is_running": False, "pid": None, "last_heartbeat": None}
+                return {"state": "STALE_LOCK", "is_running": False, "pid": None, "last_heartbeat": None, "age_seconds": None}
+
+            # Check heartbeat freshness (max 180 seconds SLA)
+            is_fresh = False
+            age_sec = None
+            if last_hb:
+                try:
+                    clean_ts = last_hb.replace("Z", "+00:00")
+                    hb_dt = datetime.fromisoformat(clean_ts)
+                    now_utc = datetime.now(timezone.utc)
+                    age_sec = (now_utc - hb_dt).total_seconds()
+                    is_fresh = (0 <= age_sec <= 180.0)
+                except Exception:
+                    is_fresh = False
 
             # Check process liveness
             handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
             if handle:
                 ctypes.windll.kernel32.CloseHandle(handle)
+                state = "RUNNING" if is_fresh else "STALE_HEARTBEAT"
                 return {
-                    "state": "RUNNING",
-                    "is_running": True,
+                    "state": state,
+                    "is_running": is_fresh,
                     "pid": pid,
                     "last_heartbeat": last_hb,
+                    "age_seconds": round(age_sec, 1) if age_sec is not None else None,
                 }
             else:
                 return {
@@ -100,9 +114,10 @@ class ProductionHealthDashboard:
                     "is_running": False,
                     "pid": pid,
                     "last_heartbeat": last_hb,
+                    "age_seconds": round(age_sec, 1) if age_sec is not None else None,
                 }
         except Exception as e:
-            return {"state": f"ERROR: {e}", "is_running": False, "pid": None, "last_heartbeat": None}
+            return {"state": f"ERROR: {e}", "is_running": False, "pid": None, "last_heartbeat": None, "age_seconds": None}
 
     def _get_network_status(self) -> str:
         """Determines connectivity status."""
@@ -275,13 +290,18 @@ class ProductionHealthDashboard:
     def get_services_status(self) -> Dict[str, Any]:
         """Reports execution state of scheduler daemon and dashboard service."""
         hb = self._get_scheduler_heartbeat()
-        scheduler_running = hb.get("is_running", False)
         dashboard_pid = os.getpid()
+
+        # Dedicated daemon detection: lock must be fresh AND held by a dedicated daemon process (not the dashboard itself)
+        is_dedicated_daemon = hb.get("pid") is not None and hb.get("pid") != dashboard_pid
+        daemon_running = is_dedicated_daemon and hb.get("is_running", False)
+
         return {
             "scheduler_daemon": {
-                "state": "RUNNING" if scheduler_running else "STOPPED",
-                "is_running": scheduler_running,
-                "pid": hb.get("pid"),
+                "state": "RUNNING" if daemon_running else "STOPPED",
+                "is_running": daemon_running,
+                "pid": hb.get("pid") if is_dedicated_daemon else None,
+                "note": "Embedded Lock" if (hb.get("pid") == dashboard_pid) else None,
             },
             "scheduler_heartbeat": hb,
             "dashboard_service": {

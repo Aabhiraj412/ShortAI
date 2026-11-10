@@ -1,0 +1,30 @@
+{
+  "current_total_records": 252,
+  "records_to_archive": 251,
+  "records_to_preserve_in_active_ledger": 1,
+  "preserved_youtube_ids": [
+    "4DCas1e4vHI"
+  ],
+  "backup_file": "D:\\Agents\\CrazzyDocs\\backend\\backups\\studio_backup_pre_stage_3_21b_20261111_020710.db",
+  "backup_size_bytes": 6483968,
+  "backup_integrity": "ok",
+  "table_counts_in_backup": {
+    "topics": 0,
+    "studio_settings": 1,
+    "scripts": 0,
+    "storyboards": 0,
+    "video_jobs": 0,
+    "publications": 0,
+    "persistent_jobs": 4,
+    "research_records": 23,
+    "media_assets": 2,
+    "content_ledger": 25,
+    "sqlite_sequence": 2,
+    "publishing_ledger": 252,
+    "youtube_quota_ledger": 1,
+    "persistent_notifications": 0
+  },
+  "post_cleanup_active_queue_count": 0,
+  "post_cleanup_published_count": 1,
+  "post_cleanup_failed_count": 0
+}

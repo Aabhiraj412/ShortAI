@@ -627,7 +627,10 @@
 
         // Health Items: Scheduler Heartbeat
         const hb = healthRes.scheduler_heartbeat || {};
-        document.getElementById('healthHeartbeat').textContent = hb.state + (hb.pid ? ' (PID: ' + hb.pid + ')' : '');
+        const hbText = hb.state === 'RUNNING'
+          ? ('ACTIVE' + (hb.pid ? ' (PID: ' + hb.pid + ')' : ''))
+          : (hb.state === 'STALE_HEARTBEAT' ? ('STALE' + (hb.age_seconds ? ' (' + Math.round(hb.age_seconds / 60) + 'm ago)' : '')) : (hb.state || 'IDLE'));
+        document.getElementById('healthHeartbeat').textContent = hbText;
         document.getElementById('healthHeartbeat').className = 'health-val ' + (hb.state === 'RUNNING' ? 'text-success' : 'text-warning');
 
         // Scheduler Daemon Process

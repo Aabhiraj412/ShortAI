@@ -27,7 +27,7 @@ from app.services.youtube_service import YouTubePublisherService
 async def lifespan(app: FastAPI):
     # Startup
     init_db()
-    if os.getenv("ENABLE_EMBEDDED_SCHEDULER", "true").lower() in ("true", "1"):
+    if os.getenv("ENABLE_EMBEDDED_SCHEDULER", "false").lower() in ("true", "1"):
         start_scheduler()
     yield
     # Shutdown
