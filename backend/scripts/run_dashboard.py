@@ -15,6 +15,7 @@ Handles duplicate instance detection: if server is already running on the target
 import argparse
 import logging
 import os
+import socket
 import sys
 import threading
 import time
@@ -48,6 +49,16 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("crazzydocs.dashboard_runner")
+
+
+def is_port_in_use(host: str, port: int) -> bool:
+    """Check if the TCP port is already open/listening at the socket layer."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex((host, port)) == 0
+    except Exception:
+        return False
 
 
 def is_server_ready(url: str, timeout: float = 2.0) -> bool:
@@ -89,14 +100,23 @@ def main():
     dashboard_url = f"http://{args.host}:{args.port}/dashboard"
     health_url = f"http://{args.host}:{args.port}/api/dashboard/overview"
 
-    # Duplicate instance detection
+    # 1. Non-destructive port verification: check if CrazzyDocs dashboard is already responding
     if is_server_ready(health_url):
-        logger.info(f"CrazzyDocs Dashboard server is ALREADY running at {dashboard_url}.")
+        logger.info(f"CrazzyDocs Dashboard server is ALREADY running and healthy at {dashboard_url}.")
         if args.open_browser:
             logger.info(f"Opening browser to active dashboard: {dashboard_url}")
             webbrowser.open(dashboard_url)
         print(f"[OK] Dashboard is already active at: {dashboard_url}")
         return 0
+
+    # 2. Check if the port is bound by another process (do not terminate, notify user)
+    if is_port_in_use(args.host, args.port):
+        logger.warning(
+            f"Port {args.port} is currently in use on {args.host}, but not responding with HTTP 200 to {health_url}. "
+            "Halting startup to prevent port conflict. Please verify port ownership rather than terminating processes."
+        )
+        print(f"[WARN] Port {args.port} is already occupied on {args.host}. Aborting launch without terminating processes.")
+        return 1
 
     if args.open_browser:
         browser_thread = threading.Thread(
