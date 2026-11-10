@@ -78,7 +78,7 @@ class ScheduleProfile:
     description: str
     timezone_name: str = "Asia/Kolkata"
     cycles: List[ProductionCycle] = field(default_factory=list)
-    publishing_mode: str = "manual_approval"
+    publishing_mode: str = "automatic_public"
 
     @property
     def tz(self) -> ZoneInfo:
@@ -140,7 +140,7 @@ PROFILE_FOUR_CYCLES_DAILY = ScheduleProfile(
             recovery_window_hours=4.0,
         ),
     ],
-    publishing_mode="manual_approval",
+    publishing_mode="automatic_public",
 )
 
 # Recovery policies
@@ -168,7 +168,7 @@ PROFILE_SINGLE_DAILY_2300 = ScheduleProfile(
             window_hours=11.0,
         ),
     ],
-    publishing_mode="manual_approval",
+    publishing_mode="automatic_public",
 )
 
 AVAILABLE_PROFILES: Dict[str, ScheduleProfile] = {

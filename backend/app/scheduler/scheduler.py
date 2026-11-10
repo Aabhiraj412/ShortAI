@@ -240,8 +240,8 @@ async def run_cycle_publishing(cycle_id: str, test_ist_now: Optional[datetime] =
         cycle.name if cycle else cycle_id,
         now_ist.isoformat(),
     )
-    # Never execute public uploads without explicit manual approval
-    res = master_orchestrator.process_publishing_queue(execute_upload=False)
+    is_auto_public = getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
+    res = master_orchestrator.process_publishing_queue(execute_upload=is_auto_public)
     logger.info(
         "[SCHEDULER] Publishing queue processed for %s: status=%s",
         cycle_id,

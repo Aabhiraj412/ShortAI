@@ -28,6 +28,7 @@ import shutil
 import time
 from typing import Dict, List, Optional, Tuple
 
+from backend.app.core.config import settings
 from backend.app.content.curiosity_topic_engine import CuriosityTopicEngine, ScoredTopic
 from backend.app.content.topic_ledger import TopicLedger, ContentRecord, compute_script_fingerprint
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
@@ -396,11 +397,11 @@ class CrazzyDocsMasterOrchestrator:
                 with SessionLocal() as db_session:
                     job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
                     if job:
-                        job.status = "QC_REJECTED"
-                        job.current_stage = "QC_REJECTED"
+                        job.status = "BLOCKED_QC"
+                        job.current_stage = "BLOCKED_QC"
                         job.error_details = "; ".join(integrity_report.rejection_reasons)
                         db_session.commit()
-                raise ValueError(f"EDITORIAL_QC_REJECTED: {integrity_report.rejection_reasons}")
+                raise ValueError(f"BLOCKED_QC: {integrity_report.rejection_reasons}")
 
             logger.info("[CONTENT INTEGRITY GATE] PASSED! 9/9 checks verified for topic '%s'.", selected_topic.title)
 
@@ -460,6 +461,9 @@ class CrazzyDocsMasterOrchestrator:
             # Stage 14: YouTube Publishing Queue Enqueueing
             # -------------------------------------------------------------
             logger.info("[STAGE 14] Enqueueing to YouTube Publishing Queue...")
+            is_auto_public = getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
+            target_visibility = "public" if is_auto_public else "private"
+
             # Store in PublishingDatabase as draft / pending upload
             pub_record = PublicationRecord(
                 id=None,
@@ -469,7 +473,7 @@ class CrazzyDocsMasterOrchestrator:
                 metadata_json=json.dumps(asdict(meta)),
                 youtube_video_id=None,
                 upload_status="pending_queue",
-                visibility="private",
+                visibility=target_visibility,
                 video_hash=compute_file_sha256(final_video_path),
                 upload_timestamp=None,
                 scheduled_timestamp="10:00 AM IST",
@@ -489,7 +493,7 @@ class CrazzyDocsMasterOrchestrator:
                 "duration_sec": dur,
                 "elapsed_sec": round(elapsed, 1),
                 "notifications": notif_res,
-                "publishing_status": "enqueued_private",
+                "publishing_status": f"enqueued_{target_visibility}",
             }
 
         except Exception as e:
@@ -514,22 +518,27 @@ class CrazzyDocsMasterOrchestrator:
     def process_publishing_queue(self, execute_upload: bool = False) -> Dict:
         """
         Executes Stage 14 independently according to the publishing schedule.
-        Decoupled from generation. By default maintains strict manual approval.
+        Decoupled from generation. Enforces settings.PUBLISHING_MODE.
         """
         logger.info("[PUBLISHING QUEUE] Checking enqueued publications...")
         quota_used = self.publishing_engine.db.get_quota_used_today()
         logger.info("Daily YouTube quota consumed: %d units", quota_used)
 
-        if not execute_upload:
-            logger.info("Publishing mode is 'manual_approval'. Upload withheld at safety gate.")
+        is_auto_public = getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
+        should_upload = execute_upload and is_auto_public
+
+        if not should_upload:
+            logger.info("Publishing mode is '%s'. Upload withheld at safety gate.", settings.PUBLISHING_MODE)
             return {
                 "status": "withheld_safety_gate",
-                "publishing_mode": "manual_approval",
+                "publishing_mode": settings.PUBLISHING_MODE,
                 "quota_used": quota_used,
                 "message": "Videos remain staged safely for manual approval."
             }
 
-        # If explicit test upload authorized, upload as private
+        target_visibility = "public" if is_auto_public else "private"
+
+        # If upload authorized, fetch next pending video
         conn = sqlite3.connect(self.publishing_engine.db.db_path)
         cur = conn.cursor()
         cur.execute("""
@@ -553,8 +562,8 @@ class CrazzyDocsMasterOrchestrator:
             topic_title=title,
             metadata=metadata,
             thumbnail_path=t_path,
-            visibility="private",  # Strictly private
-            allow_public_bypass=False,
+            visibility=target_visibility,
+            allow_public_bypass=is_auto_public,
         )
         return res
 

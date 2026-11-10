@@ -1,26 +1,26 @@
 <#
 .SYNOPSIS
-    Installs the Windows Task Scheduler task for daily production at 11:00 PM IST.
+    Installs the Windows Task Scheduler task for CrazzyDocs 4-cycle autonomous scheduler.
 #>
-$taskName = "AIShortsStudio_DailyProduction"
-$scriptPath = "D:\Agents\CrazzyDocs\scripts\start_daily_pipeline.ps1"
-$actionCmd = "powershell.exe"
-$actionArgs = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
+$taskName = "CrazzyDocs_AutonomousScheduler"
+$scriptPath = "D:\Agents\CrazzyDocs\backend\scripts\run_scheduler_daemon.py"
+$pyExe = "D:\Agents\CrazzyDocs\.venv\Scripts\python.exe"
+$actionArgs = "`"$scriptPath`""
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "   REGISTERING DAILY SHORTS STUDIO TASK IN WINDOWS SCHEDULER" -ForegroundColor Cyan
+Write-Host "   REGISTERING CRAZZYDOCS 4-CYCLE SCHEDULER IN WINDOWS TASK SCHEDULER" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "Task Name: $taskName"
-Write-Host "Trigger: Daily at 23:00 (11:00 PM IST)"
+Write-Host "Trigger: At System Startup / User Logon"
+Write-Host "Executable: $pyExe"
 Write-Host "Script: $scriptPath"
 
-# Use schtasks.exe for universal Windows 11 compatibility
+# Register task to start on logon for user session context
 $schArgs = @(
     "/Create",
     "/TN", $taskName,
-    "/TR", "$actionCmd $actionArgs",
-    "/SC", "DAILY",
-    "/ST", "23:00",
+    "/TR", "`"$pyExe`" $actionArgs",
+    "/SC", "ONLOGON",
     "/F"
 )
 

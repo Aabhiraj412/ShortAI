@@ -134,7 +134,7 @@ class PublishingDatabase:
             cur.execute("""
                 SELECT youtube_video_id, upload_status, visibility FROM publishing_ledger
                 WHERE (video_hash = ? OR topic_title = ?)
-                  AND upload_status IN ('uploaded_private', 'uploaded_unlisted', 'published')
+                  AND upload_status IN ('uploaded_private', 'uploaded_unlisted', 'uploaded_public', 'published')
             """, (v_hash, topic_title))
             row = cur.fetchone()
             if row:

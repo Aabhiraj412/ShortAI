@@ -25,6 +25,7 @@ from backend.app.scheduler.scheduler import (
     run_cycle_publishing,
     scheduler,
 )
+from backend.app.core.config import settings
 from backend.app.database.db import SessionLocal, JobModel
 
 
@@ -158,8 +159,9 @@ async def test_duplicate_run_prevention():
 
 
 @pytest.mark.asyncio
-async def test_cycle_publishing_safety_gate():
-    """Verifies that run_cycle_publishing executes queue processing with upload disabled."""
+async def test_cycle_publishing_safety_gate(monkeypatch):
+    """Verifies that run_cycle_publishing executes queue processing with upload disabled in manual_approval mode."""
+    monkeypatch.setattr(settings, "PUBLISHING_MODE", "manual_approval")
     test_dt = datetime(2026, 11, 10, 12, 0, 0, tzinfo=IST_TZ)
     res = await run_cycle_publishing(cycle_id="cycle_2", test_ist_now=test_dt)
     assert res["status"] == "withheld_safety_gate"
