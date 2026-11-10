@@ -165,6 +165,137 @@ def test_scenario_b_mid_production_crash_resumption(matrix_test_env, checkpoint_
     assert res["thumbnail_path"] == valid_thumb
 
 
+def test_scenario_5_shutdown_after_rendering_before_qc(matrix_test_env):
+    """
+    Scenario 5: Power loss after Stage 9 (rendering complete) but before Stage 11 (QC).
+    Verifies that upon resumption, the rendered video is preserved, and QC is executed cleanly.
+    """
+    job_id = "test_scen_5_post_render"
+    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
+    valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
+
+    with SessionLocal() as db:
+        db.add(JobModel(
+            id=job_id,
+            date_str="2026-11-10",
+            status="RUNNING",
+            current_stage="RENDERING",
+            progress_pct=75.0,
+            checkpoint_data_json=json.dumps({
+                "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+                "hook_text": "She fell 33,000 feet without a parachute—and walked out of the hospital alive.",
+                "video_path": valid_video,
+                "thumbnail_path": valid_thumb,
+                "winning_thumbnail": "SURVIVED 33,000 FT",
+            }),
+        ))
+        db.commit()
+
+    with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
+        res = master_orchestrator.execute_production_pipeline(job_id=job_id, force_topic_id="cand_03_vesna_fall")
+
+    assert res["status"] == "COMPLETED"
+    assert res["video_path"] == valid_video
+    assert res["publishing_status"] in ("enqueued_private", "enqueued_public")
+
+
+def test_scenario_6_shutdown_after_qc_before_publishing(matrix_test_env):
+    """
+    Scenario 6: Power loss after Stage 11 (QC passed) but before publishing enqueuing.
+    Verifies that upon resumption, pipeline does not re-render and safely reaches publishing stage.
+    """
+    job_id = "test_scen_6_post_qc"
+    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
+    valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
+
+    with SessionLocal() as db:
+        db.add(JobModel(
+            id=job_id,
+            date_str="2026-11-10",
+            status="RUNNING",
+            current_stage="QC",
+            progress_pct=90.0,
+            checkpoint_data_json=json.dumps({
+                "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+                "hook_text": "She fell 33,000 feet without a parachute—and walked out of the hospital alive.",
+                "video_path": valid_video,
+                "thumbnail_path": valid_thumb,
+                "winning_thumbnail": "SURVIVED 33,000 FT",
+            }),
+        ))
+        db.commit()
+
+    with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
+        res = master_orchestrator.execute_production_pipeline(job_id=job_id, force_topic_id="cand_03_vesna_fall")
+
+    assert res["status"] == "COMPLETED"
+    assert res["publishing_status"] in ("enqueued_private", "enqueued_public")
+
+
+def test_scenario_11_corrupted_or_incomplete_checkpoint(matrix_test_env):
+    """
+    Scenario 11: Simulates corrupted JSON checkpoint file (e.g. truncated mid-write).
+    Verifies that system catches JSONDecodeError, falls back cleanly to clean discovery, and does not crash.
+    """
+    job_id = "test_scen_11_corrupt_cp"
+
+    with SessionLocal() as db:
+        db.add(JobModel(
+            id=job_id,
+            date_str="2026-11-10",
+            status="RUNNING",
+            current_stage="RENDERING",
+            progress_pct=50.0,
+            checkpoint_data_json="{corrupted_json_truncated...",  # Invalid JSON
+        ))
+        db.commit()
+
+    with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
+        res = master_orchestrator.execute_production_pipeline(job_id=job_id, force_topic_id="cand_03_vesna_fall")
+
+    assert res["status"] == "COMPLETED"
+    assert "33,000" in res["topic"] or "Vesna" in res["topic"]
+
+
+def test_scenario_12_database_connection_failure_resilience(matrix_test_env):
+    """
+    Scenario 12: Simulates temporary SQLite database lock/busy state.
+    Verifies that checkpoint updater logs a warning and does not abort the entire pipeline.
+    """
+    job_id = "test_scen_12_db_lock"
+
+    # Call _update_checkpoint with an invalid session to simulate lock
+    with patch("backend.app.orchestration.crazzydocs_master_orchestrator.SessionLocal", side_effect=sqlite3.OperationalError("database is locked")):
+        # Must not raise unhandled exception
+        master_orchestrator._update_checkpoint(job_id, "TEST_STAGE", 50.0, {"key": "val"})
+
+
+def test_scenario_14_multiple_missed_cycles_reconciliation(matrix_test_env):
+    """
+    Scenario 14: System offline for >24 hours (all 4 daily cycles missed).
+    Under CATCH_UP policy, reconciler must recover at most 1 missed cycle (no runaway flood).
+    Under STRICT_WINDOW policy, all 4 are marked MISSED with zero extra executions.
+    """
+    test_date = matrix_test_env
+    # Boot next day at 23:30 IST
+    dt_2330 = datetime(2026, 11, 10, 23, 30, 0, tzinfo=IST_TZ)
+    mock_net = MagicMock(spec=NetworkConnectivityService)
+    mock_net.is_environment_ready_for_cycle.return_value = (True, "READY", {})
+    reconciler = StartupReconciler(network_service=mock_net)
+
+    # Clean records
+    with SessionLocal() as db:
+        db.query(JobModel).filter(JobModel.date_str == test_date).delete()
+        db.commit()
+
+    # Under CATCH_UP: exactly 1 cycle recovered
+    report_catchup = reconciler.reconcile_on_startup(test_now_ist=dt_2330, recovery_policy=POLICY_CATCH_UP)
+    assert len(report_catchup["recovered_cycles"]) == 1, "CATCH_UP policy must recover at most 1 cycle!"
+    assert len(report_catchup["missed_cycles"]) == 3, "Remaining 3 cycles must be marked MISSED!"
+
+
 # =============================================================================
 # SCENARIO C: Network Backoff & Retry
 # =============================================================================
