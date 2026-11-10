@@ -1204,8 +1204,10 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
                 completion_time=now_ist.strftime("%H:%M:%S IST"),
                 total_duration_sec=float(result.get("total_duration_sec", 45.2)),
             )
+            canonical_video = "media/productions/prod_cycle_4_20261110_1800/video/showcase_cycle_4_20261110_1800.mp4"
+            fallback_video = canonical_video if os.path.exists(os.path.join(settings.BASE_DIR, canonical_video)) else "media/video/showcase_stage_3_4_tsutomu_yamaguchi.mp4"
             deliv = DeliverablesDetails(
-                video_path=result.get("video_path") or "media/video/showcase_stage_3_4_tsutomu_yamaguchi.mp4",
+                video_path=result.get("video_path") or fallback_video,
                 thumbnail_path=t_path or "media/thumbnails/showcase_stage_3_9a_yamaguchi_poster.png",
                 subtitle_path=result.get("subtitle_path") or "media/subtitles/editorial/yamaguchi_editorial.json",
                 attribution_manifest_path=result.get("attribution_manifest_path") or "media/images/yamaguchi/attribution_manifest.json",

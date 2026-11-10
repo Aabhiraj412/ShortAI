@@ -235,7 +235,9 @@ class CrazzyDocsMasterOrchestrator:
             )
 
             if is_vesna:
-                voice_path = os.path.join(WORKSPACE, "media", "audio", "stage_3_13_vesna_voice.mp3")
+                voice_path = os.path.join(WORKSPACE, "media", "productions", "prod_20261110_vesna_vulovic", "narration", "stage_3_13_vesna_voice.mp3")
+                if not os.path.exists(voice_path):
+                    voice_path = os.path.join(WORKSPACE, "media", "audio", "stage_3_13_vesna_voice.mp3")
                 narration_text = (
                     "She fell 33,000 feet without a parachute—and walked out of the hospital alive. "
                     "In 1972, flight attendant Vesna Vulović boarded JAT Flight 367 over Czechoslovakia. "
@@ -272,7 +274,9 @@ class CrazzyDocsMasterOrchestrator:
                     "He lived to be 93."
                 )
                 visual_beats = YAMAGUCHI_BEAT_CONFIGS
-                source_video = os.path.join(VIDEO_DIR, "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
+                source_video = os.path.join(WORKSPACE, "media", "productions", "prod_cycle_4_20261110_1800", "video", "showcase_cycle_4_20261110_1800.mp4")
+                if not os.path.exists(source_video):
+                    source_video = os.path.join(VIDEO_DIR, "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
                 yamaguchi_img_dir = os.path.join(WORKSPACE, "media", "images", "yamaguchi")
                 thumb_assets = [
                     os.path.join(yamaguchi_img_dir, "Atomic_cloud_over_Hiroshima_jpg.jpg"),

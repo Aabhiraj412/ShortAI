@@ -40,7 +40,9 @@ def integrity_gate():
 @pytest.fixture
 def vesna_valid_data():
     """Provides valid editorial assets for the Vesna Vulović production."""
-    manifest_path = os.path.join(VESNA_IMG_DIR, "attribution_manifest.json")
+    manifest_path = os.path.join(VESNA_PROD_DIR, "assets", "attribution_manifest.json")
+    if not os.path.isfile(manifest_path):
+        manifest_path = os.path.join(VESNA_IMG_DIR, "attribution_manifest.json")
     manifest_assets = []
     if os.path.isfile(manifest_path):
         with open(manifest_path, "r", encoding="utf-8") as f:
@@ -258,7 +260,9 @@ def test_integrity_gate_rejects_unrelated_tags(integrity_gate, vesna_valid_data)
 def test_integrity_gate_rejects_stale_yamaguchi_video_copy(integrity_gate, vesna_valid_data):
     """CHECK I: Rejects when output video is an identical binary clone of Yamaguchi showcase video."""
     data = vesna_valid_data
-    yamaguchi_video = os.path.join(VIDEO_DIR, "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
+    yamaguchi_video = os.path.join(WORKSPACE, "media", "productions", "prod_cycle_4_20261110_1800", "video", "showcase_cycle_4_20261110_1800.mp4")
+    if not os.path.isfile(yamaguchi_video):
+        yamaguchi_video = os.path.join(VIDEO_DIR, "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
 
     if os.path.isfile(yamaguchi_video):
         report = integrity_gate.validate_production(
@@ -326,12 +330,26 @@ def test_integrity_gate_rejects_stick_character_in_black_hole_story(integrity_ga
 def test_master_orchestrator_runs_vesna_through_integrity_gate():
     """Tests master orchestrator end-to-end execution on Vesna Vulović topic with gate validation."""
     orchestrator = CrazzyDocsMasterOrchestrator()
-    res = orchestrator.execute_production_pipeline(
-        job_id="test_vesna_integrity_run",
-        force_topic_id="cand_03_vesna_fall",
-    )
-    assert res["status"] == "COMPLETED"
-    assert "33,000" in res["topic"] or "Vesna" in res["topic"]
-    assert os.path.isfile(res["video_path"])
-    assert os.path.isfile(res["thumbnail_path"])
-    assert res["publishing_status"] in ("enqueued_private", "enqueued_public")
+    job_id = "test_vesna_integrity_run"
+    try:
+        res = orchestrator.execute_production_pipeline(
+            job_id=job_id,
+            force_topic_id="cand_03_vesna_fall",
+        )
+        assert res["status"] == "COMPLETED"
+        assert "33,000" in res["topic"] or "Vesna" in res["topic"]
+        assert os.path.isfile(res["video_path"])
+        assert os.path.isfile(res["thumbnail_path"])
+        assert res["publishing_status"] in ("enqueued_private", "enqueued_public")
+    finally:
+        import shutil
+        test_dir = os.path.join(WORKSPACE, "media", "productions", job_id)
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir, ignore_errors=True)
+        # Clean test ledger entry so clean production slate is preserved
+        import sqlite3
+        conn = sqlite3.connect(os.path.join(WORKSPACE, "backend", "studio.db"))
+        cur = conn.cursor()
+        cur.execute("DELETE FROM publishing_ledger WHERE id > 32 AND video_path LIKE '%test_vesna_integrity_run%'")
+        conn.commit()
+        conn.close()

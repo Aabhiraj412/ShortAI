@@ -240,7 +240,9 @@ class ContentIntegrityGate:
         if os.path.isfile(video_path):
             current_v_hash = compute_sha256(video_path)
             # Compare against reference Yamaguchi video to ensure not a copy
-            ref_yamaguchi = os.path.join(self.workspace, "media", "video", "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
+            ref_yamaguchi = os.path.join(self.workspace, "media", "productions", "prod_cycle_4_20261110_1800", "video", "showcase_cycle_4_20261110_1800.mp4")
+            if not os.path.isfile(ref_yamaguchi):
+                ref_yamaguchi = os.path.join(self.workspace, "media", "video", "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
             if os.path.isfile(ref_yamaguchi) and not is_nuclear_topic:
                 yamaguchi_hash = compute_sha256(ref_yamaguchi)
                 if current_v_hash == yamaguchi_hash:

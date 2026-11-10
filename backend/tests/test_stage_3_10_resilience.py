@@ -187,7 +187,9 @@ def test_internet_outage_past_recovery_window(clean_test_db):
 def test_checkpoint_resumption_skips_completed_stages(clean_test_db):
     """Verifies that an interrupted job resumes from checkpoint without re-rendering."""
     job_id = "test_checkpoint_job_001"
-    existing_video = os.path.join(r"D:\Agents\CrazzyDocs\media\video\showcase_stage_3_4_tsutomu_yamaguchi.mp4")
+    existing_video = os.path.join(r"D:\Agents\CrazzyDocs\media\productions\prod_cycle_4_20261110_1800\video\showcase_cycle_4_20261110_1800.mp4")
+    if not os.path.exists(existing_video):
+        existing_video = os.path.join(r"D:\Agents\CrazzyDocs\media\video\showcase_stage_3_4_tsutomu_yamaguchi.mp4")
     existing_thumb = os.path.join(r"D:\Agents\CrazzyDocs\media\thumbnails\showcase_stage_3_9a_yamaguchi_poster.png")
 
     # Seed an interrupted job with Stage 4 and Stage 9 already completed
@@ -207,17 +209,30 @@ def test_checkpoint_resumption_skips_completed_stages(clean_test_db):
         db_session.add(job)
         db_session.commit()
 
-    with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
-        res = master_orchestrator.execute_production_pipeline(job_id=job_id)
+    try:
+        with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
+            res = master_orchestrator.execute_production_pipeline(job_id=job_id)
 
-    assert res["status"] == "COMPLETED"
-    assert res["topic"] == "Tsutomu Yamaguchi Resumed Story"
+        assert res["status"] == "COMPLETED"
+        assert res["topic"] == "Tsutomu Yamaguchi Resumed Story"
 
-    # Verify DB state
-    with SessionLocal() as db_session:
-        saved_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-        assert saved_job.status == "COMPLETED"
-        assert saved_job.current_stage == "COMPLETED"
+        # Verify DB state
+        with SessionLocal() as db_session:
+            saved_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+            assert saved_job.status == "COMPLETED"
+            assert saved_job.current_stage == "COMPLETED"
+    finally:
+        import shutil
+        test_dir = os.path.join(r"D:\Agents\CrazzyDocs\media\productions", job_id)
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir, ignore_errors=True)
+        # Clean test ledger entry so clean production slate is preserved
+        import sqlite3
+        conn = sqlite3.connect(r"D:\Agents\CrazzyDocs\backend\studio.db")
+        cur = conn.cursor()
+        cur.execute("DELETE FROM publishing_ledger WHERE id > 32 AND topic_title = 'Tsutomu Yamaguchi Resumed Story'")
+        conn.commit()
+        conn.close()
 
 
 def test_single_instance_lock_defense(tmp_path):
