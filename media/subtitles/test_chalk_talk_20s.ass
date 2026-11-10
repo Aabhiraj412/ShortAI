@@ -1,0 +1,19 @@
+[Script Info]
+Title: AI YouTube Shorts Subtitles
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ShortsDefault,Arial,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,1,6,3,2,60,60,420,1
+Style: ShortsHighlight,Arial,78,&H0000F0FF,&H0000FFFF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,7,4,2,60,60,420,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.10,0:00:04.52,ShortsHighlight,,0,0,0,,THE MOON IS CONSTANTLY FALLING\NTOWARD EARTH, PULLED BY GRAVITY.
+Dialogue: 0,0:00:04.47,0:00:06.71,ShortsHighlight,,0,0,0,,BUT IT NEVER CRASHES!
+Dialogue: 0,0:00:06.71,0:00:11.22,ShortsHighlight,,0,0,0,,BECAUSE THE MOON ALSO FLIES\NFORWARD AT ONE KILOMETER PER SECOND.
+Dialogue: 0,0:00:11.22,0:00:14.67,ShortsHighlight,,0,0,0,,AS IT FALLS, EARTH\NCURVES AWAY BENEATH IT.
+Dialogue: 0,0:00:14.67,0:00:20.86,ShortsHighlight,,0,0,0,,NEWTON PROVED THIS: THE MOON IS IN\NPERPETUAL ORBIT, FOREVER FALLING AND FOREVER MISSING!

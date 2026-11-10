@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 400" width="250" height="400">
+  <defs>
+    <linearGradient id="armJacket" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E2235" />
+      <stop offset="100%" stop-color="#0E101A" />
+    </linearGradient>
+    <linearGradient id="skinArm" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFDFC4" />
+      <stop offset="100%" stop-color="#F0B892" />
+    </linearGradient>
+  </defs>
+
+  <!-- Left Arm Raised / Presenting Gesture -->
+  <path d="M 210 60 Q 180 160 130 190 L 70 170 Q 130 130 170 50 Z" fill="url(#armJacket)" stroke="#2B2D42" stroke-width="2.5" />
+  <!-- Forearm reaching outward -->
+  <path d="M 130 190 L 50 140 L 40 170 L 115 220 Z" fill="url(#armJacket)" />
+  <!-- Cuff -->
+  <path d="M 50 140 L 40 170 L 32 165 L 42 135 Z" fill="#2E3349" />
+  <!-- Open Presenting Palm Hand -->
+  <path d="M 42 135 C 25 125, 10 115, 5 120 C 0 125, 15 145, 25 155 C 10 150, 5 160, 15 168 C 25 175, 40 170, 40 170 Z" fill="url(#skinArm)" />
+</svg>

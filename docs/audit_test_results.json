@@ -1,0 +1,106 @@
+[
+  {
+    "name": "Core Config Management",
+    "expected": "Settings loaded with correct base directory",
+    "actual": "Base dir: D:\\AI Arts\\AI",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/core/config.py"
+  },
+  {
+    "name": "Database CRUD Operations",
+    "expected": "Create and query record in SQLite",
+    "actual": "Successfully created, queried, and cleaned up record",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/database/db.py"
+  },
+  {
+    "name": "Agent 1: Trend Discovery",
+    "expected": "Return candidates with weighted scores",
+    "actual": "Returned candidate list structure (Score calc: 8.0)",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/agents/trend_researcher.py"
+  },
+  {
+    "name": "Agent 2: Topic Selection",
+    "expected": "Select highest score candidate",
+    "actual": "Selected 'Topic B' with score 9.7",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/agents/topic_selector.py"
+  },
+  {
+    "name": "Agent 3: Script Processing Engine",
+    "expected": "Remove fluff and stage directions",
+    "actual": "Cleaned script: 'What if you never die?'",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/agents/scriptwriter.py"
+  },
+  {
+    "name": "Agent 4: Visual Director Storyboard",
+    "expected": "Structured JSON with 3+ scenes",
+    "actual": "Generated 4 scenes with camera and character directions",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/agents/visual_director.py"
+  },
+  {
+    "name": "Audio & ASS Subtitle Verification",
+    "expected": "Non-empty audio and subtitle files on disk",
+    "actual": "Audio: 96336 bytes, ASS: 1169 bytes",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/services/tts_service.py"
+  },
+  {
+    "name": "Video Stream Probe (FFprobe)",
+    "expected": "Valid 1080x1920 video",
+    "actual": "",
+    "status": "FAIL",
+    "error": "",
+    "path": "backend/app/services/animation_service.py"
+  },
+  {
+    "name": "Thumbnail Generation & Quality",
+    "expected": "1080x1920 PNG thumbnail file",
+    "actual": "1080x1920 PNG (211.3 KB)",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/agents/seo_publisher.py"
+  },
+  {
+    "name": "15-Point Quality Control Engine",
+    "expected": "Pass QC checks",
+    "actual": "",
+    "status": "FAIL",
+    "error": "",
+    "path": "backend/app/services/qc_service.py"
+  },
+  {
+    "name": "YouTube Data API Service",
+    "expected": "Check auth and secrets configuration",
+    "actual": "Secrets: False, Token: False, Auth: False",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/services/youtube_service.py"
+  },
+  {
+    "name": "APScheduler Configuration",
+    "expected": "Persistent daily 10:00 AM IST schedule",
+    "actual": "Publishing mode: manual_approval, Time IST: 10:00",
+    "status": "PASS",
+    "error": null,
+    "path": "backend/app/scheduler/scheduler.py"
+  },
+  {
+    "name": "Frontend React Production Bundle",
+    "expected": "dist/index.html compiled with assets",
+    "actual": "dist/index.html exists (883 bytes)",
+    "status": "PASS",
+    "error": null,
+    "path": "frontend/dist/index.html"
+  }
+]

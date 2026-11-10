@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Data Story (1080x1920 Narrative Synchronized Adapter)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=IBM+Plex+Mono:wght@500;600;700&display=swap">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #000;
+    color: #eef1f5;
+    font-family: 'Archivo', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .stage-wrap {
+    width: 540px;
+    height: 960px;
+    position: relative;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  }
+  canvas#stage {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #0f141c;
+  }
+</style>
+</head>
+<body>
+<div class="stage-wrap">
+  <canvas id="stage" width="1080" height="1920" aria-label="Data Story vertical animation"></canvas>
+</div>
+
+<script>
+// =====================================================================================================
+// DATA STORY - 1080x1920 NARRATIVE-TO-VISUAL MAPPING ADAPTER
+// Style Family: Editorial Data Journalism
+// Features:
+//   - Plunging metric counters synchronized to voiceover
+//   - Monotone cubic splines with leading tracer bead and luminous fill
+//   - Swanson's Law learning curve doubling milestones
+//   - Competitive market cost comparison bars (IEA Benchmark)
+// Safe Zones: Visual Content y: 280-1340, x: 80-1000. Subtitle Band: 1380-1560.
+// =====================================================================================================
+
+const CM = (() => {
+  const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const span = (t, a, b) => clamp((t - a) / (b - a));
+  const ez = {
+    out3: (u) => 1 - Math.pow(1 - u, 3),
+    in3: (u) => u * u * u,
+    inout3: (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+    outExpo: (u) => (u >= 1 ? 1 : 1 - Math.pow(2, -10 * u)),
+  };
+  return { clamp, lerp, span, ez };
+})();
+
+// SFX Engine
+const SFX = (() => {
+  function kit(ac, o = {}) {
+    const VO = !!o.voiceover, SR = ac.sampleRate, T0 = o.from || 0, base = ac.currentTime + (o.lead || 0);
+    const at = (t) => (Math.round((base + (t - T0)) * SR) + 0.3) / SR;
+    const skip = (t, dur) => at(t) + dur < ac.currentTime;
+
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 6; comp.ratio.value = 4;
+    const master = ac.createGain(); master.gain.value = 0.85;
+    comp.connect(master); master.connect(o.dest || ac.destination);
+
+    const bus = ac.createGain(); bus.gain.value = VO ? 0.75 : 0.95; bus.connect(comp);
+
+    const env = (g, t, peak, dur, a = 0.005) => {
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(1e-4, t + dur); g.gain.setValueAtTime(0, t + dur + 0.002);
+    };
+
+    function voice(time, p) {
+      const dur = p.dur || 0.2; if (skip(time, dur)) return; const t = at(time);
+      const osc = ac.createOscillator(); osc.type = p.type || 'sine';
+      osc.frequency.setValueAtTime(p.f || 440, t);
+      const g = ac.createGain(); env(g, t, p.gain || 0.25, dur);
+      osc.connect(g); g.connect(bus); osc.start(t); osc.stop(t + dur + 0.02);
+    }
+
+    function pluck(time, f, gain = 0.22) {
+      voice(time, { type: 'triangle', f, dur: 0.45, gain });
+      voice(time, { type: 'sine', f: f * 2, dur: 0.18, gain: gain * 0.3 });
+    }
+
+    function tick(time, f = 3200, gain = 0.15) {
+      voice(time, { type: 'sine', f, dur: 0.04, gain });
+    }
+
+    return { voice, pluck, tick, finish: () => {} };
+  }
+
+  async function render(score, dur, sr = 48000, opts = {}) {
+    const len = Math.ceil(dur * sr), ac = new OfflineAudioContext(2, len, sr);
+    const k = kit(ac, Object.assign({}, opts, { from: 0 })); score(k); k.finish();
+    const buf = await ac.startRendering(), L = buf.getChannelData(0), R = buf.getChannelData(1), inter = new Float32Array(len * 2);
+    let peak = 0; for (let i = 0; i < len; i++) { inter[2 * i] = L[i]; inter[2 * i + 1] = R[i]; peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i])); }
+    return { inter, peak, sr, frames: len };
+  }
+  return { render };
+})();
+
+const urlParams = new URLSearchParams(window.location.search);
+let DURATION = parseFloat(urlParams.get('duration')) || 55.0;
+window.setDuration = function(d) {
+  DURATION = d;
+  window.DURATION = d;
+};
+window.DURATION = DURATION;
+
+const C = {
+  bg: '#0F141C',
+  card: '#161E2B',
+  cardDark: '#121822',
+  coral: '#FF6B6B',
+  teal: '#20C997',
+  sand: '#F2C14E',
+  blue: '#3B82F6',
+  text: '#EEF1F5',
+  dim: '#7C8BA1',
+  line: '#273449'
+};
+
+// Text measurement and auto-fit
+function drawFittedText(ctx, text, cx, cy, maxW, maxH, preferredSize, minSize = 22, fontColor = C.text, fontWeight = 700, fontFamily = 'Archivo') {
+  let size = preferredSize;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  while (size >= minSize) {
+    ctx.font = `${fontWeight} ${size}px "${fontFamily}", sans-serif`;
+    const words = text.split(' ');
+    let lines = [];
+    let curLine = '';
+    let overflow = false;
+
+    for (const w of words) {
+      const test = curLine ? curLine + ' ' + w : w;
+      if (ctx.measureText(test).width <= maxW) {
+        curLine = test;
+      } else {
+        if (curLine) lines.push(curLine);
+        curLine = w;
+        if (ctx.measureText(w).width > maxW) { overflow = true; break; }
+      }
+    }
+    if (curLine) lines.push(curLine);
+
+    const lineH = size * 1.25;
+    if (!overflow && lines.length * lineH <= maxH) {
+      ctx.fillStyle = fontColor;
+      const startY = cy - ((lines.length - 1) * lineH) / 2;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], cx, startY + i * lineH);
+      }
+      return { lines, size, height: lines.length * lineH };
+    }
+    size -= 2;
+  }
+  ctx.font = `${fontWeight} ${minSize}px "${fontFamily}", sans-serif`;
+  ctx.fillStyle = fontColor;
+  ctx.fillText(text, cx, cy);
+  return { lines: [text], size: minSize, height: minSize };
+}
+
+function drawBackground(ctx, W, H) {
+  // Deep editorial ink backdrop
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0F141C');
+  bg.addColorStop(0.5, '#0B0F15');
+  bg.addColorStop(1, '#080B10');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle coordinate grid
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+  ctx.lineWidth = 1;
+  for (let x = 80; x < W; x += 120) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 140; y < H; y += 140) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+}
+
+// =====================================================================================================
+// SCENE 1 (0.0 - 4.0s): THE PLUNGING BENCHMARK
+// Synchronized to: "Solar is now the cheapest electricity in history."
+// =====================================================================================================
+
+function renderDataScene1(ctx, W, H, t) {
+  // Header Badge
+  ctx.save();
+  ctx.translate(540, 340);
+  ctx.fillStyle = 'rgba(32, 201, 151, 0.12)';
+  ctx.beginPath();
+  ctx.roundRect(-180, -26, 360, 52, 26);
+  ctx.fill();
+  ctx.strokeStyle = C.teal;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = C.teal;
+  ctx.font = '700 22px "IBM Plex Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('GLOBAL ENERGY BENCHMARK', 0, 0);
+  ctx.restore();
+
+  // Title
+  drawFittedText(ctx, "THE CHEAPEST POWER IN HISTORY", 540, 420, 840, 70, 52, 34, C.text, 900);
+
+  // Plunging Metric Display: $359 -> $38
+  const tCounterStart = 0.4, tCounterEnd = 3.4;
+  const uCount = CM.ez.outExpo(CM.span(t, tCounterStart, tCounterEnd));
+  const currentCost = Math.round(CM.lerp(359, 38, uCount));
+  const currentYear = Math.round(CM.lerp(2010, 2024, uCount));
+
+  // Big Metric Card
+  const cardW = 760, cardH = 460;
+  ctx.save();
+  ctx.translate(540, 780);
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Price Display
+  ctx.fillStyle = C.teal;
+  ctx.font = '900 130px Archivo, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`$${currentCost}`, 0, -60);
+
+  ctx.fillStyle = C.sand;
+  ctx.font = '700 32px "IBM Plex Mono", monospace';
+  ctx.fillText('PER MEGAWATT-HOUR', 0, 35);
+
+  ctx.fillStyle = C.dim;
+  ctx.font = '600 26px "IBM Plex Mono", monospace';
+  ctx.fillText(`GLOBAL AVERAGE LCOE (${currentYear})`, 0, 95);
+
+  // Progress Bar under metric
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.beginPath();
+  ctx.roundRect(-280, 150, 560, 14, 7);
+  ctx.fill();
+
+  ctx.fillStyle = C.teal;
+  ctx.beginPath();
+  ctx.roundRect(-280, 150, 560 * (1 - uCount), 14, 7);
+  ctx.fill();
+
+  ctx.restore();
+
+  // Bottom Takeaway
+  if (t > 2.0) {
+    const alphaSub = CM.span(t, 2.0, 2.8);
+    ctx.save();
+    ctx.globalAlpha = alphaSub;
+    drawFittedText(ctx, "Levelized cost of solar has plummeted below all fossil fuels.", 540, 1140, 840, 60, 32, 22, C.dim, 500);
+    ctx.restore();
+  }
+}
+
+// =====================================================================================================
+// SCENE 2 (4.0 - 8.5s): THE -89% COST COLLAPSE (MONOTONE SPLINE)
+// Synchronized to: "Since 2010, the cost collapsed by eighty-nine percent."
+// =====================================================================================================
+
+function renderDataScene2(ctx, W, H, t) {
+  drawFittedText(ctx, "HISTORIC COST COLLAPSE", 540, 340, 840, 60, 50, 34, C.sand, 800, "Archivo");
+  drawFittedText(ctx, "Global Levelized Cost of Solar Photovoltaic (2010–2024)", 540, 395, 840, 40, 26, 20, C.dim, 500);
+
+  const chartX = 140, chartY = 480, chartW = 800, chartH = 500;
+
+  // Chart Container Card
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(chartX - 30, chartY - 30, chartW + 60, chartH + 110, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Grid Lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1.5;
+  const gridSteps = [350, 250, 150, 50];
+  gridSteps.forEach((val, i) => {
+    const gy = chartY + (i / 3) * chartH;
+    ctx.beginPath(); ctx.moveTo(chartX, gy); ctx.lineTo(chartX + chartW, gy); ctx.stroke();
+    ctx.fillStyle = C.dim;
+    ctx.font = '600 20px "IBM Plex Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`$${val}`, chartX - 10, gy + 6);
+  });
+
+  // Authentic IEA LCOE Data Points ($/MWh)
+  const DATA_POINTS = [
+    { yr: 2010, cost: 359 },
+    { yr: 2013, cost: 215 },
+    { yr: 2016, cost: 128 },
+    { yr: 2019, cost: 72 },
+    { yr: 2022, cost: 49 },
+    { yr: 2024, cost: 38 }
+  ];
+
+  const tDrawStart = 4.2, tDrawEnd = 7.6;
+  const uDraw = CM.ez.out3(CM.span(t, tDrawStart, tDrawEnd));
+
+  const coords = DATA_POINTS.map((d, i) => {
+    const px = chartX + (i / (DATA_POINTS.length - 1)) * chartW;
+    // Map $380 -> chartY, $20 -> chartY + chartH
+    const py = chartY + chartH - ((d.cost - 20) / (380 - 20)) * chartH;
+    return { x: px, y: py, ...d };
+  });
+
+  // Evaluate current point along spline
+  const totalSegments = coords.length - 1;
+  const currentProgress = uDraw * totalSegments;
+  const currentSeg = Math.min(totalSegments - 1, Math.floor(currentProgress));
+  const segU = currentProgress - currentSeg;
+
+  // Luminous Area Fill under spline
+  if (uDraw > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(coords[0].x, chartY + chartH);
+    ctx.lineTo(coords[0].x, coords[0].y);
+
+    for (let i = 0; i < currentSeg; i++) {
+      const p0 = coords[i], p1 = coords[i + 1];
+      const cpx = (p0.x + p1.x) / 2;
+      ctx.bezierCurveTo(cpx, p0.y, cpx, p1.y, p1.x, p1.y);
+    }
+    // Partial curve for active segment
+    const pStart = coords[currentSeg], pEnd = coords[currentSeg + 1];
+    const curX = CM.lerp(pStart.x, pEnd.x, segU);
+    const curY = CM.lerp(pStart.y, pEnd.y, segU);
+    ctx.lineTo(curX, curY);
+    ctx.lineTo(curX, chartY + chartH);
+    ctx.closePath();
+
+    const areaGrad = ctx.createLinearGradient(0, chartY, 0, chartY + chartH);
+    areaGrad.addColorStop(0, 'rgba(32, 201, 151, 0.35)');
+    areaGrad.addColorStop(1, 'rgba(32, 201, 151, 0.0)');
+    ctx.fillStyle = areaGrad;
+    ctx.fill();
+
+    // Spline stroke
+    ctx.beginPath();
+    ctx.moveTo(coords[0].x, coords[0].y);
+    for (let i = 0; i < currentSeg; i++) {
+      const p0 = coords[i], p1 = coords[i + 1];
+      const cpx = (p0.x + p1.x) / 2;
+      ctx.bezierCurveTo(cpx, p0.y, cpx, p1.y, p1.x, p1.y);
+    }
+    ctx.lineTo(curX, curY);
+    ctx.strokeStyle = C.teal;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Glowing tracer bead
+    ctx.fillStyle = '#FFFFFF';
+    ctx.shadowColor = C.teal;
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(curX, curY, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Draw completed year labels & milestone dots
+  coords.forEach((p, i) => {
+    const isPassed = uDraw >= (i / (coords.length - 1));
+    if (isPassed) {
+      ctx.fillStyle = C.teal;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.fill();
+
+      ctx.fillStyle = C.dim;
+      ctx.font = '600 20px "IBM Plex Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${p.yr}`, p.x, chartY + chartH + 35);
+    }
+  });
+
+  // Callout Badge: -89% Drop
+  if (t > 6.4) {
+    const badgePop = CM.ez.out3(CM.span(t, 6.4, 7.2));
+    ctx.save();
+    ctx.translate(coords[coords.length - 1].x - 120, coords[coords.length - 1].y - 80);
+    ctx.scale(badgePop, badgePop);
+
+    ctx.fillStyle = C.coral;
+    ctx.beginPath();
+    ctx.roundRect(-90, -32, 180, 64, 16);
+    ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '900 34px Archivo, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('-89% DROP', 0, 0);
+    ctx.restore();
+  }
+
+  // Safe zone bottom summary
+  if (t > 7.0) {
+    drawFittedText(ctx, "From $359/MWh in 2010 down to just $38/MWh today.", 540, 1140, 840, 60, 30, 22, C.text, 600);
+  }
+}
+
+// =====================================================================================================
+// SCENE 3 (8.5 - 16.5s): SWANSON'S LAW LEARNING CURVE
+// Synchronized to: "It follows Swansons Law: every time global manufacturing capacity doubles, module costs drop twenty-four percent."
+// =====================================================================================================
+
+function renderDataScene3(ctx, W, H, t) {
+  drawFittedText(ctx, "SWANSON'S LAW OF SOLAR", 540, 340, 840, 60, 50, 34, C.sand, 800, "Archivo");
+  drawFittedText(ctx, "The Industrial Learning Curve Powering the Revolution", 540, 395, 840, 40, 26, 20, C.dim, 500);
+
+  // Big Infographic Card
+  const cardW = 800, cardH = 580;
+  ctx.save();
+  ctx.translate(540, 750);
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Swanson's Law Principle Formula Banner
+  ctx.fillStyle = 'rgba(242, 193, 78, 0.12)';
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2 + 30, -cardH / 2 + 25, cardW - 60, 72, 14);
+  ctx.fill();
+  ctx.strokeStyle = C.sand;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = C.sand;
+  ctx.font = '800 26px "IBM Plex Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('RULE: 2× CUMULATIVE CAPACITY = -24% MODULE COST', 0, -cardH / 2 + 61);
+
+  // Doubling Steps Data
+  const STEPS = [
+    { cap: '100 GW', cost: '$1.80/W', drop: 'Base' },
+    { cap: '200 GW', cost: '$1.37/W', drop: '-24%' },
+    { cap: '400 GW', cost: '$1.04/W', drop: '-24%' },
+    { cap: '800 GW', cost: '$0.79/W', drop: '-24%' },
+    { cap: '1,600 GW', cost: '$0.20/W', drop: '-75%' }
+  ];
+
+  const tStepsStart = 9.2, tStepsEnd = 15.0;
+  const uSteps = CM.span(t, tStepsStart, tStepsEnd);
+
+  const startY = -cardH / 2 + 130;
+  const rowH = 76;
+
+  STEPS.forEach((s, i) => {
+    const rowProgress = CM.span(uSteps, i * 0.2, (i + 1) * 0.2);
+    if (rowProgress > 0) {
+      const py = startY + i * rowH;
+      const isLatest = (i === STEPS.length - 1 && rowProgress >= 0.8);
+
+      // Background row
+      ctx.fillStyle = isLatest ? 'rgba(32, 201, 151, 0.18)' : 'rgba(255, 255, 255, 0.04)';
+      ctx.beginPath();
+      ctx.roundRect(-cardW / 2 + 30, py, (cardW - 60) * CM.ez.out3(rowProgress), 62, 10);
+      ctx.fill();
+
+      // Step text
+      ctx.fillStyle = isLatest ? C.teal : C.text;
+      ctx.font = '700 24px "IBM Plex Mono", monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${s.cap} Capacity`, -cardW / 2 + 55, py + 31);
+
+      ctx.fillStyle = isLatest ? '#FFFFFF' : C.sand;
+      ctx.font = '800 26px Archivo, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(s.cost, 60, py + 31);
+
+      // Badge
+      ctx.fillStyle = isLatest ? C.teal : (i === 0 ? C.dim : C.coral);
+      ctx.font = '800 22px Archivo, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(s.drop, cardW / 2 - 55, py + 31);
+    }
+  });
+
+  ctx.restore();
+
+  if (t > 14.5) {
+    drawFittedText(ctx, "Silicon learning curves compound exponentially with industrial scale.", 540, 1140, 840, 60, 30, 22, C.dim, 500);
+  }
+}
+
+// =====================================================================================================
+// SCENE 4 (16.5 - 20.8s): MARKET COMPARISON BARS & IEA CITATION
+// Synchronized to: "Today, nothing can compete with the economics of silicon."
+// =====================================================================================================
+
+function renderDataScene4(ctx, W, H, t) {
+  drawFittedText(ctx, "ENERGY COST COMPARISON (2024)", 540, 340, 840, 60, 50, 34, C.text, 900);
+  drawFittedText(ctx, "Unsubsidized Levelized Cost of Energy ($/MWh)", 540, 395, 840, 40, 26, 20, C.dim, 500);
+
+  const cardW = 800, cardH = 560;
+  ctx.save();
+  ctx.translate(540, 750);
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Comparison items
+  const BARS = [
+    { label: 'SOLAR PV', cost: 38, max: 100, color: C.teal, highlight: true },
+    { label: 'ONSHORE WIND', cost: 50, max: 100, color: C.blue, highlight: false },
+    { label: 'NATURAL GAS', cost: 68, max: 100, color: C.sand, highlight: false },
+    { label: 'COAL POWER', cost: 82, max: 100, color: C.coral, highlight: false }
+  ];
+
+  const tBarStart = 16.8, tBarEnd = 19.4;
+  const uBar = CM.ez.out3(CM.span(t, tBarStart, tBarEnd));
+
+  const startY = -cardH / 2 + 50;
+  const barGap = 110;
+
+  BARS.forEach((b, i) => {
+    const by = startY + i * barGap;
+    const barProgress = CM.clamp((uBar - i * 0.15) / 0.6, 0, 1);
+
+    // Label
+    ctx.fillStyle = b.highlight ? C.teal : C.text;
+    ctx.font = b.highlight ? '900 26px Archivo, sans-serif' : '700 24px Archivo, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.label, -cardW / 2 + 40, by);
+
+    // Cost label on right
+    ctx.fillStyle = b.highlight ? C.teal : C.sand;
+    ctx.font = '800 26px "IBM Plex Mono", monospace';
+    ctx.textAlign = 'right';
+    const displayCost = Math.round(b.cost * barProgress);
+    ctx.fillText(`$${displayCost}/MWh`, cardW / 2 - 40, by);
+
+    // Bar Track
+    const trackW = cardW - 80;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.beginPath();
+    ctx.roundRect(-cardW / 2 + 40, by + 20, trackW, 26, 13);
+    ctx.fill();
+
+    // Fill Bar
+    const fillW = trackW * (b.cost / 100) * barProgress;
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.roundRect(-cardW / 2 + 40, by + 20, Math.max(26, fillW), 26, 13);
+    ctx.fill();
+
+    if (b.highlight && barProgress >= 0.9) {
+      // "LOWEST COST" badge
+      ctx.fillStyle = 'rgba(32, 201, 151, 0.25)';
+      ctx.beginPath();
+      ctx.roundRect(fillW - 200, by - 14, 150, 30, 15);
+      ctx.fill();
+
+      ctx.fillStyle = C.teal;
+      ctx.font = '800 16px "IBM Plex Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('CHEAPEST', fillW - 125, by);
+    }
+  });
+
+  // Official Citation pinned inside card
+  ctx.fillStyle = C.dim;
+  ctx.font = '600 20px "IBM Plex Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SOURCE: INTERNATIONAL ENERGY AGENCY (IEA) LCOE 2024', 0, cardH / 2 - 32);
+
+  ctx.restore();
+
+  // Bottom Takeaway
+  if (t > 18.5) {
+    drawFittedText(ctx, "Solar has won the economic equation of global energy.", 540, 1140, 840, 60, 32, 22, C.teal, 800);
+  }
+}
+
+// =====================================================================================================
+// MAIN TIMELINE DISPATCHER
+// =====================================================================================================
+
+function explainer(ctx, t) {
+  const W = 1080, H = 1920;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  drawBackground(ctx, W, H);
+
+  if (DURATION <= 22.0) {
+    // 20-second test timeline
+    if (t < 4.0) renderDataScene1(ctx, W, H, t);
+    else if (t < 8.5) renderDataScene2(ctx, W, H, t);
+    else if (t < 16.5) renderDataScene3(ctx, W, H, t);
+    else renderDataScene4(ctx, W, H, t);
+  } else {
+    // 50-60s Production timeline (55s default)
+    if (t < 4.0) {
+      renderDataScene1(ctx, W, H, t);
+    } else if (t < 14.0) {
+      renderDataScene1(ctx, W, H, Math.min(3.9, (t - 4.0) * 0.4 + 1.0));
+    } else if (t < 28.0) {
+      renderDataScene2(ctx, W, H, Math.min(8.4, (t - 14.0) * 0.35 + 4.0));
+    } else if (t < 42.0) {
+      renderDataScene3(ctx, W, H, Math.min(16.4, (t - 28.0) * 0.5 + 8.5));
+    } else {
+      renderDataScene4(ctx, W, H, Math.min(20.7, (t - 42.0) * 0.35 + 16.5));
+    }
+  }
+}
+
+function scoreSound(k) {
+  if (DURATION <= 22.0) {
+    // Plunging counter ticks
+    k.tick(0.5, 2800, 0.2);
+    k.tick(1.0, 2400, 0.2);
+    k.tick(1.8, 2000, 0.2);
+    k.tick(2.6, 1600, 0.25);
+    k.pluck(3.2, 520, 0.35); // Lock at $38
+
+    // Spline curve plucks
+    k.pluck(4.6, 380, 0.25);
+    k.pluck(5.5, 440, 0.25);
+    k.pluck(6.5, 580, 0.3);
+    k.pluck(7.2, 660, 0.35);
+
+    // Swanson's Law double steps
+    k.tick(9.4, 3000, 0.2);
+    k.tick(10.6, 3200, 0.2);
+    k.tick(11.8, 3400, 0.2);
+    k.tick(13.2, 3600, 0.2);
+    k.pluck(14.5, 780, 0.35);
+
+    // Final comparison bars
+    k.pluck(17.0, 440, 0.25);
+    k.pluck(17.8, 520, 0.3);
+    k.pluck(18.8, 660, 0.35);
+  } else {
+    k.pluck(0.5, 440, 0.25);
+    k.pluck(14.0, 520, 0.3);
+    k.pluck(28.0, 660, 0.3);
+    k.pluck(42.0, 780, 0.35);
+  }
+}
+
+const cvs = document.getElementById('stage');
+const ctx = cvs.getContext('2d');
+window.seek = (t) => explainer(ctx, CM.clamp(t, 0, DURATION));
+window.DURATION = DURATION;
+window.scoreSound = scoreSound;
+window.SFX = SFX;
+
+window.seek(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+1
+00:00:00,100 --> 00:00:05,000
+Einstein discovered that gravity and acceleration are physically identical.
+
+2
+00:00:04,950 --> 00:00:09,125
+His field equations describe how energy bends spacetime.
+
+3
+00:00:09,125 --> 00:00:13,775
+Matter tells space how to curve, and space tells matter how to move.
+

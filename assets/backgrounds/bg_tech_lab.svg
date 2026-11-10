@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
+  <defs>
+    <linearGradient id="labBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0A0E17" />
+      <stop offset="50%" stop-color="#111827" />
+      <stop offset="100%" stop-color="#05070B" />
+    </linearGradient>
+    <radialGradient id="cyanCenter" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.25" />
+      <stop offset="60%" stop-color="#0077B6" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="1080" height="1920" fill="url(#labBg)" />
+  <circle cx="540" cy="800" r="800" fill="url(#cyanCenter)" />
+
+  <!-- Holographic Circles & Tech HUD Elements -->
+  <g stroke="#00F0FF" fill="none" opacity="0.3">
+    <circle cx="540" cy="700" r="320" stroke-width="2" stroke-dasharray="12,8" />
+    <circle cx="540" cy="700" r="420" stroke-width="1.5" stroke-dasharray="24,14" />
+    <circle cx="540" cy="700" r="480" stroke-width="3" stroke-dasharray="4,12" />
+    <!-- HUD ticks -->
+    <line x1="220" y1="700" x2="190" y2="700" stroke-width="3" />
+    <line x1="860" y1="700" x2="890" y2="700" stroke-width="3" />
+    <line x1="540" y1="380" x2="540" y2="350" stroke-width="3" />
+    <line x1="540" y1="1020" x2="540" y2="1050" stroke-width="3" />
+  </g>
+
+  <!-- Glowing vertical server/circuit light strips -->
+  <g opacity="0.4">
+    <line x1="120" y1="200" x2="120" y2="1700" stroke="#00F0FF" stroke-width="2" />
+    <line x1="140" y1="400" x2="140" y2="1500" stroke="#7000FF" stroke-width="1.5" stroke-dasharray="8,16" />
+    <line x1="960" y1="200" x2="960" y2="1700" stroke="#00F0FF" stroke-width="2" />
+    <line x1="940" y1="400" x2="940" y2="1500" stroke="#7000FF" stroke-width="1.5" stroke-dasharray="8,16" />
+  </g>
+</svg>

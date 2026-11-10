@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80" width="200" height="80">
+  <!-- Left Eye Closed -->
+  <path d="M 28 42 Q 50 50 72 42" fill="none" stroke="#2B2D42" stroke-width="4" stroke-linecap="round"/>
+  <!-- Right Eye Closed -->
+  <path d="M 128 42 Q 150 50 172 42" fill="none" stroke="#2B2D42" stroke-width="4" stroke-linecap="round"/>
+</svg>

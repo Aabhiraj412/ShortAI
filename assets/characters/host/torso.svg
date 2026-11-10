@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="600" height="600">
+  <defs>
+    <linearGradient id="jacketGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E2235" />
+      <stop offset="60%" stop-color="#141724" />
+      <stop offset="100%" stop-color="#0E101A" />
+    </linearGradient>
+    <linearGradient id="innerShirtGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3A86FF" />
+      <stop offset="100%" stop-color="#0043A8" />
+    </linearGradient>
+    <linearGradient id="neonTrim" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#7000FF" />
+    </linearGradient>
+  </defs>
+
+  <!-- Inner Tech Shirt -->
+  <path d="M 240 160 L 360 160 L 340 380 L 260 380 Z" fill="url(#innerShirtGrad)" />
+  <!-- Tech lines on shirt -->
+  <line x1="300" y1="180" x2="300" y2="360" stroke="#00F0FF" stroke-width="2" opacity="0.4" stroke-dasharray="8,6" />
+
+  <!-- Jacket Shoulders & Chest -->
+  <path d="M 230 150 L 140 210 L 130 500 L 470 500 L 460 210 L 370 150 L 330 250 L 270 250 Z" 
+        fill="url(#jacketGrad)" stroke="#2B2D42" stroke-width="3" />
+
+  <!-- Collar / Lapels -->
+  <path d="M 230 150 L 275 260 L 255 265 L 215 170 Z" fill="#2E3349" />
+  <path d="M 370 150 L 325 260 L 345 265 L 385 170 Z" fill="#2E3349" />
+
+  <!-- Neon Glowing Piping / Cyber Zipper -->
+  <path d="M 275 260 L 300 480" stroke="url(#neonTrim)" stroke-width="3.5" stroke-linecap="round" />
+  <path d="M 325 260 L 300 480" stroke="url(#neonTrim)" stroke-width="3.5" stroke-linecap="round" />
+
+  <!-- Channel Badge / Studio Emblem on left chest -->
+  <rect x="235" y="280" width="36" height="24" rx="6" fill="#00F0FF" opacity="0.15" />
+  <rect x="235" y="280" width="36" height="24" rx="6" fill="none" stroke="#00F0FF" stroke-width="2" />
+  <circle cx="248" cy="292" r="5" fill="#00F0FF" />
+  <polygon points="256,288 266,292 256,296" fill="#00F0FF" />
+</svg>

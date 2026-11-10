@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 400" width="200" height="400">
+  <defs>
+    <linearGradient id="armJacket" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E2235" />
+      <stop offset="100%" stop-color="#0E101A" />
+    </linearGradient>
+    <linearGradient id="skinArm" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFDFC4" />
+      <stop offset="100%" stop-color="#F0B892" />
+    </linearGradient>
+  </defs>
+
+  <!-- Left Upper Arm & Forearm Idle Hanging -->
+  <path d="M 160 50 Q 140 180 120 280 L 80 280 Q 95 180 120 50 Z" fill="url(#armJacket)" stroke="#2B2D42" stroke-width="2.5"/>
+  <!-- Cuff -->
+  <path d="M 80 280 L 120 280 L 118 295 L 82 295 Z" fill="#2E3349" />
+  <!-- Hand -->
+  <path d="M 83 295 Q 75 330 90 350 Q 105 355 115 340 Q 120 315 117 295 Z" fill="url(#skinArm)" />
+</svg>

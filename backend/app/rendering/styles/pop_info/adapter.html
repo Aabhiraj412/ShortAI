@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pop Info (1080x1920 Multi-Scene Adapter)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111;
+    color: #eee;
+    font-family: 'Fredoka', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .stage-wrap {
+    width: 540px;
+    height: 960px;
+    position: relative;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  }
+  canvas#stage {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #D7DCCB;
+  }
+</style>
+</head>
+<body>
+<div class="stage-wrap">
+  <canvas id="stage" width="1080" height="1920" aria-label="Pop Info vertical animation"></canvas>
+</div>
+
+<script>
+// =====================================================================================================
+// POP INFO - 1080x1920 MULTI-SCENE PRODUCTION ADAPTER
+// Style Family: Illustrated Explainer (Flat Vector)
+// Design System: Fredoka typography, pastel palette (#D7DCCB), rounded cards (r=40), gentle spring easing
+// Safe Zones: Visual Content y: 280-1340, x: 80-920. Subtitle Band: 1340-1620.
+// =====================================================================================================
+
+const CM = (() => {
+  const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const span = (t, a, b) => clamp((t - a) / (b - a));
+  const ez = {
+    out3: (u) => 1 - Math.pow(1 - u, 3),
+    in3: (u) => u * u * u,
+    inout3: (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+    outBack: (u, s = 1.5) => (u <= 0 ? 0 : u >= 1 ? 1 : 1 + (s + 1) * Math.pow(u - 1, 3) + s * Math.pow(u - 1, 2)),
+    spring: (u) => (u <= 0 ? 0 : u >= 1 ? 1 : 1 - Math.exp(-6 * u) * Math.cos(12 * u)),
+  };
+  return { clamp, lerp, span, ez };
+})();
+
+// SFX Engine
+const SFX = (() => {
+  const SEMI = { C: -9, D: -7, E: -5, F: -4, G: -2, A: 0, B: 2 };
+  const hz = (n) => { if (typeof n === 'number') return n; const m = /^([A-G])(#|b)?(-?\d)$/.exec(n); return 440 * Math.pow(2, (SEMI[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (+m[3] - 4) * 12) / 12); };
+
+  function kit(ac, o = {}) {
+    const VO = !!o.voiceover, SR = ac.sampleRate, T0 = o.from || 0, base = ac.currentTime + (o.lead || 0);
+    const at = (t) => (Math.round((base + (t - T0)) * SR) + 0.3) / SR;
+    const skip = (t, dur) => at(t) + dur < ac.currentTime;
+
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 6; comp.ratio.value = 4;
+    const master = ac.createGain(); master.gain.value = 0.85;
+    comp.connect(master); master.connect(o.dest || ac.destination);
+
+    const bus = { fx: ac.createGain(), music: ac.createGain() };
+    bus.fx.gain.value = VO ? 0.75 : 0.95; bus.fx.connect(comp);
+    bus.music.gain.value = VO ? 0.25 : 0.55; bus.music.connect(comp);
+
+    const NB = {};
+    for (const kind of ['white', 'pink']) {
+      const n = Math.floor(2 * SR), b = ac.createBuffer(1, n, SR), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (kind === 'pink' ? 0.18 : 0.1);
+      NB[kind] = b;
+    }
+
+    const env = (g, t, peak, dur, a = 0.005) => {
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(1e-4, t + dur); g.gain.setValueAtTime(0, t + dur + 0.002);
+    };
+
+    function voice(time, p) {
+      const dur = p.dur || 0.2; if (skip(time, dur)) return; const t = at(time);
+      const osc = ac.createOscillator(); osc.type = p.type || 'sine';
+      if (Array.isArray(p.f)) { osc.frequency.setValueAtTime(p.f[0][1], t); osc.frequency.exponentialRampToValueAtTime(p.f[1][1], t + p.f[1][0]); }
+      else osc.frequency.setValueAtTime(hz(p.f || 440), t);
+      const g = ac.createGain(); env(g, t, (p.gain || 0.25) * (VO && p.soft ? 0.55 : 1), dur);
+      osc.connect(g); g.connect(bus[p.bus || 'fx']); osc.start(t); osc.stop(t + dur + 0.02);
+    }
+
+    function hiss(time, p) {
+      const dur = p.dur || 0.15; if (skip(time, dur)) return; const t = at(time);
+      const src = ac.createBufferSource(); src.buffer = NB[p.color || 'white']; src.loop = true;
+      const g = ac.createGain(); env(g, t, (p.gain || 0.2) * (VO && p.soft ? 0.55 : 1), dur);
+      src.connect(g); g.connect(bus[p.bus || 'fx']); src.start(t); src.stop(t + dur + 0.02);
+    }
+
+    function play(name, t, opts = {}) {
+      if (name === 'whoosh') hiss(t, { color: 'pink', dur: opts.dur || 0.35, gain: 0.25 * (opts.gain || 1) });
+      else if (name === 'pop') voice(t, { f: [[0, 750], [0.06, 380]], dur: 0.09, gain: 0.3 * (opts.gain || 1) });
+      else if (name === 'tap') voice(t, { f: [[0, 240], [0.05, 120]], dur: 0.08, gain: 0.2 * (opts.gain || 1), soft: true });
+    }
+
+    function music(t0, t1, p = {}) {
+      const bpm = p.bpm || 96, step = 60 / bpm / 2, g = p.gain || 0.35;
+      for (let t = t0; t < t1 - 0.1; t += step) {
+        voice(t, { type: 'triangle', f: 'F3', dur: step * 0.7, gain: 0.1 * g, bus: 'music' });
+      }
+    }
+
+    return { voice, hiss, play, music, finish: () => {} };
+  }
+
+  async function render(score, dur, sr = 48000, opts = {}) {
+    const len = Math.ceil(dur * sr), ac = new OfflineAudioContext(2, len, sr);
+    const k = kit(ac, Object.assign({}, opts, { from: 0 })); score(k); k.finish();
+    const buf = await ac.startRendering(), L = buf.getChannelData(0), R = buf.getChannelData(1), inter = new Float32Array(len * 2);
+    let peak = 0; for (let i = 0; i < len; i++) { inter[2 * i] = L[i]; inter[2 * i + 1] = R[i]; peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i])); }
+    return { inter, peak, sr, frames: len };
+  }
+  return { render };
+})();
+
+// Palette & Geometry
+const urlParams = new URLSearchParams(window.location.search);
+let DURATION = parseFloat(urlParams.get('duration')) || 55.0; // Production standard default: 55s
+window.setDuration = function(d) {
+  DURATION = d;
+  window.DURATION = d;
+};
+window.DURATION = DURATION;
+const C = {
+  wall: '#D7DCCB',
+  floor: '#C4B79D',
+  card: '#FFFFFF',
+  teal: '#2F6F73',
+  coral: '#E85D4A',
+  yellow: '#FFD86B',
+  ink: '#1D2A2A',
+  dim: '#5A6E68',
+  shadow: 'rgba(29,42,42,0.10)'
+};
+
+// Text measurement and auto-fit helper
+function drawFittedText(ctx, text, cx, cy, maxW, maxH, preferredSize, minSize = 24, fontColor = C.ink, fontWeight = 700) {
+  let size = preferredSize;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  while (size >= minSize) {
+    ctx.font = `${fontWeight} ${size}px Fredoka, sans-serif`;
+    const words = text.split(' ');
+    let lines = [];
+    let curLine = '';
+    let overflow = false;
+
+    for (const w of words) {
+      const test = curLine ? curLine + ' ' + w : w;
+      if (ctx.measureText(test).width <= maxW) {
+        curLine = test;
+      } else {
+        if (curLine) lines.push(curLine);
+        curLine = w;
+        if (ctx.measureText(w).width > maxW) { overflow = true; break; }
+      }
+    }
+    if (curLine) lines.push(curLine);
+
+    const lineH = size * 1.25;
+    if (!overflow && lines.length * lineH <= maxH) {
+      // Render lines
+      ctx.fillStyle = fontColor;
+      const startY = cy - ((lines.length - 1) * lineH) / 2;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], cx, startY + i * lineH);
+      }
+      return { lines, size, height: lines.length * lineH };
+    }
+    size -= 2;
+  }
+  // Fallback at minSize
+  ctx.font = `${fontWeight} ${minSize}px Fredoka, sans-serif`;
+  ctx.fillStyle = fontColor;
+  ctx.fillText(text, cx, cy);
+  return { lines: [text], size: minSize, height: minSize };
+}
+
+function drawBackground(ctx, W, H) {
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#CBD2BD');
+  bgGrad.addColorStop(0.68, C.wall);
+  bgGrad.addColorStop(0.681, '#B9AB90');
+  bgGrad.addColorStop(1, C.floor);
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Floor perspective lines
+  ctx.strokeStyle = 'rgba(0,0,0,0.035)';
+  ctx.lineWidth = 4;
+  for (let x = -200; x < W + 400; x += 180) {
+    ctx.beginPath();
+    ctx.moveTo(x, H * 0.68);
+    ctx.lineTo(x * 1.5 - W * 0.25, H);
+    ctx.stroke();
+  }
+}
+
+function drawShopper(ctx, x, y, t) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  const sway = Math.sin(t * 3.0) * 3;
+  const breath = Math.sin(t * 2.2) * 2;
+
+  // Floor shadow
+  ctx.fillStyle = C.shadow;
+  ctx.beginPath();
+  ctx.ellipse(0, 10, 110, 26, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Torso / Coat
+  ctx.fillStyle = C.teal;
+  ctx.beginPath();
+  ctx.roundRect(-65 + sway * 0.3, -240 + breath, 130, 240, [65, 65, 18, 18]);
+  ctx.fill();
+
+  // Scarf
+  ctx.fillStyle = C.coral;
+  ctx.beginPath();
+  ctx.roundRect(-42 + sway * 0.5, -260 + breath, 84, 40, 14);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#F8D7B8';
+  ctx.beginPath();
+  ctx.arc(sway * 0.6, -315 + breath, 50, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hair
+  ctx.fillStyle = C.ink;
+  ctx.beginPath();
+  ctx.arc(sway * 0.6, -330 + breath, 52, Math.PI, Math.PI * 2);
+  ctx.fill();
+
+  // Eyes (blinking)
+  const blink = (t % 3.2) < 0.15;
+  ctx.fillStyle = C.ink;
+  if (blink) {
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-20 + sway * 0.6, -312 + breath); ctx.lineTo(-8 + sway * 0.6, -312 + breath);
+    ctx.moveTo(8 + sway * 0.6, -312 + breath); ctx.lineTo(20 + sway * 0.6, -312 + breath);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.arc(-14 + sway * 0.6, -315 + breath, 5.5, 0, Math.PI * 2);
+    ctx.arc(14 + sway * 0.6, -315 + breath, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Cheeks
+  ctx.fillStyle = 'rgba(232, 93, 74, 0.35)';
+  ctx.beginPath();
+  ctx.arc(-24 + sway * 0.6, -305 + breath, 9, 0, Math.PI * 2);
+  ctx.arc(24 + sway * 0.6, -305 + breath, 9, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ---------------- 4 SCENE DEFINITIONS ----------------
+
+// Scene 1 (0-4s): The Cue
+function renderScene1(ctx, W, H, t) {
+  const u = CM.span(t, 0, 4.0);
+  drawShopper(ctx, 540, 1260, t);
+
+  // Card: The Cue
+  const cardPop = CM.ez.outBack(CM.span(t, 0.4, 1.2), 1.4);
+  if (cardPop > 0) {
+    ctx.save();
+    ctx.translate(540, 520);
+    ctx.scale(cardPop, cardPop);
+
+    ctx.fillStyle = C.card;
+    ctx.shadowColor = C.shadow;
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 8;
+    ctx.beginPath();
+    ctx.roundRect(-360, -180, 720, 360, 36);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = C.teal;
+    ctx.stroke();
+
+    // Icon: Alarm Clock badge
+    ctx.fillStyle = C.coral;
+    ctx.beginPath();
+    ctx.arc(0, -90, 45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '700 32px Fredoka, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('06:00', 0, -90);
+
+    // Title & explanation
+    drawFittedText(ctx, "THE HABIT CUE", 0, -15, 640, 60, 48, 36, C.ink, 700);
+    drawFittedText(ctx, "Every lasting routine begins with an obvious environmental trigger.", 0, 65, 620, 90, 30, 24, C.dim, 500);
+
+    ctx.restore();
+  }
+}
+
+// Scene 2 (4-8s): The Friction (Choice Overload)
+function renderScene2(ctx, W, H, t) {
+  const u = CM.span(t, 4.0, 8.0);
+  const slide = CM.ez.out3(CM.clamp(t - 4.2, 0, 0.8) / 0.8);
+  const leftX = -260 + 260 * slide;
+  const rightX = W + 260 - 260 * slide;
+
+  // Left & right grocery shelf units
+  ctx.fillStyle = '#E8E3D5';
+  ctx.fillRect(leftX, 420, 180, 720);
+  ctx.fillRect(rightX - 180, 420, 180, 720);
+
+  // Planks and jars
+  for (let y = 540; y <= 1020; y += 160) {
+    ctx.fillStyle = '#C2B69F';
+    ctx.fillRect(leftX - 10, y, 200, 20);
+    ctx.fillRect(rightX - 190, y, 200, 20);
+    const colors = [C.coral, C.yellow, C.teal];
+    for (let k = 0; k < 2; k++) {
+      ctx.fillStyle = colors[(k + y) % colors.length];
+      ctx.beginPath();
+      ctx.roundRect(leftX + 25 + k * 65, y - 55, 42, 55, [10, 10, 4, 4]);
+      ctx.roundRect(rightX - 165 + k * 65, y - 55, 42, 55, [10, 10, 4, 4]);
+      ctx.fill();
+    }
+  }
+
+  drawShopper(ctx, 540, 1260, t);
+
+  // Thought Bubble
+  const pop = CM.ez.outBack(CM.clamp(t - 4.8, 0, 0.7) / 0.7, 1.3);
+  if (pop > 0) {
+    ctx.save();
+    ctx.translate(540, 620);
+    ctx.scale(pop, pop);
+
+    ctx.fillStyle = C.card;
+    ctx.shadowColor = C.shadow;
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.roundRect(-340, -140, 680, 280, 36);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = C.coral;
+    ctx.stroke();
+
+    drawFittedText(ctx, "REDUCE THE FRICTION", 0, -65, 600, 60, 50, 48, C.coral, 700);
+    drawFittedText(ctx, "Too many choices paralyze willpower.\nKeep options simple and direct.", 0, 25, 600, 100, 30, 24, C.ink, 500);
+    ctx.restore();
+  }
+}
+
+// Scene 3 (8-12s): The 2-Minute Rule
+function renderScene3(ctx, W, H, t) {
+  const u = CM.span(t, 8.0, 12.0);
+
+  // Big central card
+  const pop = CM.ez.outBack(CM.clamp(t - 8.3, 0, 0.8) / 0.8, 1.4);
+  if (pop > 0) {
+    ctx.save();
+    ctx.translate(540, 680);
+    ctx.scale(pop, pop);
+
+    ctx.fillStyle = C.card;
+    ctx.shadowColor = C.shadow;
+    ctx.shadowBlur = 25;
+    ctx.beginPath();
+    ctx.roundRect(-380, -320, 760, 640, 40);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = C.teal;
+    ctx.stroke();
+
+    // Header badge
+    ctx.fillStyle = C.yellow;
+    ctx.beginPath();
+    ctx.roundRect(-180, -280, 360, 60, 30);
+    ctx.fill();
+    ctx.fillStyle = C.ink;
+    ctx.font = '700 26px Fredoka, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('THE GOLDEN RATIO', 0, -250);
+
+    // Dynamic scale number
+    const count = Math.min(2, Math.floor((t - 8.5) * 2));
+    ctx.fillStyle = C.coral;
+    ctx.font = '700 130px Fredoka, sans-serif';
+    ctx.fillText('2 MIN', 0, -120);
+
+    drawFittedText(ctx, "THE TWO-MINUTE RULE", 0, -5, 680, 50, 50, 48, C.ink, 700);
+    drawFittedText(ctx, "When starting a new habit, scale it down so it takes less than 120 seconds to finish.", 0, 85, 660, 90, 30, 24, C.dim, 500);
+
+    // Progress bar
+    const pProg = CM.clamp((t - 9.2) / 2.0, 0, 1);
+    ctx.fillStyle = '#E4EAD9';
+    ctx.beginPath();
+    ctx.roundRect(-280, 190, 560, 24, 12);
+    ctx.fill();
+    ctx.fillStyle = C.teal;
+    ctx.beginPath();
+    ctx.roundRect(-280, 190, 560 * pProg, 24, 12);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// Scene 4 (12-16s): The Reward Checklist
+function renderScene4(ctx, W, H, t) {
+  const u = CM.span(t, 12.0, 16.0);
+  const pop = CM.ez.outBack(CM.clamp(t - 12.3, 0, 0.8) / 0.8, 1.4);
+
+  if (pop > 0) {
+    ctx.save();
+    ctx.translate(540, 680);
+    ctx.scale(pop, pop);
+
+    ctx.fillStyle = C.card;
+    ctx.shadowColor = C.shadow;
+    ctx.shadowBlur = 25;
+    ctx.beginPath();
+    ctx.roundRect(-380, -320, 760, 640, 40);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = C.coral;
+    ctx.stroke();
+
+    drawFittedText(ctx, "THE 3 LAWS OF HABITS", 0, -240, 680, 60, 50, 48, C.ink, 700);
+
+    // 3 Bullet items
+    const items = [
+      { num: "1", title: "MAKE IT OBVIOUS", desc: "Design visible cues in your room", delay: 12.6, col: C.coral },
+      { num: "2", title: "MAKE IT EASY", desc: "Reduce starting steps to zero", delay: 13.3, col: C.yellow },
+      { num: "3", title: "MAKE IT REWARDING", desc: "Celebrate immediate small wins", delay: 14.0, col: C.teal },
+    ];
+
+    items.forEach((it, idx) => {
+      const itPop = CM.ez.outBack(CM.clamp((t - it.delay) / 0.5, 0, 1), 1.3);
+      if (itPop > 0) {
+        ctx.save();
+        const itemY = -120 + idx * 115;
+        ctx.translate(0, itemY);
+        ctx.scale(itPop, itPop);
+
+        ctx.fillStyle = '#F5F7F0';
+        ctx.beginPath();
+        ctx.roundRect(-320, -45, 640, 90, 20);
+        ctx.fill();
+
+        // Circle number
+        ctx.fillStyle = it.col;
+        ctx.beginPath();
+        ctx.arc(-265, 0, 26, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '700 24px Fredoka, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(it.num, -265, 0);
+
+        ctx.textAlign = 'left';
+        ctx.fillStyle = C.ink;
+        ctx.font = '700 28px Fredoka, sans-serif';
+        ctx.fillText(it.title, -220, -12);
+
+        ctx.fillStyle = C.dim;
+        ctx.font = '500 22px Fredoka, sans-serif';
+        ctx.fillText(it.desc, -220, 18);
+
+        ctx.restore();
+      }
+    });
+
+    ctx.restore();
+  }
+}
+
+// Master seek function
+function explainer(ctx, t) {
+  const W = 1080, H = 1920;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  drawBackground(ctx, W, H);
+
+  if (DURATION <= 20.0) {
+    if (t < 4.0) renderScene1(ctx, W, H, t);
+    else if (t < 8.0) renderScene2(ctx, W, H, t);
+    else if (t < 12.0) renderScene3(ctx, W, H, t);
+    else renderScene4(ctx, W, H, t);
+  } else {
+    // 50-60s Production Standard (Default: 55s)
+    if (t < 3.5) {
+      renderScene1(ctx, W, H, t);
+    } else if (t < 11.5) {
+      renderScene2(ctx, W, H, t - 3.5 + 4.0);
+    } else if (t < 20.5) {
+      renderScene2(ctx, W, H, t - 11.5 + 4.0);
+    } else if (t < 29.5) {
+      renderScene3(ctx, W, H, t - 20.5 + 8.0);
+    } else if (t < 39.0) {
+      // Scene 5: Environment Design
+      ctx.save();
+      ctx.translate(540, 720);
+      ctx.fillStyle = C.card;
+      ctx.beginPath();
+      ctx.roundRect(-360, -220, 720, 440, 32);
+      ctx.fill();
+      ctx.strokeStyle = C.teal;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      drawFittedText(ctx, "DESIGN YOUR ENVIRONMENT", 0, -120, 640, 60, 48, 48, C.teal, 700);
+      drawFittedText(ctx, "Make good habit cues invisible to miss,\nand bad friction impossible to ignore.", 0, 20, 620, 100, 28, 24, C.ink, 500);
+      ctx.restore();
+    } else if (t < 50.0) {
+      renderScene4(ctx, W, H, t - 39.0 + 12.0);
+    } else {
+      // Scene 7: Closing CTA
+      ctx.save();
+      ctx.translate(540, 720);
+      ctx.fillStyle = C.card;
+      ctx.beginPath();
+      ctx.roundRect(-360, -240, 720, 480, 36);
+      ctx.fill();
+      ctx.strokeStyle = C.coral;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      drawFittedText(ctx, "BUILD LASTING HABITS", 0, -140, 640, 60, 52, 48, C.coral, 700);
+      drawFittedText(ctx, "Scale down to two minutes today.\nConsistency beats intensity every time.", 0, 0, 620, 110, 30, 24, C.ink, 500);
+      ctx.fillStyle = C.teal;
+      ctx.beginPath();
+      ctx.roundRect(-200, 120, 400, 60, 30);
+      ctx.fill();
+      drawFittedText(ctx, "SUBSCRIBE FOR DAILY SCIENCE", 0, 150, 380, 40, 24, 20, '#FFFFFF', 700);
+      ctx.restore();
+    }
+  }
+
+  // Soft iris opening on initial start
+  if (t < 0.6) {
+    const u = CM.ez.out3(t / 0.6);
+    const maxR = Math.hypot(W / 2, H / 2);
+    ctx.save();
+    ctx.fillStyle = C.ink;
+    ctx.beginPath();
+    ctx.rect(0, 0, W, H);
+    ctx.arc(W / 2, H * 0.45, maxR * u, 0, Math.PI * 2, true);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function scoreSound(k) {
+  k.music(0.4, DURATION - 0.2, { bpm: 96, gain: 0.4 });
+  if (DURATION <= 20.0) {
+    k.play('whoosh', 0.05, { dur: 0.5, gain: 0.3 });
+    k.play('pop', 0.5, { gain: 0.4 });
+    k.play('pop', 4.8, { gain: 0.4 });
+    k.play('pop', 8.4, { gain: 0.45 });
+    k.play('tap', 12.6, { gain: 0.35 });
+    k.play('tap', 13.3, { gain: 0.35 });
+    k.play('tap', 14.0, { gain: 0.4 });
+  } else {
+    // 55s Production Soundtrack
+    k.play('whoosh', 0.05, { dur: 0.5, gain: 0.3 });
+    k.play('pop', 0.5, { gain: 0.4 });
+    k.play('pop', 4.0, { gain: 0.4 });
+    k.play('pop', 12.0, { gain: 0.4 });
+    k.play('pop', 21.0, { gain: 0.45 });
+    k.play('pop', 30.0, { gain: 0.4 });
+    k.play('tap', 40.0, { gain: 0.35 });
+    k.play('tap', 41.0, { gain: 0.35 });
+    k.play('tap', 42.0, { gain: 0.4 });
+    k.play('pop', 50.5, { gain: 0.45 });
+  }
+}
+
+const cvs = document.getElementById('stage');
+const ctx = cvs.getContext('2d');
+window.seek = (t) => explainer(ctx, CM.clamp(t, 0, DURATION));
+window.DURATION = DURATION;
+window.scoreSound = scoreSound;
+window.SFX = SFX;
+
+// Initialize frame 0
+window.seek(0);
+</script>
+</body>
+</html>

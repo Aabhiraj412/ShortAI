@@ -1,0 +1,17 @@
+[Script Info]
+Title: Selective Impact Words (creator_motion)
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ImpactPrimary,Anton,92,&H000AD6FF,&H00FFFFFF,&H000D0B0B,&H80000000,-1,0,0,0,100,100,2,0,1,6,4,2,80,80,410,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.20,0:00:03.50,ImpactPrimary,,0,0,0,,FIRST 3 SECONDS
+Dialogue: 0,0:00:07.50,0:00:09.80,ImpactPrimary,,0,0,0,,CUT THE FLUFF
+Dialogue: 0,0:00:11.00,0:00:13.20,ImpactPrimary,,0,0,0,,OPEN THE LOOP
+Dialogue: 0,0:00:15.50,0:00:18.20,ImpactPrimary,,0,0,0,,EXPLOSIVE REACH

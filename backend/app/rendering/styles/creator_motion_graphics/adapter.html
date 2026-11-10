@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Creator Motion Graphics (1080x1920 Narrative Relevant Adapter)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Instrument+Serif:ital@1&family=Inter:wght@600;700;800;900&display=swap">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #000;
+    color: #f2f0ea;
+    font-family: 'Inter', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .stage-wrap {
+    width: 540px;
+    height: 960px;
+    position: relative;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  }
+  canvas#stage {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #0b0b0d;
+  }
+</style>
+</head>
+<body>
+<div class="stage-wrap">
+  <canvas id="stage" width="1080" height="1920" aria-label="Creator Motion Graphics vertical animation"></canvas>
+</div>
+
+<script>
+// =====================================================================================================
+// CREATOR MOTION GRAPHICS - 1080x1920 NARRATIVE RELEVANCE ADAPTER
+// Style Family: High-Energy Kinetic Typography & Creator Storytelling
+// Features:
+//   - Giant 3-second radial countdown ring ticking down
+//   - Video editor timeline with animated scissors slicing "POLITE INTRO" & red marker strikethrough
+//   - 3D perspective audience retention graph comparing 28% dropoff vs 85% sustained retention
+//   - Algorithmic reach surge card (+480% impressions) with 24 FPS film grain
+// Safe Zones: Visual Content y: 280-1340, x: 80-1000. Subtitle Band: 1380-1560.
+// =====================================================================================================
+
+const CM = (() => {
+  const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const span = (t, a, b) => clamp((t - a) / (b - a));
+  const ez = {
+    out3: (u) => 1 - Math.pow(1 - u, 3),
+    in3: (u) => u * u * u,
+    inout3: (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+    outExpo: (u) => (u >= 1 ? 1 : 1 - Math.pow(2, -10 * u)),
+    outBack: (u, s = 1.6) => (u <= 0 ? 0 : u >= 1 ? 1 : 1 + (s + 1) * Math.pow(u - 1, 3) + s * Math.pow(u - 1, 2)),
+  };
+  return { clamp, lerp, span, ez };
+})();
+
+// SFX Engine
+const SFX = (() => {
+  function kit(ac, o = {}) {
+    const VO = !!o.voiceover, SR = ac.sampleRate, T0 = o.from || 0, base = ac.currentTime + (o.lead || 0);
+    const at = (t) => (Math.round((base + (t - T0)) * SR) + 0.3) / SR;
+    const skip = (t, dur) => at(t) + dur < ac.currentTime;
+
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 6; comp.ratio.value = 4;
+    const master = ac.createGain(); master.gain.value = 0.85;
+    comp.connect(master); master.connect(o.dest || ac.destination);
+
+    const bus = ac.createGain(); bus.gain.value = VO ? 0.78 : 0.95; bus.connect(comp);
+
+    const NB = {};
+    for (const kind of ['white', 'brown']) {
+      const n = Math.floor(2 * SR), b = ac.createBuffer(1, n, SR), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * 0.18;
+      NB[kind] = b;
+    }
+
+    const env = (g, t, peak, dur, a = 0.005) => {
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(1e-4, t + dur); g.gain.setValueAtTime(0, t + dur + 0.002);
+    };
+
+    function voice(time, p) {
+      const dur = p.dur || 0.2; if (skip(time, dur)) return; const t = at(time);
+      const osc = ac.createOscillator(); osc.type = p.type || 'sine';
+      if (Array.isArray(p.f)) { osc.frequency.setValueAtTime(p.f[0][1], t); osc.frequency.exponentialRampToValueAtTime(p.f[1][1], t + p.f[1][0]); }
+      else osc.frequency.setValueAtTime(p.f || 120, t);
+      const g = ac.createGain(); env(g, t, p.gain || 0.35, dur);
+      osc.connect(g); g.connect(bus); osc.start(t); osc.stop(t + dur + 0.02);
+    }
+
+    function hiss(time, p) {
+      const dur = p.dur || 0.1; if (skip(time, dur)) return; const t = at(time);
+      const src = ac.createBufferSource(); src.buffer = NB[p.color || 'white']; src.loop = true;
+      const g = ac.createGain(); env(g, t, p.gain || 0.25, dur);
+      src.connect(g); g.connect(bus); src.start(t); src.stop(t + dur + 0.02);
+    }
+
+    function slam(t, gain = 0.55) {
+      voice(t, { f: [[0, 160], [0.12, 45]], dur: 0.22, gain });
+      hiss(t, { dur: 0.08, gain: gain * 0.4 });
+    }
+
+    function marker(t, dur = 0.25, gain = 0.25) {
+      hiss(t, { color: 'white', dur, gain });
+    }
+
+    function scissor(t, gain = 0.4) {
+      hiss(t, { color: 'white', dur: 0.12, gain });
+      voice(t, { f: 1800, dur: 0.06, gain: gain * 0.5 });
+    }
+
+    return { slam, marker, scissor, finish: () => {} };
+  }
+
+  async function render(score, dur, sr = 48000, opts = {}) {
+    const len = Math.ceil(dur * sr), ac = new OfflineAudioContext(2, len, sr);
+    const k = kit(ac, Object.assign({}, opts, { from: 0 })); score(k); k.finish();
+    const buf = await ac.startRendering(), L = buf.getChannelData(0), R = buf.getChannelData(1), inter = new Float32Array(len * 2);
+    let peak = 0; for (let i = 0; i < len; i++) { inter[2 * i] = L[i]; inter[2 * i + 1] = R[i]; peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i])); }
+    return { inter, peak, sr, frames: len };
+  }
+  return { render };
+})();
+
+const urlParams = new URLSearchParams(window.location.search);
+let DURATION = parseFloat(urlParams.get('duration')) || 55.0;
+window.setDuration = function(d) {
+  DURATION = d;
+  window.DURATION = d;
+};
+window.DURATION = DURATION;
+
+const C = {
+  bg: '#0B0B0D',
+  card: '#16161A',
+  ink: '#F2F0EA',
+  yellow: '#FFD60A',
+  coral: '#FF4D4D',
+  green: '#22C55E',
+  blue: '#3B82F6',
+  dim: '#A1A1AA',
+  border: '#2A2A32'
+};
+
+function drawBackground(ctx, W, H, t) {
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle radial vignette
+  const rad = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 950);
+  rad.addColorStop(0, 'rgba(30, 30, 36, 0.4)');
+  rad.addColorStop(1, 'rgba(0, 0, 0, 0.9)');
+  ctx.fillStyle = rad;
+  ctx.fillRect(0, 0, W, H);
+
+  // 24 FPS film grain
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.022)';
+  for (let i = 0; i < 45; i++) {
+    const x = (i * 219.7 + Math.sin(t * 40 + i) * 500 + W) % W;
+    const y = (i * 341.3 + Math.cos(t * 50 + i) * 800 + H) % H;
+    ctx.fillRect(x, y, 3, 3);
+  }
+}
+
+// Text measurement and auto-fit helper
+function drawFittedText(ctx, text, cx, cy, maxW, maxH, preferredSize, minSize = 22, fontColor = C.ink, fontWeight = 700, fontFamily = 'Inter') {
+  let size = preferredSize;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  while (size >= minSize) {
+    ctx.font = `${fontWeight} ${size}px "${fontFamily}", sans-serif`;
+    const words = text.split(' ');
+    let lines = [];
+    let curLine = '';
+    let overflow = false;
+
+    for (const w of words) {
+      const test = curLine ? curLine + ' ' + w : w;
+      if (ctx.measureText(test).width <= maxW) {
+        curLine = test;
+      } else {
+        if (curLine) lines.push(curLine);
+        curLine = w;
+        if (ctx.measureText(w).width > maxW) { overflow = true; break; }
+      }
+    }
+    if (curLine) lines.push(curLine);
+
+    const lineH = size * 1.25;
+    if (!overflow && lines.length * lineH <= maxH) {
+      ctx.fillStyle = fontColor;
+      const startY = cy - ((lines.length - 1) * lineH) / 2;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], cx, startY + i * lineH);
+      }
+      return { lines, size, height: lines.length * lineH };
+    }
+    size -= 2;
+  }
+  ctx.font = `${fontWeight} ${minSize}px "${fontFamily}", sans-serif`;
+  ctx.fillStyle = fontColor;
+  ctx.fillText(text, cx, cy);
+  return { lines: [text], size: minSize, height: minSize };
+}
+
+// Kinetic Slam Word with controlled scale
+function drawSlamWord(ctx, text, y, slamTime, t, fontSize = 110, color = C.ink) {
+  if (t < slamTime) return;
+
+  const u = CM.clamp((t - slamTime) / 0.28, 0, 1);
+  const scale = 1.0 + 0.8 * Math.pow(1 - u, 3);
+
+  ctx.save();
+  ctx.translate(540, y);
+  ctx.scale(scale, scale);
+
+  ctx.font = `900 ${fontSize}px Anton, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+
+  if (u < 0.6) {
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12 * (1 - u);
+  }
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+function drawHighlighterSwipe(ctx, x, y, w, h, swipeTime, t) {
+  if (t < swipeTime) return;
+  const u = CM.ez.out3(CM.clamp((t - swipeTime) / 0.35, 0, 1));
+
+  ctx.save();
+  ctx.fillStyle = C.yellow;
+  ctx.beginPath();
+  ctx.roundRect(x, y - h * 0.5, w * u, h, 8);
+  ctx.fill();
+  ctx.restore();
+}
+
+// =====================================================================================================
+// SCENE 1 (0.0 - 4.2s): THE 3-SECOND COUNTDOWN HOOK
+// Synchronized to: "You have three seconds before a viewer swipes away forever."
+// =====================================================================================================
+
+function renderCreatorScene1(ctx, W, H, t) {
+  // Slam Header
+  drawSlamWord(ctx, 'YOU HAVE', 340, 0.2, t, 80, C.ink);
+
+  // Big Radial Countdown Dial
+  const dialX = 540, dialY = 660, dialR = 190;
+  const tCountStart = 0.5, tCountEnd = 3.6;
+  const uCount = CM.span(t, tCountStart, tCountEnd);
+
+  // Dial Track
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.lineWidth = 18;
+  ctx.beginPath();
+  ctx.arc(dialX, dialY, dialR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Active Countdown Progress Arc
+  const remainingAngle = (1 - uCount) * Math.PI * 2;
+  ctx.strokeStyle = uCount > 0.66 ? C.coral : C.yellow;
+  ctx.lineWidth = 18;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(dialX, dialY, dialR, -Math.PI / 2, -Math.PI / 2 + remainingAngle, false);
+  ctx.stroke();
+
+  // Central Countdown Numeral
+  const secondsLeft = Math.max(0, (3.0 * (1 - uCount))).toFixed(1);
+  ctx.fillStyle = uCount > 0.66 ? C.coral : C.yellow;
+  ctx.font = '900 130px Anton, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${secondsLeft}s`, dialX, dialY - 15);
+
+  ctx.fillStyle = C.dim;
+  ctx.font = '700 24px Inter, sans-serif';
+  ctx.fillText('CRITICAL HOOK WINDOW', dialX, dialY + 70);
+
+  ctx.restore();
+
+  // Impact Subtitle at bottom
+  if (t > 1.8) {
+    drawSlamWord(ctx, 'BEFORE THEY SWIPE', 960, 1.8, t, 76, C.ink);
+    drawSlamWord(ctx, 'AWAY FOREVER', 1050, 2.5, t, 92, C.coral);
+  }
+
+  if (t > 3.0) {
+    ctx.fillStyle = C.dim;
+    ctx.font = '700 28px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('70% of Shorts viewers make their decision before second 4', 540, 1180);
+  }
+}
+
+// =====================================================================================================
+// SCENE 2 (4.2 - 10.3s): TIMELINE SCISSORS & "CUT THE FLUFF"
+// Synchronized to: "The fatal mistake creators make is polite greetings. Cut the fluff immediately!"
+// =====================================================================================================
+
+function renderCreatorScene2(ctx, W, H, t) {
+  drawSlamWord(ctx, 'THE FATAL MISTAKE', 340, 4.3, t, 72, C.coral);
+
+  // Video Editor Timeline Graphic
+  const tlX = 140, tlY = 460, tlW = 800, tlH = 340;
+  ctx.save();
+  ctx.translate(540, 630);
+
+  // Timeline Container Card
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(-tlW / 2, -tlH / 2, tlW, tlH, 20);
+  ctx.fill();
+  ctx.strokeStyle = C.border;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Timeline Header Bar
+  ctx.fillStyle = '#101014';
+  ctx.beginPath();
+  ctx.roundRect(-tlW / 2, -tlH / 2, tlW, 50, [20, 20, 0, 0]);
+  ctx.fill();
+
+  ctx.fillStyle = C.dim;
+  ctx.font = '700 20px "IBM Plex Mono", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('NLE TIMELINE: 00:00:00:00', -tlW / 2 + 25, -tlH / 2 + 32);
+
+  // Video Track (V1)
+  const trackY = -tlH / 2 + 75;
+  const clipW = 720, clipH = 100;
+  ctx.fillStyle = '#22222A';
+  ctx.beginPath();
+  ctx.roundRect(-clipW / 2, trackY, clipW, clipH, 10);
+  ctx.fill();
+
+  // Clip Label: "Hey guys! Welcome back to my..."
+  ctx.fillStyle = C.ink;
+  ctx.font = '700 26px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('"HEY GUYS! WELCOME BACK..."', 0, trackY + 54);
+
+  // Red Strikethrough Slash across the polite intro clip (5.6s -> 6.4s)
+  if (t > 5.6) {
+    const uStrike = CM.ez.out3(CM.span(t, 5.6, 6.4));
+    ctx.strokeStyle = C.coral;
+    ctx.lineWidth = 14;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-clipW / 2 + 30, trackY + 50);
+    ctx.lineTo(-clipW / 2 + 30 + (clipW - 60) * uStrike, trackY + 50 + Math.sin(uStrike * 6) * 6);
+    ctx.stroke();
+  }
+
+  // Playhead & Animated Scissors (6.2s -> 7.8s)
+  const playheadX = 30;
+  ctx.strokeStyle = C.yellow;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(playheadX, trackY - 20);
+  ctx.lineTo(playheadX, trackY + clipH + 30);
+  ctx.stroke();
+
+  if (t > 6.2 && t < 9.5) {
+    // Laser scissors graphic
+    const scissorSnip = Math.sin((t - 6.2) * 12) * 0.25;
+    ctx.save();
+    ctx.translate(playheadX, trackY + 50);
+
+    // Scissor blade 1
+    ctx.rotate(scissorSnip);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.roundRect(-5, -60, 10, 60, 4); ctx.fill();
+    ctx.fillStyle = C.yellow;
+    ctx.beginPath(); ctx.arc(0, -65, 14, 0, Math.PI * 2); ctx.stroke();
+
+    // Scissor blade 2
+    ctx.rotate(-scissorSnip * 2);
+    ctx.fillStyle = '#E0E0E0';
+    ctx.beginPath(); ctx.roundRect(-5, 0, 10, 60, 4); ctx.fill();
+    ctx.fillStyle = C.yellow;
+    ctx.beginPath(); ctx.arc(0, 65, 14, 0, Math.PI * 2); ctx.stroke();
+
+    ctx.restore();
+  }
+
+  ctx.restore();
+
+  // "CUT THE FLUFF" Big Slam Callout (7.4s)
+  if (t > 7.4) {
+    drawHighlighterSwipe(ctx, 140, 960, 800, 110, 7.4, t);
+    drawSlamWord(ctx, 'CUT THE FLUFF', 960, 7.5, t, 100, '#000000');
+  }
+
+  if (t > 8.4) {
+    ctx.fillStyle = C.ink;
+    ctx.font = '600 32px "Instrument Serif", serif';
+    ctx.fontStyle = 'italic';
+    ctx.textAlign = 'center';
+    ctx.fillText('Never greet the audience. Dive straight into tension.', 540, 1120);
+  }
+}
+
+// =====================================================================================================
+// SCENE 3 (10.3 - 14.0s): 3D PERSPECTIVE RETENTION CURVE COMPARISON
+// Synchronized to: "Start inside the conflict to trap curiosity."
+// =====================================================================================================
+
+function renderCreatorScene3(ctx, W, H, t) {
+  drawSlamWord(ctx, 'START IN CONFLICT', 340, 10.4, t, 74, C.yellow);
+
+  // 3D Perspective Card
+  const pop = CM.ez.outBack(CM.clamp((t - 10.5) / 0.6, 0, 1), 1.2);
+  if (pop <= 0) return;
+
+  const cardW = 800, cardH = 540;
+  const yawAngle = Math.sin((t - 10.5) * 1.4) * 0.04;
+
+  ctx.save();
+  ctx.translate(540, 710);
+  ctx.scale(pop, pop);
+  ctx.transform(1, 0, Math.tan(yawAngle), 1, 0, 0);
+
+  // Card Shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2 + 15, -cardH / 2 + 25, cardW, cardH, 24);
+  ctx.fill();
+
+  // Card Background
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.border;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // Header inside card
+  ctx.fillStyle = C.dim;
+  ctx.font = '700 22px Inter, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('AUDIENCE RETENTION COMPARISON', -cardW / 2 + 40, -cardH / 2 + 50);
+
+  // Retention Chart Axes
+  const chX = -cardW / 2 + 80, chY = -cardH / 2 + 110, chW = cardW - 140, chH = 320;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(chX, chY); ctx.lineTo(chX, chY + chH); ctx.lineTo(chX + chW, chY + chH);
+  ctx.stroke();
+
+  // Curve 1: Polite Intro Plunge (Red dashed line)
+  const uPlunge = CM.ez.out3(CM.clamp((t - 11.0) / 1.5, 0, 1));
+  ctx.strokeStyle = C.coral;
+  ctx.lineWidth = 4;
+  ctx.setLineDash([10, 8]);
+  ctx.beginPath();
+  ctx.moveTo(chX, chY + 20); // 100%
+  const plungeEndX = chX + chW * uPlunge;
+  const plungeEndY = chY + chH - 40; // 28%
+  ctx.bezierCurveTo(chX + chW * 0.1, chY + 30, chX + chW * 0.25, plungeEndY, plungeEndX, plungeEndY);
+  ctx.stroke();
+
+  if (uPlunge > 0.8) {
+    ctx.fillStyle = C.coral;
+    ctx.font = '700 20px Inter, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('Slow Greeting: 28%', chX + chW, plungeEndY - 12);
+  }
+
+  // Curve 2: In Medias Res / Open Loop (Green solid glowing line)
+  const uHold = CM.ez.out3(CM.clamp((t - 11.5) / 1.5, 0, 1));
+  if (uHold > 0) {
+    ctx.strokeStyle = C.green;
+    ctx.lineWidth = 6;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(chX, chY + 20);
+    const holdEndX = chX + chW * uHold;
+    const holdEndY = chY + 60; // 85%
+    ctx.bezierCurveTo(chX + chW * 0.3, chY + 25, chX + chW * 0.6, holdEndY - 10, holdEndX, holdEndY);
+    ctx.stroke();
+
+    if (uHold > 0.8) {
+      ctx.fillStyle = C.green;
+      ctx.font = '900 22px Inter, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('Conflict Hook: 85%', chX + chW, holdEndY - 14);
+    }
+  }
+
+  ctx.restore();
+
+  if (t > 12.8) {
+    drawFittedText(ctx, "Trap viewer curiosity before they know what you're selling.", 540, 1140, 840, 60, 30, 22, C.dim, 500);
+  }
+}
+
+// =====================================================================================================
+// SCENE 4 (14.0 - 19.0s): ALGORITHMIC REACH SURGE BADGE
+// Synchronized to: "When your first three seconds hook the viewer, the algorithm explodes your reach!"
+// =====================================================================================================
+
+function renderCreatorScene4(ctx, W, H, t) {
+  drawSlamWord(ctx, 'EXPLODE YOUR REACH', 340, 14.2, t, 76, C.green);
+
+  // Big Metric Card
+  const pop = CM.ez.outBack(CM.clamp((t - 14.4) / 0.6, 0, 1), 1.2);
+  if (pop <= 0) return;
+
+  const cardW = 800, cardH = 500;
+  ctx.save();
+  ctx.translate(540, 710);
+  ctx.scale(pop, pop);
+
+  // Drop Shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2 + 15, -cardH / 2 + 25, cardW, cardH, 24);
+  ctx.fill();
+
+  // Card Background
+  ctx.fillStyle = C.card;
+  ctx.beginPath();
+  ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.border;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // Tag
+  ctx.fillStyle = C.dim;
+  ctx.font = '700 24px Inter, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('YOUTUBE SHORTS FEED ALGORITHM', -cardW / 2 + 45, -cardH / 2 + 70);
+
+  // Metric Counter Surge
+  const uSurge = CM.ez.out3(CM.clamp((t - 14.6) / 2.5, 0, 1));
+  const currentReach = Math.round(CM.lerp(10, 480, uSurge));
+
+  ctx.fillStyle = C.green;
+  ctx.font = '900 130px Inter, sans-serif';
+  ctx.fillText(`+${currentReach}%`, -cardW / 2 + 45, -cardH / 2 + 200);
+
+  ctx.fillStyle = C.ink;
+  ctx.font = '600 32px "Instrument Serif", serif';
+  ctx.fontStyle = 'italic';
+  ctx.fillText('Distribution spikes when 3s retention exceeds 80%', -cardW / 2 + 45, -cardH / 2 + 280);
+
+  // Verified Green Pill Badge
+  ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
+  ctx.beginPath();
+  ctx.roundRect(cardW / 2 - 240, -cardH / 2 + 45, 195, 48, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.green;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = C.green;
+  ctx.font = '800 20px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('VIRAL ACCELERATION', cardW / 2 - 142, -cardH / 2 + 76);
+
+  ctx.restore();
+
+  // Final Call to Action
+  if (t > 16.8) {
+    drawHighlighterSwipe(ctx, 160, 1080, 760, 90, 16.8, t);
+    drawSlamWord(ctx, 'START WITH THE PAYOFF', 1080, 17.0, t, 68, '#000000');
+  }
+}
+
+// =====================================================================================================
+// MAIN TIMELINE DISPATCHER
+// =====================================================================================================
+
+function explainer(ctx, t) {
+  const W = 1080, H = 1920;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  drawBackground(ctx, W, H, t);
+
+  if (DURATION <= 22.0) {
+    // 20-second test timeline
+    if (t < 4.2) renderCreatorScene1(ctx, W, H, t);
+    else if (t < 10.3) renderCreatorScene2(ctx, W, H, t);
+    else if (t < 14.0) renderCreatorScene3(ctx, W, H, t);
+    else renderCreatorScene4(ctx, W, H, t);
+  } else {
+    // 50-60s Production timeline (55s default)
+    if (t < 4.2) {
+      renderCreatorScene1(ctx, W, H, t);
+    } else if (t < 14.0) {
+      renderCreatorScene1(ctx, W, H, Math.min(4.1, (t - 4.2) * 0.4 + 1.0));
+    } else if (t < 28.0) {
+      renderCreatorScene2(ctx, W, H, Math.min(10.2, (t - 14.0) * 0.45 + 4.2));
+    } else if (t < 42.0) {
+      renderCreatorScene3(ctx, W, H, Math.min(13.9, (t - 28.0) * 0.4 + 10.3));
+    } else {
+      renderCreatorScene4(ctx, W, H, Math.min(18.9, (t - 42.0) * 0.35 + 14.0));
+    }
+  }
+}
+
+function scoreSound(k) {
+  if (DURATION <= 22.0) {
+    k.slam(0.2, 0.55);
+    k.slam(1.8, 0.45);
+    k.slam(2.5, 0.55);
+
+    k.slam(4.3, 0.5);
+    k.marker(5.6, 0.35, 0.35); // Strikethrough
+    k.scissor(6.5, 0.45);      // Scissors cut
+    k.marker(7.4, 0.3, 0.3);   // Highlighter
+    k.slam(7.5, 0.6);
+
+    k.slam(10.4, 0.55);
+    k.slam(14.2, 0.6);
+    k.marker(16.8, 0.3, 0.3);
+    k.slam(17.0, 0.55);
+  } else {
+    k.slam(0.5, 0.55);
+    k.slam(14.5, 0.55);
+    k.slam(28.5, 0.55);
+    k.slam(42.5, 0.6);
+  }
+}
+
+const cvs = document.getElementById('stage');
+const ctx = cvs.getContext('2d');
+window.seek = (t) => explainer(ctx, CM.clamp(t, 0, DURATION));
+window.DURATION = DURATION;
+window.scoreSound = scoreSound;
+window.SFX = SFX;
+
+window.seek(0);
+</script>
+</body>
+</html>

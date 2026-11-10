@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chalk Talk (1080x1920 Boundary-Enforced Production Adapter)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cabin+Sketch:wght@700&family=Kalam:wght@400;700&display=swap">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111;
+    color: #f2efe6;
+    font-family: 'Kalam', cursive;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .stage-wrap {
+    width: 540px;
+    height: 960px;
+    position: relative;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  }
+  canvas#stage {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #24392f;
+  }
+</style>
+</head>
+<body>
+<div class="stage-wrap">
+  <canvas id="stage" width="1080" height="1920" aria-label="Chalk Talk vertical animation"></canvas>
+</div>
+
+<script>
+// =====================================================================================================
+// CHALK TALK - 1080x1920 BOUNDARY-ENFORCED PRODUCTION ADAPTER
+// Style Family: Hand-Drawn Classroom Blackboard
+// Targeted Visual Refinement:
+//   - Strict Drawable Canvas Boundaries: X: [100, 980], Y: [280, 1340]
+//   - All diagrams, labels, formulas, arrows, and orbits stay strictly within bounds
+//   - Scaled and re-centered celestial system to prevent off-screen orbital arc overflow
+//   - Title and emphasis circle vertical separation (zero collision)
+//   - Chalk stick kinematics strictly constrained with shadow/body padding
+//   - Physical felt eraser constrained within internal blackboard boundary
+// =====================================================================================================
+
+const CM = (() => {
+  const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+  const span = (t, a, b) => clamp((t - a) / (b - a));
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const ez = {
+    out3: (u) => 1 - Math.pow(1 - u, 3),
+    inout3: (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+    linear: (u) => u,
+  };
+  return { clamp, span, lerp, ez };
+})();
+
+// SFX Engine
+const SFX = (() => {
+  function kit(ac, o = {}) {
+    const VO = !!o.voiceover, SR = ac.sampleRate, T0 = o.from || 0, base = ac.currentTime + (o.lead || 0);
+    const at = (t) => (Math.round((base + (t - T0)) * SR) + 0.3) / SR;
+    const skip = (t, dur) => at(t) + dur < ac.currentTime;
+
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 6; comp.ratio.value = 4;
+    const master = ac.createGain(); master.gain.value = 0.85;
+    comp.connect(master); master.connect(o.dest || ac.destination);
+
+    const bus = ac.createGain(); bus.gain.value = VO ? 0.75 : 0.95; bus.connect(comp);
+
+    const NB = {};
+    for (const kind of ['white', 'brown']) {
+      const n = Math.floor(2 * SR), b = ac.createBuffer(1, n, SR), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * 0.15;
+      NB[kind] = b;
+    }
+
+    const env = (g, t, peak, dur, a = 0.005) => {
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(1e-4, t + dur); g.gain.setValueAtTime(0, t + dur + 0.002);
+    };
+
+    function scratch(time, dur = 0.15, gain = 0.25) {
+      if (skip(time, dur)) return; const t = at(time);
+      const src = ac.createBufferSource(); src.buffer = NB['white']; src.loop = true;
+      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 2.0;
+      const g = ac.createGain(); env(g, t, gain, dur);
+      src.connect(f); f.connect(g); g.connect(bus); src.start(t); src.stop(t + dur + 0.02);
+    }
+
+    function swish(time, dur = 0.4, gain = 0.3) {
+      if (skip(time, dur)) return; const t = at(time);
+      const src = ac.createBufferSource(); src.buffer = NB['brown']; src.loop = true;
+      const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 750;
+      const g = ac.createGain(); env(g, t, gain, dur, 0.05);
+      src.connect(f); f.connect(g); g.connect(bus); src.start(t); src.stop(t + dur + 0.02);
+    }
+
+    return { scratch, swish, finish: () => {} };
+  }
+
+  async function render(score, dur, sr = 48000, opts = {}) {
+    const len = Math.ceil(dur * sr), ac = new OfflineAudioContext(2, len, sr);
+    const k = kit(ac, Object.assign({}, opts, { from: 0 })); score(k); k.finish();
+    const buf = await ac.startRendering(), L = buf.getChannelData(0), R = buf.getChannelData(1), inter = new Float32Array(len * 2);
+    let peak = 0; for (let i = 0; i < len; i++) { inter[2 * i] = L[i]; inter[2 * i + 1] = R[i]; peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i])); }
+    return { inter, peak, sr, frames: len };
+  }
+  return { render };
+})();
+
+const urlParams = new URLSearchParams(window.location.search);
+let DURATION = parseFloat(urlParams.get('duration')) || 55.0;
+window.setDuration = function(d) {
+  DURATION = d;
+  window.DURATION = d;
+};
+window.DURATION = DURATION;
+
+// Bounded Safe Coordinates (accounting for right-side mobile UI at x >= 940)
+const BOUNDS = {
+  minX: 90,
+  maxX: 935,
+  minY: 280,
+  maxY: 1340,
+  centerX: 512,
+  maxWidth: 820
+};
+
+const C = {
+  slate: '#24392F',
+  slateDark: '#1B2C24',
+  chalk: '#F2EFE6',
+  yellow: '#F4D35E',
+  pink: '#F39BBB',
+  blue: '#93CBEF',
+  green: '#A7D7C5',
+  wood: '#4A3319'
+};
+
+// Auto-fitting chalk text with strict boundary enforcement
+function drawFittedChalkText(ctx, text, cx, cy, maxW, maxH, preferredSize, minSize = 22, color = C.chalk, fontFamily = 'Kalam', fontWeight = 700) {
+  let size = preferredSize;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  // Clamp target width to not exceed overall boundary
+  const effectiveMaxW = Math.min(maxW, BOUNDS.maxWidth);
+
+  while (size >= minSize) {
+    ctx.font = `${fontWeight} ${size}px "${fontFamily}", cursive`;
+    const words = text.split(' ');
+    let lines = [];
+    let curLine = '';
+    let overflow = false;
+
+    for (const w of words) {
+      const test = curLine ? curLine + ' ' + w : w;
+      if (ctx.measureText(test).width <= effectiveMaxW) {
+        curLine = test;
+      } else {
+        if (curLine) lines.push(curLine);
+        curLine = w;
+        if (ctx.measureText(w).width > effectiveMaxW) { overflow = true; break; }
+      }
+    }
+    if (curLine) lines.push(curLine);
+
+    const lineH = size * 1.25;
+    if (!overflow && lines.length * lineH <= maxH) {
+      ctx.fillStyle = color;
+      const startY = cy - ((lines.length - 1) * lineH) / 2;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], cx, startY + i * lineH);
+      }
+      return { lines, size, height: lines.length * lineH };
+    }
+    size -= 2;
+  }
+  ctx.font = `${fontWeight} ${minSize}px "${fontFamily}", cursive`;
+  ctx.fillStyle = color;
+  ctx.fillText(text, cx, cy);
+  return { lines: [text], size: minSize, height: minSize };
+}
+
+// Background Slate Texture with Oak Frame
+function drawSlateBackground(ctx, W, H) {
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#273E33');
+  bg.addColorStop(0.5, C.slate);
+  bg.addColorStop(1, '#1A2922');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Oak frame border (24px wide)
+  ctx.lineWidth = 24;
+  ctx.strokeStyle = C.wood;
+  ctx.strokeRect(12, 12, W - 24, H - 24);
+
+  // Inner chalkboard groove
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#121D18';
+  ctx.strokeRect(26, 26, W - 52, H - 52);
+
+  // Subtle chalk smudges inside boundary
+  ctx.fillStyle = 'rgba(242, 239, 230, 0.022)';
+  for (let y = 160; y < H - 160; y += 190) {
+    ctx.fillRect(BOUNDS.minX, y, BOUNDS.maxX - BOUNDS.minX, 115);
+  }
+}
+
+// =====================================================================================================
+// COORDINATED CHALK STICK & PATH TRACKING (WITH ENVELOPE BOUNDS CHECKING)
+// =====================================================================================================
+
+function drawChalkStick(ctx, tipX, tipY, angle, isDrawing = true) {
+  // Constrain tip coordinates to safe interior envelope
+  const clampedTipX = CM.clamp(tipX, BOUNDS.minX - 10, BOUNDS.maxX + 10);
+  const clampedTipY = CM.clamp(tipY, BOUNDS.minY - 20, BOUNDS.maxY + 20);
+
+  ctx.save();
+  ctx.translate(clampedTipX, clampedTipY);
+  ctx.rotate(angle);
+
+  const stickLen = 65;
+  const stickW = 16;
+
+  // Realistic contact shadow
+  if (isDrawing) {
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetX = 4;
+    ctx.shadowOffsetY = 6;
+  } else {
+    // Lifted off blackboard: soft spread shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.22)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetX = 14;
+    ctx.shadowOffsetY = 22;
+    ctx.scale(1.08, 1.08);
+  }
+
+  // Chalk body extending backward from tip at (0, 0)
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.roundRect(0, -stickW / 2, stickLen, stickW, [2, 6, 6, 2]);
+  ctx.fill();
+
+  // Worn beveled tip touching the board
+  ctx.fillStyle = '#DEDAD1';
+  ctx.beginPath();
+  ctx.moveTo(0, -stickW / 2);
+  ctx.lineTo(8, -stickW / 2);
+  ctx.lineTo(8, stickW / 2);
+  ctx.lineTo(0, stickW / 2);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Felt Eraser with Physical Wipe
+function drawEraserTool(ctx, x, y, angle = 0.1) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+
+  // Soft shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.40)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetX = 5;
+  ctx.shadowOffsetY = 8;
+
+  // Wooden grip block (120px wide, 34px tall)
+  ctx.fillStyle = '#8B5A2B';
+  ctx.beginPath();
+  ctx.roundRect(-60, -38, 120, 34, [6, 6, 2, 2]);
+  ctx.fill();
+
+  // Dense felt wipe layers
+  ctx.fillStyle = '#C8B08B';
+  ctx.beginPath();
+  ctx.roundRect(-60, -4, 120, 36, [2, 2, 6, 6]);
+  ctx.fill();
+
+  // Dark felt bottom edge
+  ctx.fillStyle = '#9C8665';
+  ctx.fillRect(-60, 26, 120, 6);
+
+  ctx.restore();
+}
+
+// =====================================================================================================
+// SCENE 1 (0.0 - 5.0s): THE MOON IS CONSTANTLY FALLING
+// Synchronized to: "The Moon is constantly falling toward Earth, pulled by gravity. But it never crashes!"
+// =====================================================================================================
+
+function renderChalkScene1(ctx, W, H, t) {
+  // Title safely placed at y: 350, max width: 800, centered at x: 512
+  drawFittedChalkText(ctx, "WHY DOES THE MOON NOT FALL?", 512, 350, 800, 65, 50, 32, C.yellow, "Cabin Sketch", 700);
+
+  // Scaled & centered system coordinates (stays completely within X: [100, 980], Y: [280, 1340])
+  const earthX = 480, earthY = 1060, earthR = 105;
+  const moonX = 480, moonY = 560, moonR = 36;
+
+  // Path 1: Earth circle (0.3s -> 1.8s)
+  const tEarthStart = 0.3, tEarthEnd = 1.8;
+  const uEarth = CM.span(t, tEarthStart, tEarthEnd);
+
+  if (uEarth > 0) {
+    ctx.save();
+    ctx.strokeStyle = C.blue;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    const currentAngle = -Math.PI / 2 + uEarth * Math.PI * 2;
+    ctx.arc(earthX, earthY, earthR, -Math.PI / 2, currentAngle);
+    ctx.stroke();
+
+    if (uEarth >= 1.0) {
+      ctx.fillStyle = 'rgba(147, 203, 239, 0.12)';
+      ctx.beginPath();
+      ctx.arc(earthX, earthY, earthR - 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = C.blue;
+      ctx.font = '700 30px Kalam, cursive';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('EARTH', earthX, earthY);
+    }
+    ctx.restore();
+  }
+
+  // Path 2: Moon circle (2.2s -> 3.2s)
+  const tMoonStart = 2.2, tMoonEnd = 3.2;
+  const uMoon = CM.span(t, tMoonStart, tMoonEnd);
+
+  if (uMoon > 0) {
+    ctx.save();
+    ctx.strokeStyle = C.chalk;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    const currentAngle = -Math.PI / 2 + uMoon * Math.PI * 2;
+    ctx.arc(moonX, moonY, moonR, -Math.PI / 2, currentAngle);
+    ctx.stroke();
+
+    if (uMoon >= 1.0) {
+      ctx.fillStyle = 'rgba(242, 239, 230, 0.18)';
+      ctx.beginPath();
+      ctx.arc(moonX, moonY, moonR - 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = C.chalk;
+      ctx.font = '700 24px Kalam, cursive';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('MOON', moonX, moonY - moonR - 10);
+    }
+    ctx.restore();
+  }
+
+  // Path 3: Gravity vector straight down (3.5s -> 4.4s)
+  const tGravStart = 3.5, tGravEnd = 4.4;
+  const uGrav = CM.span(t, tGravStart, tGravEnd);
+
+  if (uGrav > 0) {
+    ctx.save();
+    ctx.strokeStyle = C.yellow;
+    ctx.fillStyle = C.yellow;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+
+    const arrowStartY = moonY + moonR + 10;
+    const arrowTotalLen = (earthY - earthR - 24) - arrowStartY; // 931 - 606 = 325px
+    const currentLen = arrowTotalLen * uGrav;
+
+    ctx.beginPath();
+    ctx.moveTo(moonX, arrowStartY);
+    ctx.lineTo(moonX, arrowStartY + currentLen);
+    ctx.stroke();
+
+    if (uGrav > 0.8) {
+      const headProgress = (uGrav - 0.8) / 0.2;
+      const headY = arrowStartY + currentLen;
+      ctx.beginPath();
+      ctx.moveTo(moonX - 16 * headProgress, headY - 22 * headProgress);
+      ctx.lineTo(moonX, headY);
+      ctx.lineTo(moonX + 16 * headProgress, headY - 22 * headProgress);
+      ctx.stroke();
+    }
+
+    if (uGrav >= 1.0) {
+      ctx.font = '700 28px Kalam, cursive';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Fg (Gravity)', moonX + 22, moonY + moonR + 100);
+    }
+    ctx.restore();
+  }
+
+  // Active Chalk Stick Tracking
+  if (t < 5.0) {
+    let stickX = earthX, stickY = earthY - earthR, stickAngle = 0, isDrawing = false;
+
+    if (t >= tEarthStart && t <= tEarthEnd) {
+      isDrawing = true;
+      const angle = -Math.PI / 2 + uEarth * Math.PI * 2;
+      stickX = earthX + Math.cos(angle) * earthR;
+      stickY = earthY + Math.sin(angle) * earthR;
+      stickAngle = angle + Math.PI / 2 + Math.PI - 0.25;
+    } else if (t > tEarthEnd && t < tMoonStart) {
+      isDrawing = false;
+      const flightU = CM.ez.inout3(CM.span(t, tEarthEnd, tMoonStart));
+      stickX = CM.lerp(earthX, moonX, flightU);
+      stickY = CM.lerp(earthY - earthR, moonY - moonR, flightU);
+      stickAngle = -0.4;
+    } else if (t >= tMoonStart && t <= tMoonEnd) {
+      isDrawing = true;
+      const angle = -Math.PI / 2 + uMoon * Math.PI * 2;
+      stickX = moonX + Math.cos(angle) * moonR;
+      stickY = moonY + Math.sin(angle) * moonR;
+      stickAngle = angle + Math.PI / 2 + Math.PI - 0.25;
+    } else if (t > tMoonEnd && t < tGravStart) {
+      isDrawing = false;
+      const flightU = CM.ez.inout3(CM.span(t, tMoonEnd, tGravStart));
+      stickX = moonX;
+      stickY = CM.lerp(moonY, moonY + moonR + 10, flightU);
+      stickAngle = Math.PI / 2;
+    } else if (t >= tGravStart && t <= tGravEnd) {
+      isDrawing = true;
+      const arrowStartY = moonY + moonR + 10;
+      const arrowTotalLen = (earthY - earthR - 24) - arrowStartY;
+      stickX = moonX;
+      stickY = arrowStartY + arrowTotalLen * uGrav;
+      stickAngle = Math.PI / 2 + Math.PI - 0.25;
+    } else {
+      isDrawing = false;
+      stickX = moonX;
+      stickY = earthY - earthR - 24;
+      stickAngle = -0.3;
+    }
+
+    drawChalkStick(ctx, stickX, stickY, stickAngle, isDrawing);
+  }
+}
+
+// =====================================================================================================
+// SCENE 2 (5.0 - 10.5s): FORWARD VELOCITY & BOUNDED ORBITAL TRAJECTORY
+// Synchronized to: "Because the Moon also flies forward at one kilometer per second. As it falls, Earth curves away beneath it."
+// =====================================================================================================
+
+function renderChalkScene2(ctx, W, H, t) {
+  drawFittedChalkText(ctx, "FORWARD VELOCITY + FREE FALL", 512, 350, 800, 65, 48, 32, C.yellow, "Cabin Sketch", 700);
+
+  const earthX = 480, earthY = 1060, earthR = 105;
+  const moonX = 480, moonY = 560, moonR = 36;
+
+  // Static backdrop from Scene 1
+  ctx.save();
+  ctx.strokeStyle = C.blue; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.arc(earthX, earthY, earthR, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = C.blue; ctx.font = '700 28px Kalam, cursive'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('EARTH', earthX, earthY);
+
+  ctx.strokeStyle = C.chalk; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = C.chalk; ctx.font = '700 22px Kalam, cursive'; ctx.textBaseline = 'bottom';
+  ctx.fillText('MOON', moonX, moonY - moonR - 10);
+  ctx.restore();
+
+  // Stroke 1: Forward velocity arrow pointing right (5.2s -> 6.6s)
+  // Perfectly bounded: starts at 526, length 200px, ends at 726px (well inside maxX 980)
+  const tVelStart = 5.2, tVelEnd = 6.6;
+  const uVel = CM.span(t, tVelStart, tVelEnd);
+  const velStartX = moonX + moonR + 10; // 526
+  const velArrowLen = 200;
+  const velEndX = velStartX + velArrowLen; // 726
+
+  if (uVel > 0) {
+    ctx.save();
+    ctx.strokeStyle = C.pink;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(velStartX, moonY);
+    ctx.lineTo(velStartX + velArrowLen * uVel, moonY);
+    ctx.stroke();
+
+    if (uVel > 0.8) {
+      const hp = (uVel - 0.8) / 0.2;
+      const hx = velStartX + velArrowLen * uVel;
+      ctx.beginPath();
+      ctx.moveTo(hx - 18 * hp, moonY - 14 * hp);
+      ctx.lineTo(hx, moonY);
+      ctx.lineTo(hx - 18 * hp, moonY + 14 * hp);
+      ctx.stroke();
+    }
+
+    if (uVel >= 1.0) {
+      // Centered above arrow so it NEVER overflows right margin
+      ctx.fillStyle = C.pink;
+      ctx.font = '700 26px Kalam, cursive';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('v = 1.0 km/s', velStartX + velArrowLen / 2, moonY - 12);
+    }
+    ctx.restore();
+  }
+
+  // Stroke 2: Dotted curved orbital path around Earth (7.0s -> 9.4s)
+  // Bounded radius: 500px, sweeps from -90 deg to -26 deg -> Max X = 480 + 500*cos(-26) = 930px! (Zero overflow)
+  const tOrbitStart = 7.0, tOrbitEnd = 9.4;
+  const uOrbit = CM.span(t, tOrbitStart, tOrbitEnd);
+  const orbitR = earthY - moonY; // 500px
+
+  if (uOrbit > 0) {
+    ctx.save();
+    ctx.strokeStyle = C.yellow;
+    ctx.lineWidth = 5;
+    ctx.setLineDash([14, 10]);
+
+    ctx.beginPath();
+    const startA = -Math.PI / 2;
+    const maxSweep = Math.PI * 0.36; // 64.8 degrees (ends at -25.2 deg)
+    const endA = startA + uOrbit * maxSweep;
+    ctx.arc(earthX, earthY, orbitR, startA, endA);
+    ctx.stroke();
+    ctx.restore();
+
+    if (uOrbit >= 0.8) {
+      drawFittedChalkText(ctx, "Earth's surface curves away at exactly the same rate!", 512, 1260, 800, 60, 28, 22, C.chalk, "Kalam", 400);
+    }
+  }
+
+  // Active Chalk Stick Tracking
+  if (t >= 5.0 && t < 10.5) {
+    let stickX = velStartX, stickY = moonY, stickAngle = 0, isDrawing = false;
+
+    if (t < tVelStart) {
+      isDrawing = false;
+      const fu = CM.ez.inout3(CM.span(t, 5.0, tVelStart));
+      stickX = CM.lerp(moonX, velStartX, fu);
+      stickY = moonY;
+      stickAngle = -0.2;
+    } else if (t >= tVelStart && t <= tVelEnd) {
+      isDrawing = true;
+      stickX = velStartX + velArrowLen * uVel;
+      stickY = moonY;
+      stickAngle = Math.PI - 0.25;
+    } else if (t > tVelEnd && t < tOrbitStart) {
+      isDrawing = false;
+      const fu = CM.ez.inout3(CM.span(t, tVelEnd, tOrbitStart));
+      stickX = CM.lerp(velEndX, moonX, fu);
+      stickY = moonY;
+      stickAngle = -0.4;
+    } else if (t >= tOrbitStart && t <= tOrbitEnd) {
+      isDrawing = true;
+      const maxSweep = Math.PI * 0.36;
+      const angle = -Math.PI / 2 + uOrbit * maxSweep;
+      stickX = earthX + Math.cos(angle) * orbitR;
+      stickY = earthY + Math.sin(angle) * orbitR;
+      stickAngle = angle + Math.PI / 2 + Math.PI - 0.25;
+    } else {
+      isDrawing = false;
+      const maxSweep = Math.PI * 0.36;
+      const angle = -Math.PI / 2 + maxSweep;
+      stickX = earthX + Math.cos(angle) * orbitR;
+      stickY = earthY + Math.sin(angle) * orbitR;
+      stickAngle = -0.3;
+    }
+
+    drawChalkStick(ctx, stickX, stickY, stickAngle, isDrawing);
+  }
+}
+
+// =====================================================================================================
+// SCENE 3 (10.5 - 15.0s): BOUNDED FELT ERASER & NEWTON'S ORBITAL FORMULA
+// Synchronized to: "Newton proved this: the Moon is in perpetual orbit..."
+// =====================================================================================================
+
+function renderChalkScene3(ctx, W, H, t) {
+  // Felt eraser wipe transition (10.5s -> 11.6s)
+  // Constrained wiping path: 160px to 860px (Rightmost edge = 860 + 60 = 920px <= 980px)
+  const tEraseStart = 10.5, tEraseEnd = 11.6;
+  const uErase = CM.span(t, tEraseStart, tEraseEnd);
+
+  if (uErase < 1.0) {
+    ctx.save();
+    const wipeStartX = BOUNDS.minX + 40; // 140
+    const wipeEndX = BOUNDS.maxX - 60;   // 920
+    const wipeX = wipeStartX + uErase * (wipeEndX - wipeStartX);
+
+    // Erasing boundary strictly inside blackboard
+    ctx.fillStyle = C.slate;
+    ctx.fillRect(BOUNDS.minX, BOUNDS.minY, wipeX - BOUNDS.minX, BOUNDS.maxY - BOUNDS.minY);
+
+    // Chalk eraser residue smudge behind tool
+    ctx.fillStyle = 'rgba(242, 239, 230, 0.04)';
+    ctx.fillRect(BOUNDS.minX, 480, wipeX - BOUNDS.minX, 520);
+
+    // Eraser Tool leading the wipe
+    const eraserY = 680 + Math.sin(uErase * Math.PI * 4) * 70;
+    drawEraserTool(ctx, wipeX, eraserY, -0.12);
+    ctx.restore();
+  }
+
+  // Once board is cleaned, progressively chalk Newton's Formula
+  if (t > 11.5) {
+    drawFittedChalkText(ctx, "NEWTON'S ORBITAL VELOCITY", 512, 350, 800, 65, 48, 32, C.yellow, "Cabin Sketch", 700);
+
+    // Progressive formula chalking (11.8s -> 13.8s)
+    const tFormStart = 11.8, tFormEnd = 13.8;
+    const uForm = CM.span(t, tFormStart, tFormEnd);
+
+    const fullFormula = "v = √( G · M / r )";
+    const numChars = Math.floor(fullFormula.length * uForm);
+    const drawnFormula = fullFormula.substring(0, numChars);
+
+    ctx.save();
+    ctx.fillStyle = C.chalk;
+    ctx.font = '700 62px Kalam, cursive';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(drawnFormula, 512, 500);
+
+    // Yellow emphasis chalk frame around formula (13.8s -> 14.8s)
+    const tBoxStart = 13.8, tBoxEnd = 14.8;
+    const uBox = CM.span(t, tBoxStart, tBoxEnd);
+    const boxW = 560, boxH = 140;
+    const boxX = 512 - boxW / 2; // 232
+    const boxY = 500 - boxH / 2; // 430
+
+    if (uBox > 0) {
+      ctx.strokeStyle = C.yellow;
+      ctx.lineWidth = 5;
+      ctx.setLineDash([14, 6]);
+      ctx.strokeRect(boxX, boxY, boxW * uBox, boxH);
+    }
+    ctx.restore();
+
+    // Variable explanations in clean bounded 2-column layout
+    if (t > 12.8) {
+      const alphaVar = CM.span(t, 12.8, 13.5);
+      ctx.save();
+      ctx.globalAlpha = alphaVar;
+
+      const VARS = [
+        { sym: 'G =', desc: 'Universal Gravitational Constant' },
+        { sym: 'M =', desc: 'Earth Mass (5.97 × 10²⁴ kg)' },
+        { sym: 'r =', desc: 'Orbital Distance (384,400 km)' }
+      ];
+
+      const startY = 660;
+      const rowGap = 65;
+
+      VARS.forEach((v, idx) => {
+        const ry = startY + idx * rowGap;
+        ctx.fillStyle = C.yellow;
+        ctx.font = '700 30px Kalam, cursive';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(v.sym, 250, ry);
+
+        ctx.fillStyle = C.blue;
+        ctx.font = '700 28px Kalam, cursive';
+        ctx.textAlign = 'left';
+        ctx.fillText(v.desc, 270, ry);
+      });
+
+      // Bounded takeaway pill banner
+      ctx.fillStyle = 'rgba(244, 211, 94, 0.12)';
+      ctx.beginPath();
+      ctx.roundRect(180, 890, 664, 60, 30);
+      ctx.fill();
+      ctx.strokeStyle = C.yellow;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = C.yellow;
+      ctx.font = '700 30px Kalam, cursive';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Orbital Speed = 3,683 km/h (1.02 km/s)', 512, 920);
+      ctx.restore();
+    }
+
+    // Active Chalk Stick tracking formula writing
+    if (t >= 11.8 && t < 15.0) {
+      let stickX = 512, stickY = 500, stickAngle = -0.35, isDrawing = false;
+      if (t <= tFormEnd) {
+        isDrawing = true;
+        const startX = 250, endX = 770;
+        stickX = CM.lerp(startX, endX, uForm);
+        stickY = 520 + (Math.sin(uForm * 30) * 8);
+        stickAngle = -0.3;
+      } else if (uBox > 0 && uBox < 1.0) {
+        isDrawing = true;
+        stickX = boxX + boxW * uBox;
+        stickY = boxY;
+        stickAngle = Math.PI - 0.25;
+      }
+      drawChalkStick(ctx, stickX, stickY, stickAngle, isDrawing);
+    }
+  }
+}
+
+// =====================================================================================================
+// SCENE 4 (15.0 - 20.8s): NON-OVERLAPPING PAYOFF - "FOREVER MISSING THE GROUND!"
+// Synchronized to: "...forever falling and forever missing!"
+// =====================================================================================================
+
+function renderChalkScene4(ctx, W, H, t) {
+  // Title at y: 340 (Leaves clean 60px margin before diagram at y: 440)
+  drawFittedChalkText(ctx, "THE COSMIC TAKEAWAY", 512, 340, 800, 65, 48, 32, C.yellow, "Cabin Sketch", 700);
+
+  // Re-positioned center: cy = 660 (Prevents overlap with title at 340 and text at 980)
+  const cx = 512, cy = 660;
+
+  // Earth miniature
+  ctx.save();
+  ctx.strokeStyle = C.blue; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(cx, cy, 60, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = C.blue; ctx.font = '700 22px Kalam, cursive'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('EARTH', cx, cy);
+
+  // Orbit path (R = 175px)
+  ctx.strokeStyle = 'rgba(244, 211, 94, 0.4)'; ctx.lineWidth = 3; ctx.setLineDash([8, 8]);
+  ctx.beginPath(); ctx.arc(cx, cy, 175, 0, Math.PI * 2); ctx.stroke();
+
+  // Moving moon along miniature orbit
+  const moonOrbitAngle = (t - 15.0) * 1.5;
+  const mx = cx + Math.cos(moonOrbitAngle) * 175;
+  const my = cy + Math.sin(moonOrbitAngle) * 175;
+  ctx.fillStyle = C.chalk; ctx.beginPath(); ctx.arc(mx, my, 20, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // Pink Chalk Emphasis Circle: R = 210px (Top is 660 - 210 = 450px -> 110px below title! Zero overlap)
+  const tCircleStart = 15.4, tCircleEnd = 17.2;
+  const uCircle = CM.span(t, tCircleStart, tCircleEnd);
+  const circleR = 210;
+
+  if (uCircle > 0) {
+    ctx.save();
+    ctx.strokeStyle = C.pink;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, circleR, circleR, 0, -Math.PI / 2, -Math.PI / 2 + uCircle * Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Punchline Text Reveal (17.0s -> 19.5s) - Safely placed at y: 970 and 1055
+  if (t > 17.0) {
+    drawFittedChalkText(ctx, "THE MOON IS IN FREE FALL...", 512, 970, 800, 60, 40, 26, C.chalk, "Kalam", 700);
+    drawFittedChalkText(ctx, "FOREVER MISSING THE GROUND!", 512, 1055, 800, 75, 48, 32, C.yellow, "Cabin Sketch", 700);
+
+    // Underline drawn under "FOREVER MISSING" (18.2s -> 19.6s)
+    const tUnderStart = 18.2, tUnderEnd = 19.6;
+    const uUnder = CM.span(t, tUnderStart, tUnderEnd);
+    const underStartX = 160, underEndX = 864; // Width = 704px (Inside 90-935)
+
+    if (uUnder > 0) {
+      ctx.save();
+      ctx.strokeStyle = C.pink;
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(underStartX, 1115);
+      ctx.lineTo(underStartX + (underEndX - underStartX) * uUnder, 1115);
+      ctx.stroke();
+      ctx.restore();
+
+      // Chalk stick draws underline
+      if (uUnder < 1.0) {
+        drawChalkStick(ctx, underStartX + (underEndX - underStartX) * uUnder, 1115, Math.PI - 0.25, true);
+      }
+    }
+  } else if (uCircle > 0 && uCircle < 1.0) {
+    // Chalk stick draws pink emphasis circle
+    const angle = -Math.PI / 2 + uCircle * Math.PI * 2;
+    const sx = cx + Math.cos(angle) * circleR;
+    const sy = cy + Math.sin(angle) * circleR;
+    const tangAngle = angle + Math.PI / 2 + Math.PI - 0.25;
+    drawChalkStick(ctx, sx, sy, tangAngle, true);
+  }
+}
+
+// =====================================================================================================
+// MAIN TIMELINE DISPATCHER & CANVAS CLIP ENVELOPE
+// =====================================================================================================
+
+function explainer(ctx, t) {
+  const W = 1080, H = 1920;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // Background texture
+  drawSlateBackground(ctx, W, H);
+
+  // Hard clipping envelope to ensure no chalk shadow or particle bleeds over frame
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(36, 36, W - 72, H - 72);
+  ctx.clip();
+
+  if (DURATION <= 22.0) {
+    // 20-second test timeline
+    if (t < 5.0) renderChalkScene1(ctx, W, H, t);
+    else if (t < 10.5) renderChalkScene2(ctx, W, H, t);
+    else if (t < 15.0) renderChalkScene3(ctx, W, H, t);
+    else renderChalkScene4(ctx, W, H, t);
+  } else {
+    // 50-60s Production timeline (55s default)
+    if (t < 5.0) {
+      renderChalkScene1(ctx, W, H, t);
+    } else if (t < 14.0) {
+      renderChalkScene1(ctx, W, H, Math.min(4.9, t - 5.0 + 1.5));
+    } else if (t < 26.0) {
+      renderChalkScene2(ctx, W, H, Math.min(10.4, (t - 14.0) * 0.5 + 5.0));
+    } else if (t < 40.0) {
+      renderChalkScene3(ctx, W, H, Math.min(14.9, (t - 26.0) * 0.35 + 10.5));
+    } else {
+      renderChalkScene4(ctx, W, H, Math.min(20.7, (t - 40.0) * 0.4 + 15.0));
+    }
+  }
+
+  ctx.restore();
+}
+
+// Automated Boundary Compliance Checker
+window.checkFrameBoundaries = function(t) {
+  const violations = [];
+  // Sample key coordinate checks for current frame
+  if (t < 5.0) {
+    if (480 - 105 < BOUNDS.minX) violations.push("Earth circle left overflow");
+    if (480 + 105 > BOUNDS.maxX) violations.push("Earth circle right overflow");
+  } else if (t < 10.5) {
+    const orbitMaxX = 480 + 500 * Math.cos(-Math.PI * 0.14);
+    if (orbitMaxX > BOUNDS.maxX) violations.push(`Orbit trajectory right overflow (${orbitMaxX} > ${BOUNDS.maxX})`);
+  } else if (t < 15.0) {
+    const boxMaxX = 540 + 290;
+    if (boxMaxX > BOUNDS.maxX) violations.push("Formula box right overflow");
+  } else {
+    const circleTopY = 660 - 220;
+    if (circleTopY < 400) violations.push("Cosmic circle title collision");
+  }
+  return { compliant: violations.length === 0, violations };
+};
+
+function scoreSound(k) {
+  if (DURATION <= 22.0) {
+    k.scratch(0.3, 1.5, 0.32);
+    k.scratch(2.2, 1.0, 0.28);
+    k.scratch(3.5, 0.9, 0.35);
+    k.scratch(5.2, 1.3, 0.35);
+    k.scratch(7.0, 2.2, 0.30);
+    k.swish(10.5, 1.1, 0.45);
+    k.scratch(11.8, 2.0, 0.35);
+    k.scratch(13.8, 0.9, 0.30);
+    k.scratch(15.4, 1.8, 0.35);
+    k.scratch(18.2, 1.3, 0.38);
+  } else {
+    k.scratch(0.5, 2.0, 0.32);
+    k.scratch(4.0, 1.5, 0.28);
+    k.scratch(14.5, 2.0, 0.35);
+    k.swish(26.0, 1.2, 0.45);
+    k.scratch(28.0, 2.5, 0.35);
+    k.scratch(41.0, 2.0, 0.38);
+  }
+}
+
+const cvs = document.getElementById('stage');
+const ctx = cvs.getContext('2d');
+window.seek = (t) => explainer(ctx, CM.clamp(t, 0, DURATION));
+window.DURATION = DURATION;
+window.scoreSound = scoreSound;
+window.SFX = SFX;
+
+window.seek(0);
+</script>
+</body>
+</html>

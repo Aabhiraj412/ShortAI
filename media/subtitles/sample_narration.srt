@@ -1,0 +1,16 @@
+1
+00:00:00,100 --> 00:00:03,100
+What happens if you fall into a black hole?
+
+2
+00:00:03,050 --> 00:00:07,025
+First, extreme gravity stretches you like spaghetti.
+
+3
+00:00:07,025 --> 00:00:11,587
+Next, time slows down relative to the outside universe.
+
+4
+00:00:11,587 --> 00:00:15,987
+And once you cross the event horizon, not even light can escape!
+

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
+  <defs>
+    <!-- Background vertical gradient -->
+    <linearGradient id="deepSpaceGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#050813" />
+      <stop offset="35%" stop-color="#0B132B" />
+      <stop offset="70%" stop-color="#1C2541" />
+      <stop offset="100%" stop-color="#050813" />
+    </linearGradient>
+
+    <!-- Nebula Glows -->
+    <radialGradient id="nebulaCyan" cx="30%" cy="30%" r="50%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.35" />
+      <stop offset="50%" stop-color="#0077B6" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="nebulaPurple" cx="75%" cy="65%" r="60%">
+      <stop offset="0%" stop-color="#7209B7" stop-opacity="0.4" />
+      <stop offset="45%" stop-color="#3A0CA3" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="starGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="20%" stop-color="#48CAE4" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Deep base -->
+  <rect width="1080" height="1920" fill="url(#deepSpaceGrad)" />
+
+  <!-- Atmospheric Nebulae -->
+  <circle cx="280" cy="500" r="600" fill="url(#nebulaCyan)" />
+  <circle cx="850" cy="1300" r="700" fill="url(#nebulaPurple)" />
+
+  <!-- Subtle Perspective Grid Floor -->
+  <g opacity="0.18" stroke="#00F0FF" stroke-width="1.5">
+    <line x1="0" y1="1600" x2="1080" y2="1600" />
+    <line x1="0" y1="1680" x2="1080" y2="1680" />
+    <line x1="0" y1="1780" x2="1080" y2="1780" />
+    <line x1="0" y1="1900" x2="1080" y2="1900" />
+    <!-- Vanishing perspective lines -->
+    <line x1="540" y1="1500" x2="0" y2="1920" />
+    <line x1="540" y1="1500" x2="250" y2="1920" />
+    <line x1="540" y1="1500" x2="540" y2="1920" />
+    <line x1="540" y1="1500" x2="830" y2="1920" />
+    <line x1="540" y1="1500" x2="1080" y2="1920" />
+  </g>
+
+  <!-- Distant Planet / Celestial Arc -->
+  <circle cx="950" cy="350" r="280" fill="#0C1B33" stroke="#48CAE4" stroke-width="2" opacity="0.5" />
+  <ellipse cx="950" cy="350" rx="350" ry="70" fill="none" stroke="#7209B7" stroke-width="3" opacity="0.3" transform="rotate(-25 950 350)" />
+
+  <!-- Star field -->
+  <g fill="#FFFFFF">
+    <circle cx="120" cy="200" r="2" opacity="0.9"/>
+    <circle cx="340" cy="150" r="1.5" opacity="0.7"/>
+    <circle cx="520" cy="280" r="2.5" opacity="0.8"/>
+    <circle cx="780" cy="180" r="1.5" opacity="0.6"/>
+    <circle cx="920" cy="120" r="2" opacity="0.85"/>
+    <circle cx="180" cy="450" r="1" opacity="0.5"/>
+    <circle cx="410" cy="620" r="2" opacity="0.7"/>
+    <circle cx="680" cy="510" r="1.5" opacity="0.6"/>
+    <circle cx="890" cy="720" r="2" opacity="0.8"/>
+    <circle cx="150" cy="850" r="2" opacity="0.75"/>
+    <circle cx="310" cy="980" r="1" opacity="0.4"/>
+    <circle cx="740" cy="1020" r="2.5" opacity="0.85"/>
+    <circle cx="980" cy="1150" r="1.5" opacity="0.7"/>
+    <circle cx="210" cy="1250" r="2" opacity="0.6"/>
+    <circle cx="450" cy="1420" r="1" opacity="0.5"/>
+    <!-- Glowing feature star -->
+    <circle cx="520" cy="280" r="14" fill="url(#starGlow)" />
+  </g>
+</svg>

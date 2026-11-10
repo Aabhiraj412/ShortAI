@@ -1,0 +1,135 @@
+# AI YouTube Shorts Studio — Windows / Python / Node.js
+
+# Secrets and local environment configuration
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*client_secret*.json
+token.json
+tokens.json
+secrets/
+credentials/
+private/
+
+# Python virtual environments and caches
+.venv/
+venv/
+env/
+ENV/
+python-env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.pytype/
+.pyre/
+
+# Node dependencies and build output
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+dist/
+build/
+.next/
+.nuxt/
+.vite/
+coverage/
+
+# Editors and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Runtime logs, caches, and temporary files
+logs/
+*.log
+cache/
+**/.cache/
+tmp/
+temp/
+scratch/
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+
+# Local databases and backups (track migrations/schema, not runtime DBs)
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.db.bak*
+*.sqlite.bak*
+
+# Generated media and render intermediates
+# Keep intentional source assets; ignore generated outputs.
+media/video/
+media/audio/
+media/frames/
+media/audit/
+media/temp/
+media/tmp/
+thumbnails/generated/
+thumbnails/tmp/
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.aac
+
+# Downloaded models, installers, and large runtime artifacts
+models/
+downloads/
+tools/downloads/
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.gguf
+*.bin
+*.whl
+*.zip
+*.7z
+*.rar
+*.exe
+*.msi
+
+# Test outputs and profiling artifacts
+coverage.xml
+junit.xml
+test-results/
+playwright-report/
+*.prof
+*.profraw
+
+# Preserve intentional placeholders
+!.gitkeep
