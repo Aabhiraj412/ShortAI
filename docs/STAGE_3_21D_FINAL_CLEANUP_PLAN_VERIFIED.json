@@ -1,0 +1,798 @@
+{
+  "verified_at": "2026-11-11T03:32:13.289346",
+  "total_physical_files": 324,
+  "total_storage_bytes": 358236783,
+  "total_storage_mib": 341.6412,
+  "total_storage_decimal_mb": 358.2368,
+  "discrepancy_forensic_resolution": {
+    "issue": "Reported 107.73 MB sum of dependency classes vs 106.33 MB total duplicate size",
+    "root_cause": "Class A bytes (30,244,097 bytes) was mislabelled as '30.24 MB' by confusing decimal SI megabytes (30.24 MB) with binary mebibytes (28.84 MiB). Adding 30.24 + 23.11 + 54.38 resulted in 107.73.",
+    "corrected_binary_mib_values": {
+      "class_a_mib": 28.843,
+      "class_b_mib": 23.1104,
+      "class_c_mib": 54.3753,
+      "sum_classes_mib": 106.3288,
+      "total_redundant_duplicates_mib": 106.3288,
+      "discrepancy_bytes": 0
+    },
+    "exact_byte_values": {
+      "class_a_bytes": 30244097,
+      "class_b_bytes": 24233045,
+      "class_c_bytes": 57016658,
+      "sum_classes_bytes": 111493800,
+      "total_redundant_duplicate_bytes": 111493800,
+      "exact_difference": 0
+    }
+  },
+  "dependency_classification_summary": {
+    "Class_A_Safe_to_Remove_After_Backup": {
+      "files_count": 53,
+      "exact_bytes": 30244097,
+      "size_mib": 28.843
+    },
+    "Class_B_Path_Dependency_Must_Be_Updated_First": {
+      "files_count": 5,
+      "exact_bytes": 24233045,
+      "size_mib": 23.1104
+    },
+    "Class_C_Keep_for_Reproducibility": {
+      "files_count": 8,
+      "exact_bytes": 57016658,
+      "size_mib": 54.3753
+    },
+    "Total_Redundant_Duplicates": {
+      "files_count": 66,
+      "exact_bytes": 111493800,
+      "size_mib": 106.3288
+    }
+  },
+  "exact_storage_scenarios": {
+    "total_media_workspace_bytes": 358236783,
+    "scenario_b_safe_to_archive": {
+      "unique_files": 216,
+      "exact_bytes": 225678103,
+      "size_mib": 215.2234
+    },
+    "scenario_d_possibly_disposable": {
+      "unique_files": 41,
+      "exact_bytes": 98902376,
+      "size_mib": 94.3207
+    },
+    "scenario_e_combined_b_and_d": {
+      "unique_files": 257,
+      "exact_bytes": 324580479,
+      "size_mib": 309.5441,
+      "remaining_keep_bytes": 33656304,
+      "remaining_keep_mib": 32.0972,
+      "remaining_keep_files": 67
+    }
+  },
+  "reconciled_66_duplicate_files": [
+    {
+      "group_id": "DUP_01",
+      "relative_path": "media/productions/test_auto_job_001/video/showcase_test_auto_job_001.mp4",
+      "size_bytes": 19044816,
+      "size_kib": 18598.45,
+      "size_mib": 18.1626,
+      "sha256": "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67",
+      "canonical_path": "media/productions/prod_cycle_4_20261110_1800/video/showcase_cycle_4_20261110_1800.mp4",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_01",
+      "relative_path": "media/video/showcase_stage_3_4_tsutomu_yamaguchi.mp4",
+      "size_bytes": 19044816,
+      "size_kib": 18598.45,
+      "size_mib": 18.1626,
+      "sha256": "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67",
+      "canonical_path": "media/productions/prod_cycle_4_20261110_1800/video/showcase_cycle_4_20261110_1800.mp4",
+      "dependency_class": "Class B (Path dependency must be updated first)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_02",
+      "relative_path": "media/productions/test_scen_11_corrupt_cp/video/showcase_test_scen_11_corrupt_cp.mp4",
+      "size_bytes": 14925960,
+      "size_kib": 14576.13,
+      "size_mib": 14.2345,
+      "sha256": "0a172c987505e8488c4f98126faa6000c824f8ed5f7c96b222d3dae9f9187655",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/video/showcase_vesna_vulovic_verified.mp4",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_02",
+      "relative_path": "media/productions/test_vesna_integrity_run/video/showcase_test_vesna_integrity_run.mp4",
+      "size_bytes": 14925960,
+      "size_kib": 14576.13,
+      "size_mib": 14.2345,
+      "sha256": "0a172c987505e8488c4f98126faa6000c824f8ed5f7c96b222d3dae9f9187655",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/video/showcase_vesna_vulovic_verified.mp4",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_03",
+      "relative_path": "media/productions/prod_stage_3_16_verification/thumbnails/thumb_prod_stage_3_16_verification.png",
+      "size_bytes": 2173560,
+      "size_kib": 2122.62,
+      "size_mib": 2.0729,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_03",
+      "relative_path": "media/productions/prod_stage_3_16_verification/thumbnails/variants/cand_03_vesna_survived.png",
+      "size_bytes": 2173560,
+      "size_kib": 2122.62,
+      "size_mib": 2.0729,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_03",
+      "relative_path": "media/productions/test_scen_11_corrupt_cp/thumbnails/thumb_test_scen_11_corrupt_cp.png",
+      "size_bytes": 2173560,
+      "size_kib": 2122.62,
+      "size_mib": 2.0729,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_03",
+      "relative_path": "media/productions/test_scen_11_corrupt_cp/thumbnails/variants/cand_03_vesna_survived.png",
+      "size_bytes": 2173560,
+      "size_kib": 2122.62,
+      "size_mib": 2.0729,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_03",
+      "relative_path": "media/productions/test_vesna_integrity_run/thumbnails/thumb_test_vesna_integrity_run.png",
+      "size_bytes": 2173560,
+      "size_kib": 2122.62,
+      "size_mib": 2.0729,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_03",
+      "relative_path": "media/productions/test_vesna_integrity_run/thumbnails/variants/cand_03_vesna_survived.png",
+      "size_bytes": 2173560,
+      "size_kib": 2122.62,
+      "size_mib": 2.0729,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_04",
+      "relative_path": "media/productions/prod_stage_3_16_verification/thumbnails/variants/cand_01_vesna_fall.png",
+      "size_bytes": 2185546,
+      "size_kib": 2134.32,
+      "size_mib": 2.0843,
+      "sha256": "31f5bd938fbeab0e68c77d9378350f865ea839924747ba60667971aae72a9e75",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_01_vesna_fall.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_04",
+      "relative_path": "media/productions/test_scen_11_corrupt_cp/thumbnails/variants/cand_01_vesna_fall.png",
+      "size_bytes": 2185546,
+      "size_kib": 2134.32,
+      "size_mib": 2.0843,
+      "sha256": "31f5bd938fbeab0e68c77d9378350f865ea839924747ba60667971aae72a9e75",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_01_vesna_fall.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_04",
+      "relative_path": "media/productions/test_vesna_integrity_run/thumbnails/variants/cand_01_vesna_fall.png",
+      "size_bytes": 2185546,
+      "size_kib": 2134.32,
+      "size_mib": 2.0843,
+      "sha256": "31f5bd938fbeab0e68c77d9378350f865ea839924747ba60667971aae72a9e75",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_01_vesna_fall.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_05",
+      "relative_path": "media/productions/test_auto_job_001/thumbnails/thumb_test_auto_job_001.png",
+      "size_bytes": 1597249,
+      "size_kib": 1559.81,
+      "size_mib": 1.5233,
+      "sha256": "97892b494882d2ea607750e336d255a4f5c725eb113401a02c98eec7e6e79d88",
+      "canonical_path": "media/thumbnails/candidates/cand_01_direct_survival.png",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_05",
+      "relative_path": "media/productions/test_auto_job_001/thumbnails/variants/cand_01_direct_survival.png",
+      "size_bytes": 1597249,
+      "size_kib": 1559.81,
+      "size_mib": 1.5233,
+      "sha256": "97892b494882d2ea607750e336d255a4f5c725eb113401a02c98eec7e6e79d88",
+      "canonical_path": "media/thumbnails/candidates/cand_01_direct_survival.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_05",
+      "relative_path": "media/thumbnails/showcase_stage_3_5_yamaguchi_refined.png",
+      "size_bytes": 1597249,
+      "size_kib": 1559.81,
+      "size_mib": 1.5233,
+      "sha256": "97892b494882d2ea607750e336d255a4f5c725eb113401a02c98eec7e6e79d88",
+      "canonical_path": "media/thumbnails/candidates/cand_01_direct_survival.png",
+      "dependency_class": "Class B (Path dependency must be updated first)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_06",
+      "relative_path": "media/productions/prod_stage_3_16_verification/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "size_bytes": 978874,
+      "size_kib": 955.93,
+      "size_mib": 0.9335,
+      "sha256": "30e4199eb35468ddbfeb1eb6207b17b3504735b5de25a6f4b0e1f99c256ed017",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_06",
+      "relative_path": "media/productions/test_scen_11_corrupt_cp/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "size_bytes": 978874,
+      "size_kib": 955.93,
+      "size_mib": 0.9335,
+      "sha256": "30e4199eb35468ddbfeb1eb6207b17b3504735b5de25a6f4b0e1f99c256ed017",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_06",
+      "relative_path": "media/productions/test_vesna_integrity_run/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "size_bytes": 978874,
+      "size_kib": 955.93,
+      "size_mib": 0.9335,
+      "sha256": "30e4199eb35468ddbfeb1eb6207b17b3504735b5de25a6f4b0e1f99c256ed017",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_07",
+      "relative_path": "media/productions/prod_stage_3_16_verification/thumbnails/variants/cand_04_vesna_record.png",
+      "size_bytes": 955115,
+      "size_kib": 932.73,
+      "size_mib": 0.9109,
+      "sha256": "4a59fce2f8cff26a3fa9da7f3caf25d43895ca78c84700937eee810ea7a31bd1",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_04_vesna_record.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_07",
+      "relative_path": "media/productions/test_scen_11_corrupt_cp/thumbnails/variants/cand_04_vesna_record.png",
+      "size_bytes": 955115,
+      "size_kib": 932.73,
+      "size_mib": 0.9109,
+      "sha256": "4a59fce2f8cff26a3fa9da7f3caf25d43895ca78c84700937eee810ea7a31bd1",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_04_vesna_record.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_07",
+      "relative_path": "media/productions/test_vesna_integrity_run/thumbnails/variants/cand_04_vesna_record.png",
+      "size_bytes": 955115,
+      "size_kib": 932.73,
+      "size_mib": 0.9109,
+      "sha256": "4a59fce2f8cff26a3fa9da7f3caf25d43895ca78c84700937eee810ea7a31bd1",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_04_vesna_record.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_08",
+      "relative_path": "media/thumbnails/showcase_stage_3_9a_yamaguchi_poster.png",
+      "size_bytes": 2338309,
+      "size_kib": 2283.5,
+      "size_mib": 2.23,
+      "sha256": "ec998f4552548bc6a805d0761f776b1b34669f2a4abac1aba4ef0c9de47aca93",
+      "canonical_path": "media/audit/thumbnails_3_9a/concept_01_split_juxtaposition.png",
+      "dependency_class": "Class B (Path dependency must be updated first)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_09",
+      "relative_path": "media/productions/test_auto_job_001/thumbnails/variants/cand_02_personal_impossibility.png",
+      "size_bytes": 2098371,
+      "size_kib": 2049.19,
+      "size_mib": 2.0012,
+      "sha256": "bb28cde1c3adb78e02fbf63ae3c3dae9fc919c2c0073683783a218b91aff871e",
+      "canonical_path": "media/productions/prod_cycle_4_20261110_1800/thumbnails/thumb_cycle_4_20261110_1800.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_10",
+      "relative_path": "media/audit/latest/workspace_inventory.json",
+      "size_bytes": 1837511,
+      "size_kib": 1794.44,
+      "size_mib": 1.7524,
+      "sha256": "1d14aee4cbe3358c995f2b3c6d41d55444cb93fc708c5399be94ea88dc3fe583",
+      "canonical_path": "media/audit/workspace_inventory.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_11",
+      "relative_path": "media/productions/test_auto_job_001/thumbnails/variants/cand_03_astronomical_odds.png",
+      "size_bytes": 1618504,
+      "size_kib": 1580.57,
+      "size_mib": 1.5435,
+      "sha256": "cb82633b867fd76c73f438af8abf765b62907e70a43398c7a2c4e42355f3f114",
+      "canonical_path": "media/thumbnails/candidates/cand_03_astronomical_odds.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_12",
+      "relative_path": "media/audio/stage_3_13_vesna_voice.mp3",
+      "size_bytes": 1249964,
+      "size_kib": 1220.67,
+      "size_mib": 1.1921,
+      "sha256": "8b02d320306dbb988f6e5dd49089b3223bcb0e31229d70d23e6ee11739fd221f",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/stage_3_13_vesna_voice.mp3",
+      "dependency_class": "Class B (Path dependency must be updated first)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_13",
+      "relative_path": "media/images/vesna_vulovic/vesna_vulovic_portrait.jpg",
+      "size_bytes": 920492,
+      "size_kib": 898.92,
+      "size_mib": 0.8778,
+      "sha256": "e2fc67c8f4b2b09c83b7086a661c5a2e25ce39f8109cb64dbcc40f830b5223cc",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/vesna_vulovic_portrait.jpg",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_14",
+      "relative_path": "media/images/vesna_vulovic/vesna_with_reporter_1973.jpg",
+      "size_bytes": 751984,
+      "size_kib": 734.36,
+      "size_mib": 0.7171,
+      "sha256": "1c3cfa9d058941f196fea0c4d27b46abf75aaab21faaff073f63909ebae4f354",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/vesna_with_reporter_1973.jpg",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_15",
+      "relative_path": "media/images/vesna_vulovic/dc9_aircraft.jpg",
+      "size_bytes": 651918,
+      "size_kib": 636.64,
+      "size_mib": 0.6217,
+      "sha256": "58beb5a8f3a7b4c479c99d32781aebf8dd8bf5cd7f7a938450bf234530daebd1",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/dc9_aircraft.jpg",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_16",
+      "relative_path": "media/images/vesna_vulovic/debris_jat367_snow.jpg",
+      "size_bytes": 267920,
+      "size_kib": 261.64,
+      "size_mib": 0.2555,
+      "sha256": "470a01fd9e1b713c6b9620694757ff4a343ac560507f2c17581cc1d5362d5afa",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/debris_jat367_snow.jpg",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_17",
+      "relative_path": "media/images/vesna_vulovic/flight_jat367_route.png",
+      "size_bytes": 207244,
+      "size_kib": 202.39,
+      "size_mib": 0.1976,
+      "sha256": "d8cde5cd0b5d0c787f1c372cfc109e4ebdac906405e359540519444e5a732243",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/flight_jat367_route.png",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_18",
+      "relative_path": "media/audio/vesna_segments/beat_02_context.mp3",
+      "size_bytes": 154124,
+      "size_kib": 150.51,
+      "size_mib": 0.147,
+      "sha256": "238a39011eaa7eb54cb78124017ce22864c796c2452911fa746041d19e8a816a",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_02_context.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_19",
+      "relative_path": "media/audio/vesna_segments/beat_06_rescue.mp3",
+      "size_bytes": 134924,
+      "size_kib": 131.76,
+      "size_mib": 0.1287,
+      "sha256": "80452027e420fb4f8e44099ef271c5158757e4fff8b6a8e7c0748a88c5628d35",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_06_rescue.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_20",
+      "relative_path": "media/audio/vesna_segments/beat_05_impact.mp3",
+      "size_bytes": 132524,
+      "size_kib": 129.42,
+      "size_mib": 0.1264,
+      "sha256": "0895ce669c7f76614092dd77def6fbd281637ec0857dcb65fa8a951476801e39",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_05_impact.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_21",
+      "relative_path": "media/audio/vesna_segments/beat_03_bomb.mp3",
+      "size_bytes": 131564,
+      "size_kib": 128.48,
+      "size_mib": 0.1255,
+      "sha256": "b10188cfecdfe1aa1fbdd41a42398c4883d18e07b63785d1141f3c6fc7ead5e6",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_03_bomb.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_22",
+      "relative_path": "media/audio/vesna_segments/beat_01_hook.mp3",
+      "size_bytes": 122444,
+      "size_kib": 119.57,
+      "size_mib": 0.1168,
+      "sha256": "be5f7aa4470d8fcdc04ae944bf69bd8c29971a18a9dbe16cd4645aea466533ab",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_01_hook.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_23",
+      "relative_path": "media/audio/vesna_segments/beat_04_plunge.mp3",
+      "size_bytes": 122444,
+      "size_kib": 119.57,
+      "size_mib": 0.1168,
+      "sha256": "bc12afb433d7efc550529ba45b31819f7731c83c5222623767efd9ab0a472021",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_04_plunge.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_24",
+      "relative_path": "media/audio/vesna_segments/beat_07_recovery.mp3",
+      "size_bytes": 113804,
+      "size_kib": 111.14,
+      "size_mib": 0.1085,
+      "sha256": "2402da1e8dc3ef069aa19cdd1d1c7a8e82cdcf219b33c745dc595f78d6a1f60f",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_07_recovery.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_25",
+      "relative_path": "media/images/vesna_vulovic/vesna_in_hospital.jpg",
+      "size_bytes": 73573,
+      "size_kib": 71.85,
+      "size_mib": 0.0702,
+      "sha256": "7895418c0cbd2f0db889a2e7788b0e9db98c7e7d200a9d06dface54608b25e43",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/vesna_in_hospital.jpg",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_26",
+      "relative_path": "media/audio/vesna_segments/beat_02_context_raw.mp3",
+      "size_bytes": 45360,
+      "size_kib": 44.3,
+      "size_mib": 0.0433,
+      "sha256": "3b270afc10067543b16fb397519953b20b4b224fc8ce88dcee801c99c1172d7b",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_02_context_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_27",
+      "relative_path": "media/audio/vesna_segments/beat_08_legacy.mp3",
+      "size_bytes": 42192,
+      "size_kib": 41.2,
+      "size_mib": 0.0402,
+      "sha256": "a54b5a50b3c2922f8749134f7d39db88056138f64e4d05f6e2f2aca488170f61",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_08_legacy.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_28",
+      "relative_path": "media/audio/vesna_segments/beat_06_rescue_raw.mp3",
+      "size_bytes": 39600,
+      "size_kib": 38.67,
+      "size_mib": 0.0378,
+      "sha256": "de4fbd16b8b8c62b77b04067ff4edce4987d6ba9c0b6d1aeaf72641b8f72df7f",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_06_rescue_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_29",
+      "relative_path": "media/audio/vesna_segments/beat_05_impact_raw.mp3",
+      "size_bytes": 38736,
+      "size_kib": 37.83,
+      "size_mib": 0.0369,
+      "sha256": "42b887f47706735f67596a013e859121e9a769b26709a686416e1eeffe0488c4",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_05_impact_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_30",
+      "relative_path": "media/audio/vesna_segments/beat_03_bomb_raw.mp3",
+      "size_bytes": 38448,
+      "size_kib": 37.55,
+      "size_mib": 0.0367,
+      "sha256": "d287876987254a402b303e8f0b1b5490b703bab68bcf283fe152b8e715415eb1",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_03_bomb_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_31",
+      "relative_path": "media/audio/vesna_segments/beat_01_hook_raw.mp3",
+      "size_bytes": 35856,
+      "size_kib": 35.02,
+      "size_mib": 0.0342,
+      "sha256": "6ea6279e9a72e7bbdaaddc2c9e9bea40ab60b820eac842902c2a093900201903",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_01_hook_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_32",
+      "relative_path": "media/audio/vesna_segments/beat_04_plunge_raw.mp3",
+      "size_bytes": 35856,
+      "size_kib": 35.02,
+      "size_mib": 0.0342,
+      "sha256": "41e2ab134510fc67251d92a7481453b7139c2599a66a97c6946a2bb555138a8f",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_04_plunge_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_33",
+      "relative_path": "media/audio/tts_samples/sample_suspenseful.mp3",
+      "size_bytes": 34416,
+      "size_kib": 33.61,
+      "size_mib": 0.0328,
+      "sha256": "29d9a61e24f8cda07993e0c56d13d74a40830759c137c8fe2c5e334bb36f182c",
+      "canonical_path": "media/source/reusable/audio_samples/sample_suspenseful.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario KEEP"
+    },
+    {
+      "group_id": "DUP_34",
+      "relative_path": "media/audio/vesna_segments/beat_07_recovery_raw.mp3",
+      "size_bytes": 33264,
+      "size_kib": 32.48,
+      "size_mib": 0.0317,
+      "sha256": "c16143944ba105a10a37157d19bc408b094af1bfb6ebec0f454dc5f8b8c6fdc1",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_07_recovery_raw.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_35",
+      "relative_path": "media/audio/tts_samples/sample_neutral.mp3",
+      "size_bytes": 29664,
+      "size_kib": 28.97,
+      "size_mib": 0.0283,
+      "sha256": "a6336483216ac193910c420d6a40c48da63f6ff1602fe4c9a30840f619f88b1f",
+      "canonical_path": "media/source/reusable/audio_samples/sample_neutral.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario KEEP"
+    },
+    {
+      "group_id": "DUP_36",
+      "relative_path": "media/audio/tts_samples/sample_excited.mp3",
+      "size_bytes": 26496,
+      "size_kib": 25.88,
+      "size_mib": 0.0253,
+      "sha256": "ebf64190ea0a8ab3b5b02a12fdcfdddd4abdfcadaa509a6d25ddcefad86314fb",
+      "canonical_path": "media/source/reusable/audio_samples/sample_excited.mp3",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario KEEP"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_research.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_script_development.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_story_development.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_thumbnail.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_topic_discovery.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_visual_assets.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_b_crash_voiceover.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_interrupted_render_job.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_interrupted_tts_job.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_scen_5_post_render.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_37",
+      "relative_path": "media/audit/integrity_report_test_scen_6_post_qc.json",
+      "size_bytes": 2229,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "17861d08f02c60688ee503de1220ed1d8ef719658a970794fd5556c7a82edaa8",
+      "canonical_path": "media/audit/integrity_report_test_b_crash_rendering.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_38",
+      "relative_path": "media/images/vesna_vulovic/attribution_manifest.json",
+      "size_bytes": 2707,
+      "size_kib": 2.64,
+      "size_mib": 0.0026,
+      "sha256": "7ac9271612470ad5474f036ca56c53e0f610283681cf781b8fabf383d3585307",
+      "canonical_path": "media/productions/prod_20261110_vesna_vulovic/assets/attribution_manifest.json",
+      "dependency_class": "Class B (Path dependency must be updated first)",
+      "scenario_membership": "Scenario D (POSSIBLY_DISPOSABLE)"
+    },
+    {
+      "group_id": "DUP_39",
+      "relative_path": "media/audit/integrity_report_test_vesna_integrity_run.json",
+      "size_bytes": 2230,
+      "size_kib": 2.18,
+      "size_mib": 0.0021,
+      "sha256": "c82274bcacdb5ff729712c80251b4e0698b35edab70e8f71dc6a1f7f336667f6",
+      "canonical_path": "media/audit/integrity_report_test_scen_11_corrupt_cp.json",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_40",
+      "relative_path": "media/quarantine/archived_files/q_1794327087_6f866b27.json",
+      "size_bytes": 1993,
+      "size_kib": 1.95,
+      "size_mib": 0.0019,
+      "sha256": "e089ddedf6f43e47a920d9b41b91e473a3a01664e3ff7c5542dde0168aef4bc3",
+      "canonical_path": "media/audit/integrity_report_prod_stage_3_16_verification.json",
+      "dependency_class": "Class C (Keep for reproducibility / folder manifest)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    },
+    {
+      "group_id": "DUP_41",
+      "relative_path": "media/subtitles/editorial/prod_55sec_narr_editorial.ass",
+      "size_bytes": 1581,
+      "size_kib": 1.54,
+      "size_mib": 0.0015,
+      "sha256": "387d1988fe5934160c8e81c83bcde077552458345b61b6b61ad8692268aeb925",
+      "canonical_path": "media/subtitles/prod_55sec_narr.ass",
+      "dependency_class": "Class A (Safe to remove after backup)",
+      "scenario_membership": "Scenario B (SAFE_TO_ARCHIVE)"
+    }
+  ]
+}
