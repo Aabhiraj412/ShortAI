@@ -27,7 +27,15 @@ def test_windows_scheduled_tasks_registered():
         "-Command",
         "(Get-ScheduledTask -TaskName 'CrazzyDocs*').TaskName",
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    import sys
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    res = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
     assert res.returncode == 0, f"Failed to query scheduled tasks: {res.stderr}"
 
     output = res.stdout.strip().splitlines()

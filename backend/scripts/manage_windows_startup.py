@@ -13,6 +13,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from typing import Any, Dict, Optional, Tuple
 
 WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
@@ -64,11 +65,24 @@ def set_opt_in_setting(enabled: bool):
         logger.warning("Could not persist startup setting: %s", e)
 
 
+def _get_subprocess_flags() -> Dict[str, Any]:
+    """Returns kwargs for subprocess calls on Windows to suppress console window creation."""
+    kwargs: Dict[str, Any] = {}
+    if sys.platform == "win32":
+        # CREATE_NO_WINDOW (0x08000000) prevents creating a console window for CUI processes
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
 def query_task_details(task_name: str) -> Dict[str, Any]:
     """Queries schtasks /Query /TN <task_name> /FO LIST /V for granular task details."""
     cmd = ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8, **_get_subprocess_flags())
         if res.returncode != 0:
             return {
                 "task_name": task_name,
@@ -120,15 +134,24 @@ def get_task_status(task_name: str = TASK_NAME) -> Dict:
     return info
 
 
-def get_all_tasks_status() -> Dict[str, Any]:
-    """Queries both CrazzyDocs production scheduled tasks."""
+_tasks_cache: Dict[str, Any] = {}
+_tasks_cache_time: float = 0.0
+
+
+def get_all_tasks_status(ttl_seconds: float = 15.0) -> Dict[str, Any]:
+    """Queries both CrazzyDocs production scheduled tasks with in-memory TTL caching."""
+    global _tasks_cache, _tasks_cache_time
+    now = time.time()
+    if _tasks_cache and (now - _tasks_cache_time < ttl_seconds):
+        return _tasks_cache
+
     s_info = query_task_details(SCHEDULER_TASK_NAME)
     d_info = query_task_details(DASHBOARD_TASK_NAME)
 
     # Check if either or both are registered
     any_registered = s_info.get("is_registered", False) or d_info.get("is_registered", False)
 
-    return {
+    res = {
         "task_name": SCHEDULER_TASK_NAME,
         "is_registered": any_registered,
         "opt_in_enabled": get_opt_in_setting(),
@@ -136,6 +159,9 @@ def get_all_tasks_status() -> Dict[str, Any]:
         "dashboard_task": d_info,
         "details": f"Scheduler: {s_info.get('status')}; Dashboard: {d_info.get('status')}",
     }
+    _tasks_cache = res
+    _tasks_cache_time = now
+    return res
 
 
 def install_startup_task(
@@ -159,7 +185,7 @@ def install_startup_task(
         "/F"
     ]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15, **_get_subprocess_flags())
         if res.returncode == 0:
             set_opt_in_setting(True)
             return True, f"Successfully registered Windows Scheduled Task '{task_name}'."
@@ -173,7 +199,7 @@ def uninstall_startup_task(task_name: str = TASK_NAME) -> Tuple[bool, str]:
     """Removes the Windows Scheduled Task and updates opt-in setting to False."""
     cmd = ["schtasks", "/Delete", "/TN", task_name, "/F"]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15, **_get_subprocess_flags())
         set_opt_in_setting(False)
         if res.returncode == 0:
             return True, f"Successfully unregistered Windows Scheduled Task '{task_name}'."

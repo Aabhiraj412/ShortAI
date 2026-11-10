@@ -27,7 +27,14 @@ def run_ps_action(action: str) -> int:
         "-Action",
         action,
     ]
-    res = subprocess.run(cmd)
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    res = subprocess.run(cmd, **kwargs)
     return res.returncode
 
 
