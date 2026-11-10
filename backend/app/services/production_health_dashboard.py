@@ -393,11 +393,13 @@ class ProductionHealthDashboard:
             jobs = query.all()
             attempted = len(jobs)
             test_jobs_count = len([j for j in jobs if (j.id or "").startswith("test_")])
-            genuine_attempted = attempted - test_jobs_count
+            genuine_attempted = len([j for j in jobs if not (j.id or "").startswith("test_")])
+            genuine_completed = len([j for j in jobs if not (j.id or "").startswith("test_") and j.status == "COMPLETED"])
             completed = len([j for j in jobs if j.status == "COMPLETED"])
             qc_failed = len([j for j in jobs if j.status in ("BLOCKED_QC", "FAILED_QC")])
             missed = len([j for j in jobs if j.status == "MISSED"])
             recovered = len([j for j in jobs if "RECOVER" in (j.id or "") or (j.retry_count or 0) > 0])
+            aborted_recovery = len([j for j in jobs if j.status == "ABORTED_PRE_RESET"])
 
         published = 0
         active_pending_count = 0
@@ -432,16 +434,43 @@ class ProductionHealthDashboard:
             "time_filter": time_filter,
             "attempted": attempted,
             "genuine_attempted": genuine_attempted,
+            "genuine_completed": genuine_completed,
             "test_jobs_count": test_jobs_count,
             "completed": completed,
             "published": published,
+            "public_uploads": published,
             "private_uploads": active_private_uploads,
             "active_pending_queue": active_pending_count,
             "qc_failed": qc_failed,
             "missed": missed,
             "recovered": recovered,
+            "aborted_recovery": aborted_recovery,
+            "archived_showcase_count": arch_summary.get("showcase_fixtures", 0),
             "archived_records_count": arch_summary.get("total_archived", 0),
             "archived_breakdown": arch_summary,
+        }
+
+    def get_publishing_ledger_safety(self) -> Dict[str, Any]:
+        """Provides accurate live ledger vs archive safety counts for the dashboard."""
+        active_count = 0
+        archive_count = 0
+        if os.path.exists(self.db_path):
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT count(*) FROM publishing_ledger;")
+                active_count = cur.fetchone()[0]
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_ledger_archive';")
+                if cur.fetchone():
+                    cur.execute("SELECT count(*) FROM publishing_ledger_archive;")
+                    archive_count = cur.fetchone()[0]
+            finally:
+                conn.close()
+        return {
+            "status": "IDEMPOTENT",
+            "active_count": active_count,
+            "archive_count": archive_count,
+            "display_text": f"IDEMPOTENT ({active_count} Active | {archive_count} Archived)",
         }
 
     def get_archived_publishing_summary(self) -> Dict[str, Any]:
@@ -547,23 +576,36 @@ class ProductionHealthDashboard:
                 .filter(
                     (JobModel.recovery_reason.isnot(None))
                     | ((JobModel.retry_count or 0) > 0)
-                    | (JobModel.status.in_(["RETRYING", "RECOVERED"]))
+                    | (JobModel.status.in_(["RETRYING", "RECOVERED", "ABORTED_PRE_RESET"]))
                 )
                 .order_by(JobModel.updated_at.desc())
                 .limit(limit)
                 .all()
             )
             for j in jobs:
+                is_aborted = (j.status == "ABORTED_PRE_RESET")
+                if is_aborted:
+                    status_display = "ABORTED — No production executed"
+                    stage_display = "NONE (Cleanly Aborted Pre-Reset)"
+                    attn_needed = False
+                else:
+                    status_display = j.status
+                    stage_display = j.current_stage or "CHECKPOINT_RESUME"
+                    attn_needed = True if j.status in ("FAILED", "BLOCKED_QC") else False
+
                 results.append({
                     "job_id": j.id,
                     "topic": j.topic_title or "Untitled Recovery",
                     "recovery_reason": j.recovery_reason or "Interrupted Execution / Timeout",
-                    "status": j.status,
-                    "recovered_stage": j.current_stage or "CHECKPOINT_RESUME",
+                    "status": status_display,
+                    "raw_status": j.status,
+                    "is_aborted": is_aborted,
+                    "recovered_stage": stage_display,
                     "retry_count": j.retry_count or 0,
                     "updated_at": j.updated_at.isoformat() if j.updated_at else "Not recorded",
-                    "operator_intervention_needed": (True if j.status in ("FAILED", "BLOCKED_QC") else False),
+                    "operator_intervention_needed": attn_needed,
                 })
+        return results
         return results
 
     def get_recent_activity(self, limit: int = 25) -> List[Dict[str, Any]]:

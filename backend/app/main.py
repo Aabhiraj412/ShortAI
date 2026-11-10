@@ -273,6 +273,7 @@ async def get_dashboard_health():
         "database": production_health_dashboard.get_database_health(),
         "disk": production_health_dashboard.get_disk_health(),
         "archive_summary": production_health_dashboard.get_archived_publishing_summary(),
+        "publishing_ledger_safety": production_health_dashboard.get_publishing_ledger_safety(),
     }
 
 
