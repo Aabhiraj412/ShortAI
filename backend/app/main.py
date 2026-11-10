@@ -272,6 +272,7 @@ async def get_dashboard_health():
         "windows_tasks": tasks,
         "database": production_health_dashboard.get_database_health(),
         "disk": production_health_dashboard.get_disk_health(),
+        "archive_summary": production_health_dashboard.get_archived_publishing_summary(),
     }
 
 
@@ -279,6 +280,15 @@ async def get_dashboard_health():
 async def get_dashboard_history(limit: int = 25):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     return production_health_dashboard.get_publishing_history(limit=limit)
+
+
+@app.get("/api/dashboard/archive")
+async def get_dashboard_archive(limit: int = 25):
+    from backend.app.services.production_health_dashboard import production_health_dashboard
+    return {
+        "summary": production_health_dashboard.get_archived_publishing_summary(),
+        "recent_archived": production_health_dashboard.get_archived_publishing_history(limit=limit),
+    }
 
 
 @app.get("/api/dashboard/recovery")

@@ -434,6 +434,14 @@
         <div class="card-label">Recovered Cycles</div>
         <div class="stat-num text-success" id="statRecovered">0</div>
       </div>
+      <div class="stat-card">
+        <div class="card-label">Active Queue (Pending)</div>
+        <div class="stat-num text-info" id="statActiveQueue">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="card-label">Archived History (Test/Showcase)</div>
+        <div class="stat-num" style="color:#94a3b8;" id="statArchived">0</div>
+      </div>
     </div>
   </div>
 
@@ -624,6 +632,12 @@
         document.getElementById('statQcFailed').textContent = statsRes.qc_failed;
         document.getElementById('statMissed').textContent = statsRes.missed;
         document.getElementById('statRecovered').textContent = statsRes.recovered;
+        if (document.getElementById('statActiveQueue')) {
+          document.getElementById('statActiveQueue').textContent = statsRes.active_pending_queue !== undefined ? statsRes.active_pending_queue : 0;
+        }
+        if (document.getElementById('statArchived')) {
+          document.getElementById('statArchived').textContent = statsRes.archived_records_count !== undefined ? statsRes.archived_records_count : 0;
+        }
 
         // Health Items: Scheduler Heartbeat
         const hb = healthRes.scheduler_heartbeat || {};

@@ -1,0 +1,23 @@
+{
+  "execution_timestamp": "2026-11-10T21:17:09.071386+00:00",
+  "backup_path": "D:\\Agents\\CrazzyDocs\\backend\\backups\\studio_backup_pre_stage_3_21b_execution_20261111_024708.db",
+  "backup_sha256": "9461eb0bb2f6b5c8f0b227acc12f6cad6a140ca84c05480d4ecf6d4e80bd8ca8",
+  "source_initial_count": 254,
+  "archived_records_count": 253,
+  "active_records_count": 1,
+  "preserved_record": {
+    "id": 32,
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "upload_status": "uploaded_private",
+    "visibility": "private",
+    "youtube_video_id": "4DCas1e4vHI"
+  },
+  "archive_breakdown": {
+    "showcase_fixtures": 180,
+    "test_records_with_media": 46,
+    "test_records_missing_media": 27,
+    "total_archived": 253
+  },
+  "recovery_job_cycle_1_20261111_0000": "ABORTED_PRE_RESET",
+  "database_integrity": "ok"
+}

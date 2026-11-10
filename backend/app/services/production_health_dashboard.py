@@ -392,12 +392,16 @@ class ProductionHealthDashboard:
 
             jobs = query.all()
             attempted = len(jobs)
+            test_jobs_count = len([j for j in jobs if (j.id or "").startswith("test_")])
+            genuine_attempted = attempted - test_jobs_count
             completed = len([j for j in jobs if j.status == "COMPLETED"])
             qc_failed = len([j for j in jobs if j.status in ("BLOCKED_QC", "FAILED_QC")])
             missed = len([j for j in jobs if j.status == "MISSED"])
             recovered = len([j for j in jobs if "RECOVER" in (j.id or "") or (j.retry_count or 0) > 0])
 
         published = 0
+        active_pending_count = 0
+        active_private_uploads = 0
         if os.path.exists(self.db_path):
             conn = sqlite3.connect(self.db_path)
             try:
@@ -411,18 +415,99 @@ class ProductionHealthDashboard:
                     cur.execute(base_sql)
                 row = cur.fetchone()
                 published = row[0] if row else 0
+
+                cur.execute("SELECT count(*) FROM publishing_ledger WHERE upload_status = 'pending_queue';")
+                p_row = cur.fetchone()
+                active_pending_count = p_row[0] if p_row else 0
+
+                cur.execute("SELECT count(*) FROM publishing_ledger WHERE upload_status = 'uploaded_private';")
+                pr_row = cur.fetchone()
+                active_private_uploads = pr_row[0] if pr_row else 0
             finally:
                 conn.close()
+
+        arch_summary = self.get_archived_publishing_summary()
 
         return {
             "time_filter": time_filter,
             "attempted": attempted,
+            "genuine_attempted": genuine_attempted,
+            "test_jobs_count": test_jobs_count,
             "completed": completed,
             "published": published,
+            "private_uploads": active_private_uploads,
+            "active_pending_queue": active_pending_count,
             "qc_failed": qc_failed,
             "missed": missed,
             "recovered": recovered,
+            "archived_records_count": arch_summary.get("total_archived", 0),
+            "archived_breakdown": arch_summary,
         }
+
+    def get_archived_publishing_summary(self) -> Dict[str, Any]:
+        """Returns archival ledger breakdown distinguishing test fixtures from genuine history."""
+        summary = {
+            "total_archived": 0,
+            "showcase_fixtures": 0,
+            "test_records_with_media": 0,
+            "test_records_missing_media": 0,
+            "classifications": {},
+        }
+        if not os.path.exists(self.db_path):
+            return summary
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_ledger_archive';")
+            if cur.fetchone():
+                cur.execute("SELECT count(*) FROM publishing_ledger_archive;")
+                summary["total_archived"] = cur.fetchone()[0]
+                cur.execute("SELECT original_classification, count(*) FROM publishing_ledger_archive GROUP BY original_classification;")
+                for row in cur.fetchall():
+                    cls_name, cnt = row[0], row[1]
+                    summary["classifications"][cls_name] = cnt
+                    if "SHOWCASE" in (cls_name or "").upper():
+                        summary["showcase_fixtures"] += cnt
+                    elif "MISSING" in (cls_name or "").upper():
+                        summary["test_records_missing_media"] += cnt
+                    else:
+                        summary["test_records_with_media"] += cnt
+        finally:
+            conn.close()
+        return summary
+
+    def get_archived_publishing_history(self, limit: int = 25) -> List[Dict[str, Any]]:
+        """Retrieves archived publishing ledger entries for historical auditing."""
+        results = []
+        if not os.path.exists(self.db_path):
+            return results
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_ledger_archive';")
+            if cur.fetchone():
+                cur.execute("""
+                    SELECT id, topic_title, upload_status, visibility, youtube_video_id,
+                           upload_timestamp, original_classification, archive_reason, archived_at
+                    FROM publishing_ledger_archive
+                    ORDER BY id DESC
+                    LIMIT ?;
+                """, (limit,))
+                for row in cur.fetchall():
+                    results.append({
+                        "id": row[0],
+                        "topic_title": row[1] or "Topic Untitled",
+                        "upload_status": row[2] or "unknown",
+                        "visibility": row[3] or "private",
+                        "youtube_video_id": row[4],
+                        "upload_timestamp": row[5],
+                        "original_classification": row[6],
+                        "archive_reason": row[7],
+                        "archived_at": row[8],
+                    })
+        finally:
+            conn.close()
+        return results
 
     def get_publishing_history(self, limit: int = 25) -> List[Dict[str, Any]]:
         """Retrieves recent publishing ledger entries without exposing sensitive credentials."""
