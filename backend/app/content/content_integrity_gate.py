@@ -15,6 +15,8 @@ F. Description accurately summarizes the video.
 G. Source credits match actual source usage.
 H. Tags are topic-relevant.
 I. No stale assets from previous productions reused accidentally.
+J. Outro uses original channel branding.
+K. Strictly prohibits stick-figure & cartoon character animation; enforces authentic documentary/scientific standards.
 """
 
 from dataclasses import dataclass, field
@@ -104,9 +106,10 @@ class ContentIntegrityGate:
         metadata_tags: List[str],
         attribution_text: str,
         manifest_assets: Optional[List[Dict]] = None,
+        rendering_engine: Optional[str] = None,
     ) -> ContentIntegrityReport:
         """
-        Executes complete 9-point Content Integrity Audit (A through I).
+        Executes complete 11-point Content Integrity Audit (A through K).
         Returns ContentIntegrityReport.
         """
         report = ContentIntegrityReport(is_valid=True, topic_title=topic_title)
@@ -264,5 +267,73 @@ class ContentIntegrityGate:
                 report.add_result("CHECK_J_OUTRO_BRANDING", False, f"Original channel logo modified or corrupted (hash: {logo_hash})")
             else:
                 report.add_result("CHECK_J_OUTRO_BRANDING", True, "Authoritative channel logo verified and intact for outro.")
+
+        # -------------------------------------------------------------
+        # CHECK K: Prohibited Animation & Character Gate
+        # Strictly prohibits stick-figures, cartoon character rigs, and cartoon hosts.
+        # Enforces authentic documentary & motion graphics standards.
+        # -------------------------------------------------------------
+        prohibited_terms = [
+            "stick_figure", "stickfigure", "stick_animation", "stick_rig",
+            "stickfigurerig", "cartoon_host", "cartoon_character", "character_rig"
+        ]
+
+        found_prohibited = []
+        if rendering_engine:
+            eng_lower = rendering_engine.lower()
+            for p in prohibited_terms:
+                if p in eng_lower:
+                    found_prohibited.append(f"rendering engine '{rendering_engine}'")
+
+        for idx, beat in enumerate(visual_beat_configs or []):
+            beat_str = str(beat).lower()
+            for p in prohibited_terms:
+                if p in beat_str:
+                    found_prohibited.append(f"beat {idx} ({p})")
+            if any(attr in beat_str for attr in ("arm_left", "arm_right", "eyebrows_", "doc_pose", "char_x", "char_y")):
+                found_prohibited.append(f"beat {idx} character rig properties")
+
+        if manifest_assets:
+            for item in manifest_assets:
+                item_str = str(item).lower()
+                for p in prohibited_terms:
+                    if p in item_str:
+                        found_prohibited.append(f"asset ({p})")
+
+        is_space_or_black_hole = any(
+            k in title_lower for k in ("black hole", "singularity", "event horizon", "astrophysics", "spacetime")
+        )
+        if is_space_or_black_hole:
+            if any("stick" in x or "cartoon" in x or "character" in x for x in found_prohibited):
+                report.add_result(
+                    "CHECK_K_PROHIBITED_ANIMATION",
+                    False,
+                    f"CRITICAL: Black hole story violates creative policy by using prohibited stick/character animation: {found_prohibited}. Authentic scientific/diagrammatic visuals required."
+                )
+            elif found_prohibited:
+                report.add_result(
+                    "CHECK_K_PROHIBITED_ANIMATION",
+                    False,
+                    f"CRITICAL: Prohibited animation elements detected: {found_prohibited}."
+                )
+            else:
+                report.add_result(
+                    "CHECK_K_PROHIBITED_ANIMATION",
+                    True,
+                    "Authentic scientific/documentary visual standards verified. No prohibited stick/character animation."
+                )
+        else:
+            if found_prohibited:
+                report.add_result(
+                    "CHECK_K_PROHIBITED_ANIMATION",
+                    False,
+                    f"CRITICAL: Prohibited stick-figure or cartoon character elements detected: {found_prohibited}. Only authentic documentary/motion graphics are permitted."
+                )
+            else:
+                report.add_result(
+                    "CHECK_K_PROHIBITED_ANIMATION",
+                    True,
+                    "Authentic documentary visual standards verified. Prohibited animation check passed."
+                )
 
         return report

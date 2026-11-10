@@ -22,7 +22,7 @@ import os
 import shutil
 import sqlite3
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -628,6 +628,63 @@ class YouTubePublishingEngine:
         self.db = db or PublishingDatabase()
         self.max_daily_quota = max_daily_quota
 
+    def check_remote_channel_duplicate(
+        self,
+        service: Any,
+        topic_title: str,
+        metadata_title: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Queries YouTube Data API v3 to check if the video has already been uploaded
+        to the authenticated channel. This prevents duplicate uploads during crash recovery
+        or upload uncertainty.
+        """
+        try:
+            channels_resp = service.channels().list(mine=True, part="contentDetails").execute()
+            items = channels_resp.get("items", [])
+            if not items:
+                return False, None
+
+            uploads_playlist_id = (
+                items[0]
+                .get("contentDetails", {})
+                .get("relatedPlaylists", {})
+                .get("uploads")
+            )
+            if not uploads_playlist_id:
+                return False, None
+
+            playlist_resp = service.playlistItems().list(
+                playlistId=uploads_playlist_id,
+                part="snippet",
+                maxResults=25,
+            ).execute()
+
+            clean_meta_title = metadata_title.strip().lower()
+            clean_topic = topic_title.strip().lower()
+
+            for item in playlist_resp.get("items", []):
+                snippet = item.get("snippet", {})
+                remote_title = snippet.get("title", "").strip().lower()
+                remote_vid_id = snippet.get("resourceId", {}).get("videoId")
+
+                if remote_vid_id and (
+                    remote_title == clean_meta_title
+                    or clean_topic in remote_title
+                    or clean_meta_title in remote_title
+                ):
+                    logger.warning(
+                        "[REMOTE DUPLICATE DETECTED] Video '%s' already exists remotely on YouTube (ID: %s)",
+                        metadata_title,
+                        remote_vid_id,
+                    )
+                    return True, remote_vid_id
+
+            return False, None
+        except Exception as e:
+            logger.warning("[REMOTE DUPLICATE CHECK] Could not complete remote lookup: %s", e)
+            return False, None
+
     def upload_short(
         self,
         video_path: str,
@@ -680,6 +737,43 @@ class YouTubePublishingEngine:
             err = "YouTube account is not authenticated. Please configure client_secrets.json and complete OAuth sign-in."
             logger.info(err)
             return {"success": False, "video_id": None, "error": err, "status": "unauthenticated"}
+
+        # 4b. Remote YouTube Duplicate Check (Resolves upload uncertainty & crash recovery)
+        is_remote_dup, remote_id = self.check_remote_channel_duplicate(
+            service=service,
+            topic_title=topic_title,
+            metadata_title=metadata.title,
+        )
+        if is_remote_dup and remote_id:
+            logger.info("Reconciling local publishing ledger with existing remote YouTube video ID: %s", remote_id)
+            status_code = f"uploaded_{visibility}"
+            rec = PublicationRecord(
+                id=None,
+                topic_title=topic_title,
+                video_path=video_path,
+                thumbnail_path=thumbnail_path,
+                metadata_json=json.dumps(asdict(metadata)),
+                youtube_video_id=remote_id,
+                upload_status=status_code,
+                visibility=visibility,
+                video_hash=compute_file_sha256(video_path),
+                upload_timestamp=datetime.utcnow().isoformat() + "Z",
+                error_details="Reconciled from authenticated YouTube remote channel check",
+            )
+            ledger_id = self.db.record_publication(rec)
+            return {
+                "success": True,
+                "video_id": remote_id,
+                "visibility": visibility,
+                "thumbnail_uploaded": False,
+                "thumbnail_status": "existing_remote",
+                "thumbnail_error": None,
+                "thumbnail_local_path": thumbnail_path,
+                "ledger_id": ledger_id,
+                "status": "remote_duplicate_reconciled",
+                "youtube_url": f"https://youtu.be/{remote_id}",
+                "reconciled_from_remote": True,
+            }
 
         # 5. Execute Resumable Chunked Upload
         body = {

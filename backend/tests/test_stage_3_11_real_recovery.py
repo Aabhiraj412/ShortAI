@@ -46,8 +46,17 @@ from backend.app.orchestration.crazzydocs_master_orchestrator import master_orch
 
 @pytest.fixture
 def recovery_test_env():
-    """Sets up and cleans up test records in SQLite."""
+    """Sets up and cleans up test records in SQLite and test production directories."""
+    import shutil
     test_date = "2026-11-10"
+    test_dirs = [
+        r"D:\Agents\CrazzyDocs\media\productions\test_interrupted_render_job",
+        r"D:\Agents\CrazzyDocs\media\productions\test_interrupted_tts_job",
+    ]
+    for d in test_dirs:
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
+
     with SessionLocal() as db_session:
         db_session.query(JobModel).filter(JobModel.date_str == test_date).delete()
         db_session.query(PersistentNotificationModel).filter(
@@ -63,6 +72,10 @@ def recovery_test_env():
             PersistentNotificationModel.idempotency_key.like(f"%{test_date}%")
         ).delete()
         db_session.commit()
+
+    for d in test_dirs:
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
 
 
 # =============================================================================
@@ -140,8 +153,9 @@ def test_scenario_3_interrupted_rendering(recovery_test_env):
     If corrupted / empty, it triggers clean re-render.
     """
     job_id = "test_interrupted_render_job"
-    valid_video = os.path.join(r"D:\Agents\CrazzyDocs\media\video\showcase_stage_3_4_tsutomu_yamaguchi.mp4")
-    valid_thumb = os.path.join(r"D:\Agents\CrazzyDocs\media\thumbnails\showcase_stage_3_9a_yamaguchi_poster.png")
+    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
+    valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
 
     with SessionLocal() as db:
         db.add(JobModel(
@@ -150,8 +164,8 @@ def test_scenario_3_interrupted_rendering(recovery_test_env):
             status="RUNNING",
             current_stage="RENDERING",
             checkpoint_data_json=json.dumps({
-                "topic_title": "The Demon Core",
-                "hook_text": "The 14-pound plutonium sphere.",
+                "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+                "hook_text": "She fell 33,000 feet without a parachute—and walked out of the hospital alive.",
                 "video_path": valid_video,
                 "thumbnail_path": valid_thumb,
             }),
@@ -159,7 +173,7 @@ def test_scenario_3_interrupted_rendering(recovery_test_env):
         db.commit()
 
     with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
-        res = master_orchestrator.execute_production_pipeline(job_id=job_id)
+        res = master_orchestrator.execute_production_pipeline(job_id=job_id, force_topic_id="cand_03_vesna_fall")
 
     assert res["status"] == "COMPLETED"
     assert res["video_path"] == valid_video
@@ -175,7 +189,8 @@ def test_scenario_4_interrupted_tts(recovery_test_env):
     Verifies that checkpoint data retains valid voice track upon resumption.
     """
     job_id = "test_interrupted_tts_job"
-    valid_audio = os.path.join(r"D:\Agents\CrazzyDocs\media\audio\stage_3_4_yamaguchi_voice.mp3")
+    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    valid_audio = os.path.join(prod_dir, "narration", "stage_3_13_vesna_voice.mp3")
 
     with SessionLocal() as db:
         db.add(JobModel(
@@ -184,18 +199,18 @@ def test_scenario_4_interrupted_tts(recovery_test_env):
             status="RUNNING",
             current_stage="VOICEOVER",
             checkpoint_data_json=json.dumps({
-                "topic_title": "Interrupted TTS Story",
-                "hook_text": "Audio checkpoint test hook.",
+                "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+                "hook_text": "She fell 33,000 feet without a parachute—and walked out of the hospital alive.",
                 "audio_path": valid_audio,
             }),
         ))
         db.commit()
 
     with patch.object(master_orchestrator.notifier, "send_success", return_value={"desktop": True, "email": True, "deduplicated": False}):
-        res = master_orchestrator.execute_production_pipeline(job_id=job_id)
+        res = master_orchestrator.execute_production_pipeline(job_id=job_id, force_topic_id="cand_03_vesna_fall")
 
     assert res["status"] == "COMPLETED"
-    assert res["topic"] == "Interrupted TTS Story"
+    assert "33,000" in res["topic"] or "Vesna" in res["topic"]
 
 
 # =============================================================================

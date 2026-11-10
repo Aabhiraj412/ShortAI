@@ -70,7 +70,9 @@ class VisualDirector:
 
         # Extract punchy headlines from script or presets
         hook_headline = "THE $1 BANK ACQUISITION" if "bank" in title.lower() else (
-            "COULD YOU SURVIVE?" if "black hole" in title.lower() or "survive" in title.lower() else title.upper()[:24]
+            "THE SINGULARITY TRUTH" if "black hole" in title.lower() else (
+                "COULD YOU SURVIVE?" if "survive" in title.lower() else title.upper()[:24]
+            )
         )
         
         default_headlines = [

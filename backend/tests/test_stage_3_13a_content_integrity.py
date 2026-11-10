@@ -134,7 +134,7 @@ def test_integrity_gate_passes_verified_vesna_deliverable(integrity_gate, vesna_
     )
     assert report.is_valid, f"Gate rejected authentic deliverable: {report.rejection_reasons}"
     assert len(report.rejection_reasons) == 0
-    assert len(report.checks) == 10
+    assert len(report.checks) == 11
     assert all(c.passed for c in report.checks)
 
 
@@ -276,6 +276,51 @@ def test_integrity_gate_rejects_stale_yamaguchi_video_copy(integrity_gate, vesna
         )
         assert not report.is_valid
         assert any("CHECK_I_NO_STALE_ASSETS" in r for r in report.rejection_reasons)
+
+
+def test_integrity_gate_rejects_stick_figure_rendering_engine(integrity_gate, vesna_valid_data):
+    """CHECK K: Rejects production when prohibited stick animation engine is specified."""
+    data = vesna_valid_data
+    report = integrity_gate.validate_production(
+        topic_title=data["topic_title"],
+        category=data["category"],
+        narration_text=data["narration_text"],
+        visual_beat_configs=data["visual_beat_configs"],
+        video_path=data["video_path"],
+        thumbnail_path=data["thumbnail_path"],
+        thumbnail_headline=data["thumbnail_headline"],
+        metadata_title=data["metadata"].title,
+        metadata_description=data["metadata"].description,
+        metadata_tags=data["metadata"].tags,
+        attribution_text=data["metadata"].attribution_text,
+        rendering_engine="render_stick_animation",
+    )
+    assert not report.is_valid
+    assert any("CHECK_K_PROHIBITED_ANIMATION" in r for r in report.rejection_reasons)
+
+
+def test_integrity_gate_rejects_stick_character_in_black_hole_story(integrity_gate, vesna_valid_data):
+    """CHECK K: Rejects stick figure character rigs and poses in Black Hole stories."""
+    data = vesna_valid_data
+    bad_beats = [
+        {"start_sec": 0.0, "end_sec": 5.0, "arm_left": "arm_left_idle", "doc_pose": "thinking", "char_x": 540}
+    ]
+    report = integrity_gate.validate_production(
+        topic_title="What Happens When You Fall Into a Black Hole?",
+        category="Science & The Unknown",
+        narration_text="What happens when you cross the event horizon of a supermassive black hole?",
+        visual_beat_configs=bad_beats,
+        video_path=data["video_path"],
+        thumbnail_path=data["thumbnail_path"],
+        thumbnail_headline="BLACK HOLE TRUTH",
+        metadata_title="What Happens Inside a Black Hole? #Shorts",
+        metadata_description="Exploring the astrophysical reality of the event horizon and singularity according to general relativity.",
+        metadata_tags=["black hole", "singularity", "event horizon", "astronomy", "shorts"],
+        attribution_text="Public Domain NASA / ESO historical observatory imagery.",
+        rendering_engine="CleanSlateRenderer",
+    )
+    assert not report.is_valid
+    assert any("CHECK_K_PROHIBITED_ANIMATION" in r for r in report.rejection_reasons)
 
 
 def test_master_orchestrator_runs_vesna_through_integrity_gate():

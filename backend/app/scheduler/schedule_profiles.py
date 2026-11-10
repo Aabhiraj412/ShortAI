@@ -154,18 +154,19 @@ def get_recovery_policy() -> str:
 # Profile 2: SINGLE_DAILY_2300 (Single Overnight Production Pipeline)
 PROFILE_SINGLE_DAILY_2300 = ScheduleProfile(
     name="SINGLE_DAILY_2300",
-    description="Single daily run in Asia/Kolkata: Generation @ 23:00 IST, Publishing Queue @ 10:00 IST",
+    description="Single daily run in Asia/Kolkata: Generation @ 23:00 IST -> Target Publication @ 05:00 IST Next-Day (6-hour target)",
     timezone_name="Asia/Kolkata",
     cycles=[
         ProductionCycle(
             cycle_id="cycle_daily",
-            name="Single Daily Run: 23:00 IST Start -> 10:00 IST Morning Target",
+            name="Single Daily Run: 23:00 IST Start -> 05:00 IST Morning Target",
             start_hour_ist=23,
             start_min_ist=0,
-            target_pub_hour_ist=10,
+            target_pub_hour_ist=5,
             target_pub_min_ist=0,
             pub_rollover_days=1,
-            window_hours=11.0,
+            window_hours=6.0,
+            recovery_window_hours=4.0,
         ),
     ],
     publishing_mode="automatic_public",

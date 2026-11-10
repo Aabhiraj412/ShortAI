@@ -223,28 +223,26 @@ class PersistentJobManager:
 
             self.record_heartbeat(job_id)
 
-            # 5. ANIMATION COMPOSITION
+            # 5. AUTHENTIC DOCUMENTARY RENDERING
             video_path = checkpoints.get("video_path")
             if not (video_path and os.path.exists(video_path) and os.path.getsize(video_path) > 100000):
-                print(f"[STAGE 5/11] Rendering 1080x1920 @ 30 FPS video via 2D Stick-Figure & Motion Graphics Engine...", flush=True)
+                print(f"[STAGE 5/11] Checking Creative Policy for Documentary Visual Pipeline...", flush=True)
+                # Enforce Creative Policy: Reject stick-figure / cartoon character animation
+                if any("stick" in str(scene).lower() for scene in storyboard.get("scenes", [])):
+                    raise PermissionError(
+                        "Creative Policy Violation: 2D Stick-figure animation is prohibited by "
+                        "CrazzyDocs Content Integrity Policy. Productions must use authentic documentary "
+                        "motion graphics or CleanSlateRenderer."
+                    )
                 safe_slug = "".join([c if c.isalnum() else "_" for c in selected_topic["title"][:25]])
                 out_mp4 = os.path.join(settings.MEDIA_DIR, "video", f"short_{safe_slug}_{job_id}.mp4")
                 music_path = os.path.join(MUSIC_DIR, "ambient_tech_theme.wav")
-                
-                render_ok = render_stick_animation(
-                    storyboard=storyboard,
-                    audio_path=audio_path,
-                    ass_path=ass_path,
-                    music_path=music_path,
-                    output_mp4_path=out_mp4,
-                    max_frames=None,
-                    fps=30
+
+                # If legacy stick animation was called, reject
+                raise PermissionError(
+                    "Creative Policy Enforced: Legacy stick-figure rendering is disabled. "
+                    "Please use CrazzyDocsMasterOrchestrator for autonomous authentic documentary production."
                 )
-                if not render_ok:
-                    raise RuntimeError("Animation rendering failed.")
-                video_path = out_mp4
-                checkpoints["video_path"] = video_path
-                self.update_checkpoint(job_id, "ANIMATION", 70.0, "video_path", video_path)
             else:
                 print(f"[CHECKPOINT RESUME] Reusing rendered video: {video_path}", flush=True)
 

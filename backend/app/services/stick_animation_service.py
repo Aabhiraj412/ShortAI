@@ -333,8 +333,15 @@ def render_stick_animation(
     music_path: Optional[str],
     output_mp4_path: str,
     max_frames: Optional[int] = None,
-    fps: int = 30
+    fps: int = 30,
+    allow_deprecated_test: bool = False,
 ) -> bool:
+    if not allow_deprecated_test:
+        raise PermissionError(
+            "Creative Policy Violation: 2D Stick-figure animation is permanently disabled by "
+            "CrazzyDocs Content Integrity Policy. All productions must use authentic documentary "
+            "and scientific motion graphics."
+        )
     print("Initializing Stick-Figure & Motion Graphics Renderer... OK", flush=True)
     t0 = time.time()
     

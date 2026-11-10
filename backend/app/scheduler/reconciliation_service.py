@@ -64,11 +64,12 @@ class SchedulerProcessLock:
 
     def acquire(self, allow_reentrant: bool = False) -> bool:
         """
-        Attempts to acquire single-instance lock.
+        Attempts to acquire single-instance lock atomically using OS-level flags.
         Returns True if acquired; False if an active instance is already running.
         """
         cur_pid = os.getpid()
 
+        # Check existing lock file if present
         if os.path.exists(self.lock_path):
             try:
                 with open(self.lock_path, "r", encoding="utf-8") as f:
@@ -89,12 +90,22 @@ class SchedulerProcessLock:
                                 locked_pid,
                                 cur_pid,
                             )
+                            try:
+                                os.remove(self.lock_path)
+                            except OSError:
+                                pass
             except Exception as e:
-                logger.warning("[LOCK] Could not read lockfile (%s); overwriting.", e)
+                logger.warning("[LOCK] Could not read lockfile (%s); removing stale lock.", e)
+                try:
+                    os.remove(self.lock_path)
+                except OSError:
+                    pass
 
+        # Atomic creation using OS-level flags
         try:
             os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
-            with open(self.lock_path, "w", encoding="utf-8") as f:
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "pid": cur_pid,
@@ -105,6 +116,9 @@ class SchedulerProcessLock:
                     indent=2,
                 )
             return True
+        except FileExistsError:
+            logger.warning("[LOCK] Lock acquired concurrently by another process.")
+            return False
         except Exception as e:
             logger.error("[LOCK] Failed to acquire lockfile: %s", e)
             return False
