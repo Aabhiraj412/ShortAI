@@ -36,7 +36,7 @@ def test_live_database_accuracy_counts():
 
     cur.execute("SELECT count(*) FROM publishing_ledger;")
     active_pub = cur.fetchone()[0]
-    assert active_pub == 1, f"Expected 1 active record, found {active_pub}"
+    assert active_pub == 0, f"Expected 0 active records, found {active_pub}"
 
     cur.execute("SELECT count(*) FROM publishing_ledger_archive;")
     arch_pub = cur.fetchone()[0]
@@ -48,7 +48,7 @@ def test_live_database_accuracy_counts():
 
     cur.execute("SELECT count(*) FROM publishing_ledger WHERE upload_status = 'uploaded_private';")
     private_cnt = cur.fetchone()[0]
-    assert private_cnt == 1, f"Expected 1 private upload, found {private_cnt}"
+    assert private_cnt == 0, f"Expected 0 private uploads, found {private_cnt}"
 
     cur.execute("SELECT count(*) FROM publishing_ledger WHERE upload_status IN ('uploaded_public', 'published');")
     public_cnt = cur.fetchone()[0]
@@ -65,9 +65,9 @@ def test_publishing_ledger_safety_reporting():
     assert "publishing_ledger_safety" in data
     safety = data["publishing_ledger_safety"]
     assert safety["status"] == "IDEMPOTENT"
-    assert safety["active_count"] == 1
+    assert safety["active_count"] == 0
     assert safety["archive_count"] == 253
-    assert safety["display_text"] == "IDEMPOTENT (1 Active | 253 Archived)"
+    assert safety["display_text"] == "IDEMPOTENT (0 Active | 253 Archived)"
 
 
 def test_genuine_vs_test_production_metrics():
@@ -79,7 +79,7 @@ def test_genuine_vs_test_production_metrics():
     assert data["test_jobs_count"] == 3
     assert data["genuine_attempted"] == 1  # cycle_1_20261111_0000
     assert data["genuine_completed"] == 0  # 0 genuine productions completed
-    assert data["private_uploads"] == 1
+    assert data["private_uploads"] == 0
     assert data["public_uploads"] == 0
     assert data["active_pending_queue"] == 0
     assert data["archived_showcase_count"] == 180
@@ -102,13 +102,11 @@ def test_aborted_recovery_job_display():
 
 def test_active_vs_archived_history_separation():
     """Verify active publishing history is strictly separated from archived records."""
-    # Active history: only 1 record (Record #32)
+    # Active history: 0 records after Stage 3.21F cleanup
     hist_res = client.get("/api/dashboard/history")
     assert hist_res.status_code == 200
     active_items = hist_res.json()
-    assert len(active_items) == 1
-    assert active_items[0]["id"] == 32
-    assert active_items[0]["youtube_video_id"] == "4DCas1e4vHI"
+    assert len(active_items) == 0
 
     # Archive history: contains the 253 archived records
     arch_res = client.get("/api/dashboard/archive?limit=50")

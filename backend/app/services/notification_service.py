@@ -14,11 +14,14 @@ import json
 import logging
 import os
 import smtplib
+import sqlite3
 import subprocess
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Dict, List, Optional
+
+from backend.app.core.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +69,61 @@ class NotificationManager:
         self,
         alert_log_path: str = ALERT_LOG_PATH,
         cooldown_seconds: float = 30.0,
+        db_path: Optional[str] = None,
     ):
         self.alert_log_path = alert_log_path
         self.cooldown_seconds = cooldown_seconds
+        self.db_path = db_path or os.path.join(WORKSPACE_ROOT, "backend", "studio.db")
         self._recent_events: Dict[str, float] = {}
         os.makedirs(os.path.dirname(self.alert_log_path), exist_ok=True)
+        self._init_notification_db()
+
+    def _init_notification_db(self):
+        """Initializes persistent notification delivery ledger for durable idempotency."""
+        try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS notification_delivery_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_key TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    recipient TEXT NOT NULL,
+                    delivered_at TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error("Failed to init notification_delivery_ledger: %s", e)
+
+    def is_event_delivered(self, event_key: str) -> bool:
+        """Checks if the event was already delivered in the persistent ledger."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM notification_delivery_ledger WHERE event_key = ?", (event_key,))
+            row = cur.fetchone()
+            conn.close()
+            return bool(row)
+        except Exception:
+            return False
+
+    def record_event_delivered(self, event_key: str, event_type: str, job_id: str, recipient: str):
+        """Records a successful notification delivery in the persistent ledger."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT OR IGNORE INTO notification_delivery_ledger (event_key, event_type, job_id, recipient, delivered_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (event_key, event_type, job_id, recipient, datetime.utcnow().isoformat() + "Z"))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error("Failed to record delivered notification: %s", e)
 
     def is_email_configured(self) -> bool:
         """Checks whether SMTP credentials and recipient are present."""
@@ -193,8 +246,27 @@ $notify.Dispose()
         production_timestamp: Optional[str] = None,
         job_id: str = "showcase_job",
         details: Optional[Dict] = None,
+        execution_context: ExecutionContext = ExecutionContext.PRODUCTION,
     ) -> Dict[str, bool]:
         """Dispatches formatted success alert with all required Stage 3.6 fields."""
+        if isinstance(execution_context, str):
+            execution_context = ExecutionContext.from_string(execution_context)
+
+        # STRICT ISOLATION: Tests and non-production contexts must NEVER send production emails
+        if execution_context != ExecutionContext.PRODUCTION or job_id.startswith("test_") or job_id.startswith("mock_"):
+            logger.info(
+                "[NOTIFICATION SUPPRESSED] Non-production or test context (context=%s, job_id=%s). Suppressing success email.",
+                execution_context.value if hasattr(execution_context, 'value') else execution_context,
+                job_id,
+            )
+            return {"desktop": False, "email": False, "deduplicated": False, "suppressed_test_mode": True}
+
+        # Persistent database-backed idempotency
+        persistent_event_key = f"SUCCESS:{job_id}"
+        if self.is_event_delivered(persistent_event_key):
+            logger.info("[NOTIFICATION DEDUP] Success notification for job %s already delivered persistently.", job_id)
+            return {"desktop": False, "email": False, "deduplicated": True}
+
         dedup_key = f"SUCCESS:{topic}:{video_title}"
         if self._is_duplicate(dedup_key):
             return {"desktop": False, "email": False, "deduplicated": True}
@@ -322,6 +394,10 @@ CrazzyDocs Autonomous YouTube Shorts Studio
         desktop_ok = self.notify_desktop(alert_title, short_msg, is_error=False)
         email_ok = self.notify_email(subject=alert_title, body_text=plain_body, body_html=html_body)
 
+        if email_ok:
+            recipient = os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT") or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL") or "default"
+            self.record_event_delivered(persistent_event_key, "SUCCESS", job_id, recipient)
+
         alert = AlertPayload(
             event_type="SUCCESS",
             stage="production",
@@ -354,8 +430,26 @@ CrazzyDocs Autonomous YouTube Shorts Studio
         manual_intervention_required: bool = True,
         job_id: str = "autonomous_job",
         details: Optional[Dict] = None,
+        execution_context: ExecutionContext = ExecutionContext.PRODUCTION,
     ) -> Dict[str, bool]:
         """Dispatches formatted failure alert with all required Stage 3.6 fields."""
+        if isinstance(execution_context, str):
+            execution_context = ExecutionContext.from_string(execution_context)
+
+        # STRICT ISOLATION: Tests and non-production contexts must NEVER send production failure alerts
+        if execution_context != ExecutionContext.PRODUCTION or job_id.startswith("test_") or job_id.startswith("mock_"):
+            logger.info(
+                "[NOTIFICATION SUPPRESSED] Non-production or test context (context=%s, job_id=%s). Suppressing failure email.",
+                execution_context.value if hasattr(execution_context, 'value') else execution_context,
+                job_id,
+            )
+            return {"desktop": False, "email": False, "deduplicated": False, "suppressed_test_mode": True}
+
+        persistent_event_key = f"FAIL:{job_id}:{stage}"
+        if self.is_event_delivered(persistent_event_key):
+            logger.info("[NOTIFICATION DEDUP] Failure alert for job %s stage %s already delivered persistently.", job_id, stage)
+            return {"desktop": False, "email": False, "deduplicated": True}
+
         dedup_key = f"FAIL:{stage}:{error_summary[:40]}"
         if self._is_duplicate(dedup_key):
             logger.info("Suppressed duplicate failure alert for stage %s", stage)
@@ -481,6 +575,10 @@ CrazzyDocs Autonomous Production Alerting
 
         desktop_ok = self.notify_desktop(title, short_msg, is_error=True)
         email_ok = self.notify_email(subject=title, body_text=plain_body, body_html=html_body)
+
+        if email_ok:
+            recipient = os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT") or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL") or "default"
+            self.record_event_delivered(persistent_event_key, "FAILURE", job_id, recipient)
 
         alert = AlertPayload(
             event_type="FAILURE",

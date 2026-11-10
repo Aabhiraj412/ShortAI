@@ -19,10 +19,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from backend.app.core.execution_context import ExecutionContext, require_production_context
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -86,6 +89,17 @@ def compute_file_sha256(file_path: str) -> str:
     return h.hexdigest()
 
 
+def normalize_topic_title(title: str) -> str:
+    """Normalizes a topic title for duplicate detection.
+    Strips hashtags (#Shorts, #History, etc.), punctuation, excess whitespace, and lowercases."""
+    if not title:
+        return ""
+    cleaned = re.sub(r'#\w+', '', title)
+    cleaned = re.sub(r'[,.\'\"!?:;()\-–—]', '', cleaned)
+    cleaned = re.sub(r'[^\w\s]', ' ', cleaned)
+    return ' '.join(cleaned.lower().split())
+
+
 class PublishingDatabase:
     """Manages the local publication history and duplicate prevention ledger."""
 
@@ -115,10 +129,34 @@ class PublishingDatabase:
                 )
             """)
             cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_active_pending_topic
+                ON publishing_ledger (topic_title)
+                WHERE upload_status = 'pending_queue'
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_active_pending_hash
+                ON publishing_ledger (video_hash)
+                WHERE upload_status = 'pending_queue'
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS youtube_quota_ledger (
                     date_str TEXT PRIMARY KEY,
                     units_consumed INTEGER DEFAULT 0,
                     last_updated TEXT
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS test_queue_incident_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ledger_id INTEGER,
+                    topic_title TEXT,
+                    video_path TEXT,
+                    upload_status TEXT,
+                    visibility TEXT,
+                    video_hash TEXT,
+                    upload_timestamp TEXT,
+                    incident_reason TEXT,
+                    archived_at TEXT
                 )
             """)
             conn.commit()
@@ -126,49 +164,128 @@ class PublishingDatabase:
             conn.close()
 
     def check_duplicate(self, video_path: str, topic_title: str) -> Tuple[bool, Optional[str]]:
-        """Returns (is_duplicate: bool, existing_video_id: Optional[str])."""
-        v_hash = compute_file_sha256(video_path)
+        """Returns (is_duplicate: bool, existing_video_id_or_status: Optional[str])."""
+        v_hash = compute_file_sha256(video_path) if video_path and os.path.exists(video_path) else None
+        norm_target = normalize_topic_title(topic_title)
         conn = sqlite3.connect(self.db_path)
         try:
             cur = conn.cursor()
+            # Check active queue first
             cur.execute("""
-                SELECT youtube_video_id, upload_status, visibility FROM publishing_ledger
-                WHERE (video_hash = ? OR topic_title = ?)
-                  AND upload_status IN ('uploaded_private', 'uploaded_unlisted', 'uploaded_public', 'published')
-            """, (v_hash, topic_title))
-            row = cur.fetchone()
-            if row:
-                return True, row[0]
+                SELECT id, topic_title, video_hash, upload_status, youtube_video_id
+                FROM publishing_ledger
+                WHERE upload_status IN ('pending_queue', 'uploading')
+            """)
+            for row in cur.fetchall():
+                eid, etitle, ehash, estatus, eyt = row
+                if (norm_target and normalize_topic_title(etitle) == norm_target) or (v_hash and ehash == v_hash):
+                    return True, f"enqueued_{estatus}_{eid}"
+
+            # Check uploaded/published records
+            cur.execute("""
+                SELECT youtube_video_id, upload_status, topic_title, video_hash FROM publishing_ledger
+                WHERE upload_status IN ('uploaded_private', 'uploaded_unlisted', 'uploaded_public', 'published')
+            """)
+            for row in cur.fetchall():
+                eyt, estatus, etitle, ehash = row
+                if (norm_target and normalize_topic_title(etitle) == norm_target) or (v_hash and ehash == v_hash):
+                    return True, eyt
             return False, None
         finally:
             conn.close()
 
-    def record_publication(self, record: PublicationRecord) -> int:
-        """Inserts or updates a publication record."""
-        conn = sqlite3.connect(self.db_path)
+    def record_publication(
+        self,
+        record: PublicationRecord,
+        execution_context: ExecutionContext = ExecutionContext.PRODUCTION,
+    ) -> int:
+        """Inserts or updates a publication record with atomic deduplication and execution-context enforcement."""
+        if isinstance(execution_context, str):
+            execution_context = ExecutionContext.from_string(execution_context)
+        require_production_context(execution_context, "Publishing queue insertion")
+
+        norm_target = normalize_topic_title(record.topic_title)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         try:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO publishing_ledger (
-                    topic_title, video_path, thumbnail_path, metadata_json,
-                    youtube_video_id, upload_status, visibility, video_hash,
-                    upload_timestamp, scheduled_timestamp, error_details
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record.topic_title,
-                record.video_path,
-                record.thumbnail_path,
-                record.metadata_json,
-                record.youtube_video_id,
-                record.upload_status,
-                record.visibility,
-                record.video_hash,
-                record.upload_timestamp or datetime.utcnow().isoformat() + "Z",
-                record.scheduled_timestamp,
-                record.error_details,
-            ))
-            conn.commit()
-            return cur.lastrowid
+            with conn:
+                cur = conn.cursor()
+                # Atomic check for existing active or pending record with matching normalized topic or hash
+                cur.execute("""
+                    SELECT id, topic_title, video_path, video_hash, upload_status, youtube_video_id
+                    FROM publishing_ledger
+                    WHERE upload_status IN ('pending_queue', 'uploading')
+                """)
+                rows = cur.fetchall()
+                for row in rows:
+                    existing_id, existing_title, existing_path, existing_hash, existing_status, existing_yt = row
+                    norm_existing = normalize_topic_title(existing_title)
+                    is_title_match = bool(norm_target and norm_existing == norm_target)
+                    is_hash_match = bool(record.video_hash and existing_hash == record.video_hash)
+                    if is_title_match or is_hash_match:
+                        # Legitimate retry check: same video path or hash
+                        if is_hash_match or existing_path == record.video_path:
+                            logger.info(
+                                "[PUBLISHING IDEMPOTENCY] Legitimate retry returning existing queue record #%d for topic '%s'",
+                                existing_id, record.topic_title,
+                            )
+                            return existing_id
+                        else:
+                            logger.warning(
+                                "[PUBLISHING IDEMPOTENCY REJECTION] Duplicate active queue insertion rejected! "
+                                "Existing record #%d ('%s') conflicts with new attempt ('%s'). Returning existing record.",
+                                existing_id, existing_title, record.topic_title,
+                            )
+                            return existing_id
+
+                # Check already published records
+                cur.execute("""
+                    SELECT id, youtube_video_id, upload_status, topic_title, video_hash FROM publishing_ledger
+                    WHERE upload_status IN ('uploaded_private', 'uploaded_unlisted', 'uploaded_public', 'published')
+                """)
+                for row in cur.fetchall():
+                    pub_id, pub_yt, pub_status, pub_title, pub_hash = row
+                    if (norm_target and normalize_topic_title(pub_title) == norm_target) or (record.video_hash and pub_hash == record.video_hash):
+                        logger.info("[PUBLISHING IDEMPOTENCY] Topic already published (#%d, YT: %s)", pub_id, pub_yt)
+                        return pub_id
+
+                # Safe atomic insertion
+                try:
+                    cur.execute("""
+                        INSERT INTO publishing_ledger (
+                            topic_title, video_path, thumbnail_path, metadata_json,
+                            youtube_video_id, upload_status, visibility, video_hash,
+                            upload_timestamp, scheduled_timestamp, error_details
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        record.topic_title,
+                        record.video_path,
+                        record.thumbnail_path,
+                        record.metadata_json,
+                        record.youtube_video_id,
+                        record.upload_status,
+                        record.visibility,
+                        record.video_hash,
+                        record.upload_timestamp or datetime.utcnow().isoformat() + "Z",
+                        record.scheduled_timestamp,
+                        record.error_details,
+                    ))
+                    return cur.lastrowid
+                except sqlite3.IntegrityError:
+                    # Concurrently inserted active record caught by unique index
+                    cur.execute("""
+                        SELECT id FROM publishing_ledger
+                        WHERE upload_status IN ('pending_queue', 'uploading')
+                          AND (topic_title = ? OR video_hash = ?)
+                        LIMIT 1
+                    """, (record.topic_title, record.video_hash))
+                    conflicting = cur.fetchone()
+                    if conflicting:
+                        logger.info(
+                            "[PUBLISHING IDEMPOTENCY] Concurrent duplicate caught by database unique constraint. Returning existing ID #%d",
+                            conflicting[0],
+                        )
+                        return conflicting[0]
+                    raise
         finally:
             conn.close()
 

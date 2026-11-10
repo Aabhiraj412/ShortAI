@@ -161,144 +161,6 @@
     "publication_status": "produced"
   },
   {
-    "topic_id": "topic_test_checkpoint_job_001",
-    "topic_title": "Tsutomu Yamaguchi Resumed Story",
-    "opening_hook": "He lived through two nuclear blasts.",
-    "main_subject": "Tsutomu Yamaguchi Resumed Story",
-    "key_entities": [],
-    "script_fingerprint": "c6042594b215e88bf15f776b33c6e6a262537fbb154c223cd8410fe3216da4c0",
-    "category": "history",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:33.494923Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_interrupted_render_job",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "history",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:33.783215Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_interrupted_tts_job",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "history",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:35.310973Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_vesna_integrity_run",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "The unbelievable documented story of The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [
-      "Vesna Vulovic",
-      "JAT Flight 367",
-      "Czechoslovakia",
-      "Srbska Kamenice",
-      "Guinness World Record"
-    ],
-    "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:36.480960Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_topic_discovery",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:42.657501Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_research",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:42.891731Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_script_development",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.046910Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_story_development",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.208282Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_voiceover",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.344377Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_visual_assets",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.495855Z",
-    "publication_status": "produced"
-  },
-  {
-    "topic_id": "topic_test_b_crash_rendering",
-    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
-    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
-    "key_entities": [],
-    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
-    "category": "Unbelievable Real-Life Stories",
-    "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.628687Z",
-    "publication_status": "produced"
-  },
-  {
     "topic_id": "topic_test_b_crash_thumbnail",
     "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
     "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
@@ -307,7 +169,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.757233Z",
+    "created_at": "2026-11-10T19:56:39.724583Z",
     "publication_status": "produced"
   },
   {
@@ -319,7 +181,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "history",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:43.891555Z",
+    "created_at": "2026-11-10T19:56:39.878871Z",
     "publication_status": "produced"
   },
   {
@@ -331,7 +193,7 @@
     "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
     "category": "history",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:44.033477Z",
+    "created_at": "2026-11-10T19:56:40.048410Z",
     "publication_status": "produced"
   },
   {
@@ -349,7 +211,7 @@
     "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:44.196813Z",
+    "created_at": "2026-11-10T19:56:40.260436Z",
     "publication_status": "produced"
   },
   {
@@ -367,7 +229,145 @@
     "script_fingerprint": "4ab19655e30b28c81d5c4f80cde033f5323bfd76f093e206fbcdd4ac16598cff",
     "category": "Unbelievable Real-Life Stories",
     "visual_style": "historical_documentary",
-    "created_at": "2026-11-10T19:40:50.740015Z",
+    "created_at": "2026-11-10T19:56:47.776284Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_interrupted_render_job",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T22:54:12.958459Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_interrupted_tts_job",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T22:56:03.688569Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_topic_discovery",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:00:16.556610Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_research",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:02:22.198924Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_script_development",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:04:38.861066Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_story_development",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:07:00.044150Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_voiceover",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:09:16.336557Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_visual_assets",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:11:18.103941Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_b_crash_rendering",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "She fell 33,000 feet without a parachute\u2014and walked out of the hospital alive.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [],
+    "script_fingerprint": "e561ea906df80e78a0aaf253f5ddc6feab5dce2bc00f30806bc37155d70878f2",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:13:17.000383Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_checkpoint_job_001",
+    "topic_title": "Tsutomu Yamaguchi Resumed Story",
+    "opening_hook": "He lived through two nuclear blasts.",
+    "main_subject": "Tsutomu Yamaguchi Resumed Story",
+    "key_entities": [],
+    "script_fingerprint": "c6042594b215e88bf15f776b33c6e6a262537fbb154c223cd8410fe3216da4c0",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:29:34.383644Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_vesna_integrity_run",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "The unbelievable documented story of The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [
+      "Vesna Vulovic",
+      "JAT Flight 367",
+      "Czechoslovakia",
+      "Srbska Kamenice",
+      "Guinness World Record"
+    ],
+    "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T23:31:32.041389Z",
     "publication_status": "produced"
   }
 ]

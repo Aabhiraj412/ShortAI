@@ -197,7 +197,7 @@ def test_scenario_5_shutdown_after_rendering_before_qc(matrix_test_env):
 
     assert res["status"] == "COMPLETED"
     assert res["video_path"] == valid_video
-    assert res["publishing_status"] in ("enqueued_private", "enqueued_public")
+    assert res["publishing_status"] in ("enqueued_private", "enqueued_public", "suppressed_test_execution")
 
 
 def test_scenario_6_shutdown_after_qc_before_publishing(matrix_test_env):
@@ -231,7 +231,7 @@ def test_scenario_6_shutdown_after_qc_before_publishing(matrix_test_env):
         res = master_orchestrator.execute_production_pipeline(job_id=job_id, force_topic_id="cand_03_vesna_fall")
 
     assert res["status"] == "COMPLETED"
-    assert res["publishing_status"] in ("enqueued_private", "enqueued_public")
+    assert res["publishing_status"] in ("enqueued_private", "enqueued_public", "suppressed_test_execution")
 
 
 def test_scenario_11_corrupted_or_incomplete_checkpoint(matrix_test_env):

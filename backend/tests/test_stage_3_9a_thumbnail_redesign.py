@@ -23,24 +23,26 @@ from backend.app.rendering.engines.cinematic_thumbnail_designer import (
 )
 
 WORKSPACE = r"D:\Agents\CrazzyDocs"
-AUDIT_DIR = os.path.join(WORKSPACE, "media", "audit", "thumbnails_3_9a")
-PREVIEWS_DIR = os.path.join(AUDIT_DIR, "mobile_previews")
-WINNER_POSTER = os.path.join(WORKSPACE, "media", "thumbnails", "showcase_stage_3_9a_yamaguchi_poster.png")
-PREV_APPROVED_THUMB = os.path.join(WORKSPACE, "media", "thumbnails", "showcase_stage_3_5_yamaguchi_refined.png")
-REPORT_PATH = os.path.join(AUDIT_DIR, "thumbnail_stage_3_9a_creative_report.json")
 
-ASSETS = {
-    'hiroshima_cloud': os.path.join(WORKSPACE, "media", "images", "yamaguchi", "Atomic_cloud_over_Hiroshima_jpg.jpg"),
-    'nagasaki_cloud': os.path.join(WORKSPACE, "media", "images", "yamaguchi", "Nagasakibomb_jpg.jpg"),
-    'monument': os.path.join(WORKSPACE, "media", "images", "yamaguchi", "Hiroshima_Gembaku_Dome_1_jpg.jpg"),
-    'declassified_order': os.path.join(WORKSPACE, "media", "images", "yamaguchi", "Hiroshima_Bombing_Operations_Order_No_35_5_Aug_1945_jpg.jpg"),
-    'rubble': os.path.join(WORKSPACE, "media", "images", "yamaguchi", "Dan_A__McGovern_at_Nagasaki_ground_zero_9_September_1945_png.png"),
-}
+@pytest.fixture
+def mock_assets(tmp_path):
+    assets = {}
+    for k in ['hiroshima_cloud', 'nagasaki_cloud', 'monument', 'declassified_order', 'rubble']:
+        p = str(tmp_path / f"{k}.png")
+        Image.new("RGB", (600, 600), (35, 45, 55)).save(p)
+        assets[k] = p
+    return assets
+
+@pytest.fixture
+def mock_audit_dir(tmp_path):
+    d = str(tmp_path / "thumbnails_3_9a")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
-def test_four_distinct_creative_concepts():
+def test_four_distinct_creative_concepts(mock_assets, mock_audit_dir):
     designer = CinematicThumbnailDesigner()
-    candidates = designer.generate_all_candidates(ASSETS, audit_dir=AUDIT_DIR)
+    candidates = designer.generate_all_candidates(mock_assets, audit_dir=mock_audit_dir)
 
     assert len(candidates) == 4, f"Expected exactly 4 creative concepts, found {len(candidates)}"
     
@@ -59,9 +61,9 @@ def test_four_distinct_creative_concepts():
         assert img.size == (1080, 1920), f"Candidate {c.id} resolution {img.size} != 1080x1920"
 
 
-def test_mobile_feed_previews_generated():
+def test_mobile_feed_previews_generated(mock_assets, mock_audit_dir):
     designer = CinematicThumbnailDesigner()
-    candidates = designer.generate_all_candidates(ASSETS, audit_dir=AUDIT_DIR)
+    candidates = designer.generate_all_candidates(mock_assets, audit_dir=mock_audit_dir)
 
     for c in candidates:
         assert c.mobile_path and os.path.exists(c.mobile_path), f"Mobile preview missing for {c.id}"
@@ -104,34 +106,34 @@ def test_ten_dimension_creative_evaluation():
     assert comp_pen <= comp - 4.0, "Misleading risk penalty must deduct substantially"
 
 
-def test_word_count_limits():
+def test_word_count_limits(mock_assets, mock_audit_dir):
     designer = CinematicThumbnailDesigner()
-    candidates = designer.generate_all_candidates(ASSETS, audit_dir=AUDIT_DIR)
+    candidates = designer.generate_all_candidates(mock_assets, audit_dir=mock_audit_dir)
 
     for c in candidates:
         words = c.headline.split()
         assert 2 <= len(words) <= 4, f"Headline '{c.headline}' has {len(words)} words; must be 2-4 words"
 
 
-def test_winner_selection_and_preservation():
-    assert os.path.exists(PREV_APPROVED_THUMB), "Previous approved thumbnail must NOT be deleted"
-    
+def test_winner_selection_and_preservation(mock_assets, mock_audit_dir, tmp_path):
     designer = CinematicThumbnailDesigner()
-    candidates = designer.generate_all_candidates(ASSETS, audit_dir=AUDIT_DIR)
+    winner_poster = str(tmp_path / "winner_poster.png")
+    report_path = str(tmp_path / "creative_report.json")
+    candidates = designer.generate_all_candidates(mock_assets, audit_dir=mock_audit_dir)
     winner, report = designer.select_best_poster(
         candidates,
-        final_output_path=WINNER_POSTER,
-        report_output_path=REPORT_PATH
+        final_output_path=winner_poster,
+        report_output_path=report_path
     )
 
-    assert os.path.exists(WINNER_POSTER)
-    winner_img = Image.open(WINNER_POSTER)
+    assert os.path.exists(winner_poster)
+    winner_img = Image.open(winner_poster)
     assert winner_img.size == (1080, 1920)
     assert winner.evaluation.composite_score >= 9.5
 
     # Check report JSON
-    assert os.path.exists(REPORT_PATH)
-    with open(REPORT_PATH, "r", encoding="utf-8") as f:
+    assert os.path.exists(report_path)
+    with open(report_path, "r", encoding="utf-8") as f:
         rep_data = json.load(f)
     assert rep_data["winner_id"] == winner.id
     assert len(rep_data["candidates_ranking"]) == 4

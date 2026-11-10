@@ -239,22 +239,24 @@ class ContentIntegrityGate:
         # Check video hash if video exists
         if os.path.isfile(video_path):
             current_v_hash = compute_sha256(video_path)
-            # Compare against reference Yamaguchi video to ensure not a copy
+            # Known stale prior production video hashes (cannot be reused for non-matching topics)
+            known_stale = {
+                "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67": "Tsutomu Yamaguchi showcase video",
+            }
             ref_yamaguchi = os.path.join(self.workspace, "media", "productions", "prod_cycle_4_20261110_1800", "video", "showcase_cycle_4_20261110_1800.mp4")
             if not os.path.isfile(ref_yamaguchi):
                 ref_yamaguchi = os.path.join(self.workspace, "media", "video", "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
-            if os.path.isfile(ref_yamaguchi) and not is_nuclear_topic:
-                yamaguchi_hash = compute_sha256(ref_yamaguchi)
-                if current_v_hash == yamaguchi_hash:
-                    report.add_result(
-                        "CHECK_I_NO_STALE_ASSETS",
-                        False,
-                        "CRITICAL: Output video file is an identical copy of Tsutomu Yamaguchi showcase video!"
-                    )
-                else:
-                    report.add_result("CHECK_I_NO_STALE_ASSETS", True, "Video hash is distinct from prior production videos.")
+            if os.path.isfile(ref_yamaguchi):
+                known_stale[compute_sha256(ref_yamaguchi)] = "Tsutomu Yamaguchi showcase video"
+
+            if (current_v_hash in known_stale) and not is_nuclear_topic:
+                report.add_result(
+                    "CHECK_I_NO_STALE_ASSETS",
+                    False,
+                    f"CRITICAL: Output video file is an identical copy of {known_stale[current_v_hash]}!"
+                )
             else:
-                report.add_result("CHECK_I_NO_STALE_ASSETS", True, "Stale asset check passed.")
+                report.add_result("CHECK_I_NO_STALE_ASSETS", True, "Video hash is distinct from prior production videos.")
         else:
             report.add_result("CHECK_I_NO_STALE_ASSETS", False, f"Video deliverable missing: {video_path}")
 

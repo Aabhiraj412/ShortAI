@@ -1,0 +1,758 @@
+{
+  "minimization_timestamp": "2026-11-11T04:13:28.553591",
+  "initial_files_count": 103,
+  "initial_storage_bytes": 108134078,
+  "initial_storage_mb": 103.1247,
+  "deleted_files_count": 99,
+  "deleted_storage_bytes": 104064760,
+  "deleted_storage_mb": 99.2439,
+  "retained_files_count": 4,
+  "retained_storage_bytes": 4069318,
+  "retained_storage_mb": 3.8808,
+  "empty_directories_removed": [
+    "media/audit/thumbnails_3_9a/mobile_previews",
+    "media/audit/thumbnails_3_9a",
+    "media/images/historical",
+    "media/images/yamaguchi",
+    "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments",
+    "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants",
+    "media/productions/prod_20261110_vesna_vulovic/assets",
+    "media/productions/prod_20261110_vesna_vulovic/narration",
+    "media/productions/prod_20261110_vesna_vulovic/thumbnails",
+    "media/productions/prod_20261110_vesna_vulovic/video",
+    "media/productions/prod_cycle_4_20261110_1800/thumbnails",
+    "media/productions/prod_cycle_4_20261110_1800/video",
+    "media/productions/prod_20261110_vesna_vulovic",
+    "media/productions/prod_cycle_4_20261110_1800",
+    "media/source/reusable/audio_samples",
+    "media/source/reusable",
+    "media/subtitles/accessibility",
+    "media/subtitles/editorial",
+    "media/subtitles/transcripts",
+    "media/thumbnails/candidates",
+    "media/audio",
+    "media/audit",
+    "media/images",
+    "media/productions",
+    "media/subtitles",
+    "media/thumbnails",
+    "media/video"
+  ],
+  "retained_assets": [
+    {
+      "path": "media/source/branding/Compressed-Youtube-Banner.png",
+      "size_bytes": 1168637,
+      "sha256": "3daf3dd95844dcb31f1a7da39304d90950c0e206bc27c0813b673945aea2c7c7"
+    },
+    {
+      "path": "media/source/branding/Compressed-Youtube-Icon.png",
+      "size_bytes": 396224,
+      "sha256": "2158860e0db12c0e0a4f94a657765acc2dd0e1784a9e424382cf4f55ae2fa259"
+    },
+    {
+      "path": "media/source/branding/crazzydocs_outro_1080x1920.mp4",
+      "size_bytes": 534190,
+      "sha256": "b244ba1141b8622a654afca9014a63d5bd97d7630ddf4f3935a37980dec14945"
+    },
+    {
+      "path": "media/source/branding/Youtube-Icon.png",
+      "size_bytes": 1970267,
+      "sha256": "65b14bb348376d3b91c62538f91eadfd5e5e36d4109a525af7bb63e817730060"
+    }
+  ],
+  "deleted_files": [
+    {
+      "path": "media/audio/chalk_talk_narr.mp3",
+      "size_bytes": 82944,
+      "sha256": "5f638837b9d1675d1cebed2ebd4ebd4370979dc42db295dfdee0263f24b8e537",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.470233"
+    },
+    {
+      "path": "media/audio/creator_motion_narr.mp3",
+      "size_bytes": 80208,
+      "sha256": "e0f0ec09da19ce6888a41fbcb9345157537ddeb6b86f7642417f731d19013112",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.470233"
+    },
+    {
+      "path": "media/audio/data_story_narr.mp3",
+      "size_bytes": 97344,
+      "sha256": "5a8c36a22f166ba19237a859527576a7a54d6745d8158786403f300c41ea38df",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.470233"
+    },
+    {
+      "path": "media/audio/pop_info_narr.mp3",
+      "size_bytes": 92304,
+      "sha256": "5aa54f36a20d708f4bce4827ee7ba545fb9b4e4cc05092a22373fb40931faeb1",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.470233"
+    },
+    {
+      "path": "media/audio/sample_expressive.mp3",
+      "size_bytes": 526508,
+      "sha256": "7b4aec5a3768b3c04d5ed497fe550114d0cbca99e64b60ffdbc1a25d7a3315ae",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.470233"
+    },
+    {
+      "path": "media/audio/sample_narration.mp3",
+      "size_bytes": 96336,
+      "sha256": "ef4510bc77b3ccf1b22eae1a6505ea31ca479a55f528a58aa593a3a96d19b633",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.470233"
+    },
+    {
+      "path": "media/audio/stage_3_1_bank_voice.mp3",
+      "size_bytes": 1323116,
+      "sha256": "3233b377c02d0ab14ff1b91f831d33768a461f2950339fb8e0bb5212389be5d3",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.478442"
+    },
+    {
+      "path": "media/audio/stage_3_2_marathon_voice.mp3",
+      "size_bytes": 1284524,
+      "sha256": "aee0e7af031a23acbc5c75fecc27d76ed22613366c38a06a15c4e09ebf735e8c",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.478442"
+    },
+    {
+      "path": "media/audio/stage_3_4_yamaguchi_voice.mp3",
+      "size_bytes": 1312748,
+      "sha256": "938e808408dadc0f9a14380e53891813ca7bb0f5f8e5f8a326a4d6c6865892b3",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.478442"
+    },
+    {
+      "path": "media/audio/vesna_telemetry.json",
+      "size_bytes": 2160,
+      "sha256": "b0080b919a7a35f09aeb4e8737a1218409c94aca05aa10774602749b0f3a898c",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.478442"
+    },
+    {
+      "path": "media/audio/yamaguchi_telemetry.json",
+      "size_bytes": 2771,
+      "sha256": "88d7f6c19fff3c99d25b213c6e206d27d58186b7a29f5df8c19af9779c9b2602",
+      "reason": "Obsolete narration benchmark recording or telemetry JSON; can be regenerated",
+      "deleted_at": "2026-11-11T04:13:28.478442"
+    },
+    {
+      "path": "media/audit/integrity_report_test_checkpoint_job_001.json",
+      "size_bytes": 2145,
+      "sha256": "4e1bab0a45316a0ee8e9349daf13c8beb57f5833d7d3f77d2430d6518ca8408e",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/audit/integrity_report_test_vesna_integrity_run.json",
+      "size_bytes": 2230,
+      "sha256": "c82274bcacdb5ff729712c80251b4e0698b35edab70e8f71dc6a1f7f336667f6",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/audit/thumbnails_3_9a/mobile_previews/concept_01_split_juxtaposition_mobile_120x213.png",
+      "size_bytes": 9065,
+      "sha256": "bcced7481bb803f43314989a865449da7d876bee9051c96c61e1adb724634611",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/audit/thumbnails_3_9a/mobile_previews/concept_02_extreme_scale_mobile_120x213.png",
+      "size_bytes": 5898,
+      "sha256": "61098e5fcc49727d782d505c9f721a9efaf5526a8fa8ae1c2a09fc100fd5ec41",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/audit/thumbnails_3_9a/mobile_previews/concept_03_resilient_monolith_mobile_120x213.png",
+      "size_bytes": 6624,
+      "sha256": "cc4198b6f0bb8010dbd9c7d5223631b0a127771d63fd36a705f2a26b23b6238d",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/audit/thumbnails_3_9a/mobile_previews/concept_04_forensic_archive_mobile_120x213.png",
+      "size_bytes": 5907,
+      "sha256": "d8f8be5c5838175e0b8641eb5b64ea774488401a590be1783e7e50574114825b",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/images/historical/attribution_manifest.json",
+      "size_bytes": 5330,
+      "sha256": "b3f02bebab01c7d6f8dd485d86bc5ed14bd66110aae5924c774c1680894870c9",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.480453"
+    },
+    {
+      "path": "media/images/historical/scene_01_original_tank.jpg",
+      "size_bytes": 28019,
+      "sha256": "68de5ce312c2eaa5c2cd1deeab751e9103a3c9790685cfce0b83e9012cb45426",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.482460"
+    },
+    {
+      "path": "media/images/historical/scene_02_tank_layout.png",
+      "size_bytes": 180066,
+      "sha256": "22fdcadaa7ea62f9a17364838f0618a35c6165a55deb993e2aaff8a416df2cf5",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.482460"
+    },
+    {
+      "path": "media/images/historical/scene_03_collapsed_tank.jpg",
+      "size_bytes": 4189385,
+      "sha256": "f0c5ff70ab6f3dc0971b94c6e944c7eb6d86f1e9da677d1f902f7dc47e678b27",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.482460"
+    },
+    {
+      "path": "media/images/historical/scene_04_railway_wreckage.jpg",
+      "size_bytes": 7854955,
+      "sha256": "7df83e47b5da223e9a5447d6675a3145667cf083517e261bdf10ba548ef547c5",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.484939"
+    },
+    {
+      "path": "media/images/historical/scene_05_investigation_wreckage.jpg",
+      "size_bytes": 1695813,
+      "sha256": "ba73ed205b0586730386d76842d66779bc2f73c5ab053807d0826b6be505e1c2",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.484939"
+    },
+    {
+      "path": "media/images/historical/scene_06_newspaper_legacy.png",
+      "size_bytes": 405271,
+      "sha256": "889ed7e5affa64a26a8fd8de3151ae2f68059d44d0bb1d2e3dc8176dd873954f",
+      "reason": "Great Molasses Flood historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.484939"
+    },
+    {
+      "path": "media/images/yamaguchi/Atomic_cloud_over_Hiroshima_jpg.jpg",
+      "size_bytes": 2562103,
+      "sha256": "21b64c01adf30c3066470c8b290c2d4f56a43c614da66077d384d74ae0fdaae7",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Bischof___Victim_of_the_atomic_bomb_dropped_on_Hiroshima_on_August_6,_1945_jpg.jpg",
+      "size_bytes": 43034,
+      "sha256": "38b077935ae1b135993b6e9d2efe20c42b4869945295d149bd79d15331e8aeff",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Dan_A__McGovern_at_Nagasaki_ground_zero_9_September_1945_png.png",
+      "size_bytes": 1546983,
+      "sha256": "2c0583c4e9c97e454bd41437527fce4a06d1e70a769e7c2f0bac6395e76fb30e",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Fat_Man_Assembled_Tinian_1945_jpg.jpg",
+      "size_bytes": 511155,
+      "sha256": "38c28a2fa0806c3af6550e6a38639bea532d0adcd0eac3942ff10dbc92a9e2cf",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Fat_Man_blueprint_jpg.jpg",
+      "size_bytes": 211073,
+      "sha256": "c0f68ea0fcd920c87e9bcadfa903b5228bed8574481dd84eb4167fe8b65b7406",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Fat_Man_replica_of_nuclear_bomb_jpg.jpg",
+      "size_bytes": 6912356,
+      "sha256": "d06c3aa02e5ec54dce546690b8484bc1a1df8eff397ed429fc6b190d45012cb7",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Firestorm_cloud_over_Hiroshima_from_Matsuyama_jpg.jpg",
+      "size_bytes": 817384,
+      "sha256": "b9a85149a232b282eef9e975cee56937baac15e58527022e1d756f8a765728fe",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Hattyo_bori_Hiroshima_25july1945_jpg.jpg",
+      "size_bytes": 166445,
+      "sha256": "cc86c517ed4dfdcf05cdd054f879acc918e801af48a18dcf2c1ebc0cb6296b83",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.487135"
+    },
+    {
+      "path": "media/images/yamaguchi/Hiroshima_aerial_view_after_atomic_bomb_8_1945_jpeg.jpeg",
+      "size_bytes": 3327511,
+      "sha256": "950279cd78d64d3bec5b13f0eab9989aecbd4ddef8cad54e21f183ddab0519b1",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Hiroshima_aftermath_jpg.jpg",
+      "size_bytes": 214049,
+      "sha256": "7843982259c4de353ef9a624583f0a171dd3bd843047d76c3bc387b0cf95a74d",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Hiroshima_Bombing_Operations_Order_No_35_5_Aug_1945_jpg.jpg",
+      "size_bytes": 56671,
+      "sha256": "56b0576da791cb3bf43afcd9519c5fb3512116e2aa313f94d2868edc9d8f8f31",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Hiroshima_Castle_25july1945_jpg.jpg",
+      "size_bytes": 150905,
+      "sha256": "5e16671015c6e21a84994ab807f446d4be42d2b87be8cc6d5da6c3b9ac579b68",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Hiroshima_Gembaku_Dome_1_jpg.jpg",
+      "size_bytes": 917867,
+      "sha256": "5fee0ebf7427ddb4a54ed84ebee6c730462cb98a5eb3ffffebfe00de9e9f8af6",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Hiroshima___Extend_Of_Fire_&_Limits_Of_Blast_Damage_jpg.jpg",
+      "size_bytes": 379513,
+      "sha256": "3e923e8ec8a0486c3595367c9c77a4d2f7e95e716435d449c37707ff521f6980",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Japanese_cruiser_Aoba_aerial_photo_28_July_1945_jpg.jpg",
+      "size_bytes": 184044,
+      "sha256": "9c2e5448a0e470df5b0c21a24ed2b0e49d867f9f1d45f08d558d29dac152422f",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Littleboy_inner1_info_png.png",
+      "size_bytes": 74505,
+      "sha256": "a0e8cc7053fac9f685872ce759548c01cc7c1443575f7bf82736c3a3771ef2dd",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Little_Boy_bomb_jpg.jpg",
+      "size_bytes": 8225440,
+      "sha256": "a6f8cd62cbe7abf1cb7b41a08e69f0b241add503ced6cd9d242ec078246a31ed",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Nagasakibomb_jpg.jpg",
+      "size_bytes": 6943591,
+      "sha256": "757cfd6dd31db54852923653dfedc9dc01e5d7000863edcf62e3579553b2e2bd",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Nagasaki_1945___Before_and_after_adjusted_jpg.jpg",
+      "size_bytes": 612269,
+      "sha256": "33224169130a3aa1fc84d5b04934cb5a661514e7c057fae79df26cf3860ae430",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.492280"
+    },
+    {
+      "path": "media/images/yamaguchi/Nagasaki_after_bombed_in_1945_jpg.jpg",
+      "size_bytes": 173441,
+      "sha256": "c56efd4be06ecee1d7c6e9c1efcfa74ee308fc761288264bbba35c47a45ec634",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.499339"
+    },
+    {
+      "path": "media/images/yamaguchi/Nagasaki_Harbor_looking_east,_August_1,_1945_jpg.jpg",
+      "size_bytes": 215142,
+      "sha256": "dc2cebf83613e6167ee45c72e60e6aa9bac3a1fd70716867b5ae05547814b388",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.499339"
+    },
+    {
+      "path": "media/images/yamaguchi/Nagasaki_temple_destroyed_jpg.jpg",
+      "size_bytes": 1101745,
+      "sha256": "c4bd404414717f13b24f9d30a39733deebdb06593eea4f1992528377b218a090",
+      "reason": "Tsutomu Yamaguchi Wikimedia Commons historical research download; can be re-acquired on demand",
+      "deleted_at": "2026-11-11T04:13:28.499339"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/production_manifest.json",
+      "size_bytes": 696,
+      "sha256": "381110d857c4d3a5eb585656ad899da157cc0f8fa57b076773bba2dcf76e1798",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.500372"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/attribution_manifest.json",
+      "size_bytes": 2707,
+      "sha256": "7ac9271612470ad5474f036ca56c53e0f610283681cf781b8fabf383d3585307",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.500372"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/dc9_aircraft.jpg",
+      "size_bytes": 651918,
+      "sha256": "58beb5a8f3a7b4c479c99d32781aebf8dd8bf5cd7f7a938450bf234530daebd1",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.500372"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/debris_jat367_snow.jpg",
+      "size_bytes": 267920,
+      "sha256": "470a01fd9e1b713c6b9620694757ff4a343ac560507f2c17581cc1d5362d5afa",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.500372"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/flight_jat367_route.png",
+      "size_bytes": 207244,
+      "sha256": "d8cde5cd0b5d0c787f1c372cfc109e4ebdac906405e359540519444e5a732243",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.501618"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/vesna_in_hospital.jpg",
+      "size_bytes": 73573,
+      "sha256": "7895418c0cbd2f0db889a2e7788b0e9db98c7e7d200a9d06dface54608b25e43",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.501618"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/vesna_vulovic_portrait.jpg",
+      "size_bytes": 920492,
+      "sha256": "e2fc67c8f4b2b09c83b7086a661c5a2e25ce39f8109cb64dbcc40f830b5223cc",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.501618"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/assets/vesna_with_reporter_1973.jpg",
+      "size_bytes": 751984,
+      "sha256": "1c3cfa9d058941f196fea0c4d27b46abf75aaab21faaff073f63909ebae4f354",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.503630"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/stage_3_13_vesna_voice.mp3",
+      "size_bytes": 1249964,
+      "sha256": "8b02d320306dbb988f6e5dd49089b3223bcb0e31229d70d23e6ee11739fd221f",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.516197"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_01_hook.mp3",
+      "size_bytes": 122444,
+      "sha256": "be5f7aa4470d8fcdc04ae944bf69bd8c29971a18a9dbe16cd4645aea466533ab",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.516197"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_01_hook_raw.mp3",
+      "size_bytes": 35856,
+      "sha256": "6ea6279e9a72e7bbdaaddc2c9e9bea40ab60b820eac842902c2a093900201903",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.516197"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_02_context.mp3",
+      "size_bytes": 154124,
+      "sha256": "238a39011eaa7eb54cb78124017ce22864c796c2452911fa746041d19e8a816a",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.517665"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_02_context_raw.mp3",
+      "size_bytes": 45360,
+      "sha256": "3b270afc10067543b16fb397519953b20b4b224fc8ce88dcee801c99c1172d7b",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.517665"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_03_bomb.mp3",
+      "size_bytes": 131564,
+      "sha256": "b10188cfecdfe1aa1fbdd41a42398c4883d18e07b63785d1141f3c6fc7ead5e6",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.517665"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_03_bomb_raw.mp3",
+      "size_bytes": 38448,
+      "sha256": "d287876987254a402b303e8f0b1b5490b703bab68bcf283fe152b8e715415eb1",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.518467"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_04_plunge.mp3",
+      "size_bytes": 122444,
+      "sha256": "bc12afb433d7efc550529ba45b31819f7731c83c5222623767efd9ab0a472021",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.518467"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_04_plunge_raw.mp3",
+      "size_bytes": 35856,
+      "sha256": "41e2ab134510fc67251d92a7481453b7139c2599a66a97c6946a2bb555138a8f",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.518467"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_05_impact.mp3",
+      "size_bytes": 132524,
+      "sha256": "0895ce669c7f76614092dd77def6fbd281637ec0857dcb65fa8a951476801e39",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_05_impact_raw.mp3",
+      "size_bytes": 38736,
+      "sha256": "42b887f47706735f67596a013e859121e9a769b26709a686416e1eeffe0488c4",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_06_rescue.mp3",
+      "size_bytes": 134924,
+      "sha256": "80452027e420fb4f8e44099ef271c5158757e4fff8b6a8e7c0748a88c5628d35",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_06_rescue_raw.mp3",
+      "size_bytes": 39600,
+      "sha256": "de4fbd16b8b8c62b77b04067ff4edce4987d6ba9c0b6d1aeaf72641b8f72df7f",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_07_recovery.mp3",
+      "size_bytes": 113804,
+      "sha256": "2402da1e8dc3ef069aa19cdd1d1c7a8e82cdcf219b33c745dc595f78d6a1f60f",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_07_recovery_raw.mp3",
+      "size_bytes": 33264,
+      "sha256": "c16143944ba105a10a37157d19bc408b094af1bfb6ebec0f454dc5f8b8c6fdc1",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/narration/vesna_segments/beat_08_legacy.mp3",
+      "size_bytes": 42192,
+      "sha256": "a54b5a50b3c2922f8749134f7d39db88056138f64e4d05f6e2f2aca488170f61",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/thumb_vesna_vulovic_verified.png",
+      "size_bytes": 1483617,
+      "sha256": "a4024b3f401b378567e1cf3e04b6c75f943593ff7931cc6e781b64412aa879d5",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_01_vesna_fall.png",
+      "size_bytes": 2185546,
+      "sha256": "31f5bd938fbeab0e68c77d9378350f865ea839924747ba60667971aae72a9e75",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_02_vesna_no_chute.png",
+      "size_bytes": 978874,
+      "sha256": "30e4199eb35468ddbfeb1eb6207b17b3504735b5de25a6f4b0e1f99c256ed017",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_03_vesna_survived.png",
+      "size_bytes": 2173560,
+      "sha256": "034f300785d5ea8bf6275de5a4850293438ec1b69145422fa81e3d75c20650d7",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/thumbnails/variants/cand_04_vesna_record.png",
+      "size_bytes": 955115,
+      "sha256": "4a59fce2f8cff26a3fa9da7f3caf25d43895ca78c84700937eee810ea7a31bd1",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.520479"
+    },
+    {
+      "path": "media/productions/prod_20261110_vesna_vulovic/video/showcase_vesna_vulovic_verified.mp4",
+      "size_bytes": 14925960,
+      "sha256": "0a172c987505e8488c4f98126faa6000c824f8ed5f7c96b222d3dae9f9187655",
+      "reason": "Vesna Vulovic production assets associated with permanently deleted YouTube Short 4DCas1e4vHI",
+      "deleted_at": "2026-11-11T04:13:28.525633"
+    },
+    {
+      "path": "media/productions/prod_cycle_4_20261110_1800/production_manifest.json",
+      "size_bytes": 484,
+      "sha256": "ec087dd4f8ec6514d02ab1a122907ef78f2864daeed3eddbcafb46b6551a0adf",
+      "reason": "Obsolete Cycle 4 showcase production deliverable; no active workflow or test dependency",
+      "deleted_at": "2026-11-11T04:13:28.525633"
+    },
+    {
+      "path": "media/productions/prod_cycle_4_20261110_1800/thumbnails/thumb_cycle_4_20261110_1800.png",
+      "size_bytes": 2098371,
+      "sha256": "bb28cde1c3adb78e02fbf63ae3c3dae9fc919c2c0073683783a218b91aff871e",
+      "reason": "Obsolete Cycle 4 showcase production deliverable; no active workflow or test dependency",
+      "deleted_at": "2026-11-11T04:13:28.525633"
+    },
+    {
+      "path": "media/productions/prod_cycle_4_20261110_1800/video/showcase_cycle_4_20261110_1800.mp4",
+      "size_bytes": 19044816,
+      "sha256": "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67",
+      "reason": "Obsolete Cycle 4 showcase production deliverable; no active workflow or test dependency",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/source/reusable/audio_samples/sample_excited.mp3",
+      "size_bytes": 26496,
+      "sha256": "ebf64190ea0a8ab3b5b02a12fdcfdddd4abdfcadaa509a6d25ddcefad86314fb",
+      "reason": "Reusable reference audio sample; dynamically reproducible via TTS service",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/source/reusable/audio_samples/sample_neutral.mp3",
+      "size_bytes": 29664,
+      "sha256": "a6336483216ac193910c420d6a40c48da63f6ff1602fe4c9a30840f619f88b1f",
+      "reason": "Reusable reference audio sample; dynamically reproducible via TTS service",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/source/reusable/audio_samples/sample_suspenseful.mp3",
+      "size_bytes": 34416,
+      "sha256": "29d9a61e24f8cda07993e0c56d13d74a40830759c137c8fe2c5e334bb36f182c",
+      "reason": "Reusable reference audio sample; dynamically reproducible via TTS service",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/subtitles/chalk_talk_narr.ass",
+      "size_bytes": 1093,
+      "sha256": "cdc58c98bd2b2ecf53a1bce18de983ce842e578f2dfb21ea5e5dca9f557ae842",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/subtitles/chalk_talk_narr.srt",
+      "size_bytes": 313,
+      "sha256": "411b96fffa3c09991bd56d4b6c17ed4c10be17b6cd710fc4fbf6f44cb52a949f",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/subtitles/creator_motion_narr.ass",
+      "size_bytes": 1100,
+      "sha256": "7ac9fb8c77760c73cf15bb16af845d40f6bff68065f46b1f8043661163f1061a",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/subtitles/creator_motion_narr.srt",
+      "size_bytes": 320,
+      "sha256": "1ae863935c82f1d25513cde4039bb77076bb66d5f57a1d066c973462aae23ff7",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/subtitles/data_story_narr.ass",
+      "size_bytes": 1137,
+      "sha256": "3725aafe916fad86c08f068291882fc020ddabee029ce26358242a7afb5d54f8",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.529669"
+    },
+    {
+      "path": "media/subtitles/data_story_narr.srt",
+      "size_bytes": 357,
+      "sha256": "6eaad12433e31d80754c2d78c1fe73349ec458517293cd93883ca39077b28da8",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.532731"
+    },
+    {
+      "path": "media/subtitles/pop_info_narr.ass",
+      "size_bytes": 1157,
+      "sha256": "02822d05fab88a36a546519287acc2020d36d878bfeeb4d02d57c9045debb4bb",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.532731"
+    },
+    {
+      "path": "media/subtitles/pop_info_narr.srt",
+      "size_bytes": 354,
+      "sha256": "043fd82d0a1bf2484a22037491239cf4201e6363b93cc7d2399444fb71844b4c",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.532731"
+    },
+    {
+      "path": "media/subtitles/sample_expressive.ass",
+      "size_bytes": 1324,
+      "sha256": "fa22112e7cf725b1f77f29d8e3202aa1a404020f4ca6582c857d00c5af99a7af",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.532731"
+    },
+    {
+      "path": "media/subtitles/sample_narration.ass",
+      "size_bytes": 1169,
+      "sha256": "a712edd68cc15abcc9be9f665c886546f6f3d4be868777787caf7a41c34fe1dd",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.533776"
+    },
+    {
+      "path": "media/subtitles/sample_narration.srt",
+      "size_bytes": 366,
+      "sha256": "a79947a081ba6c71e3c4a0785514ca588b8ed654aad18417169961dd54f80c9d",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.533776"
+    },
+    {
+      "path": "media/subtitles/stage_3_1_bank_voice.ass",
+      "size_bytes": 1980,
+      "sha256": "ac55c14cc9b48de2170f7ba694e4a7e5f9e377c3b4e83e225bcf0827aa72cc14",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.533776"
+    },
+    {
+      "path": "media/subtitles/stage_3_2_marathon_voice.ass",
+      "size_bytes": 1559,
+      "sha256": "0bb35cb3073abe0b727930c0ae4a9b6ea1824d7d4f11741f263d2ed775cfa9cf",
+      "reason": "Obsolete subtitle visual style template; dynamically reproducible via editorial subtitle engine",
+      "deleted_at": "2026-11-11T04:13:28.534561"
+    },
+    {
+      "path": "media/thumbnails/candidates/cand_01_direct_survival.png",
+      "size_bytes": 34680,
+      "sha256": "f1b977986155d2bb7fd5a50f397e5eb268b5255f39e173c6c385558ab2a007b6",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.534972"
+    },
+    {
+      "path": "media/thumbnails/candidates/cand_02_personal_impossibility.png",
+      "size_bytes": 28786,
+      "sha256": "74229540eb85fa0bd67a91c5a884f6a140688f384af8e01d28402fad2bc6721e",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.534972"
+    },
+    {
+      "path": "media/thumbnails/candidates/cand_03_astronomical_odds.png",
+      "size_bytes": 31826,
+      "sha256": "9ff1a1d73cbe2c2fc1be7985022d8aed404d0702cbf3e1c1c639d21da3241c78",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.534972"
+    },
+    {
+      "path": "media/thumbnails/candidates/cand_04_astounding_fact.png",
+      "size_bytes": 33785,
+      "sha256": "6164bb503f1001b6419bb49c84690951865ae1e9f69ad00650a37eb69d484433",
+      "reason": "Obsolete unreferenced media asset",
+      "deleted_at": "2026-11-11T04:13:28.534972"
+    }
+  ]
+}

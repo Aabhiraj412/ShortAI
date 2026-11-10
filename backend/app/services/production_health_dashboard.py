@@ -171,12 +171,29 @@ class ProductionHealthDashboard:
         recovery_status = "HEALTHY"
 
         with SessionLocal() as db_session:
-            # Active job
-            running_job = db_session.query(JobModel).filter(JobModel.status == "RUNNING").first()
-            if running_job:
-                pipeline_stage = f"{running_job.current_stage} ({running_job.progress_pct:.0f}%)"
-                if "RECOVER" in (running_job.id or ""):
+            # Active job - Must be genuine production job (not test/mock) and have fresh heartbeat
+            running_jobs = db_session.query(JobModel).filter(JobModel.status == "RUNNING").all()
+            active_prod_job = None
+            for rj in running_jobs:
+                if (rj.id or "").startswith("test_") or (rj.id or "").startswith("mock_"):
+                    continue
+                # Check for stale heartbeat (> 300 seconds)
+                if rj.heartbeat_at:
+                    try:
+                        hb_time = rj.heartbeat_at if isinstance(rj.heartbeat_at, datetime) else datetime.fromisoformat(str(rj.heartbeat_at))
+                        if (datetime.utcnow() - hb_time).total_seconds() > 300:
+                            continue
+                    except Exception:
+                        pass
+                active_prod_job = rj
+                break
+
+            if active_prod_job:
+                pipeline_stage = f"{active_prod_job.current_stage} ({active_prod_job.progress_pct:.0f}%)"
+                if "RECOVER" in (active_prod_job.id or ""):
                     recovery_status = "RECOVERING"
+            else:
+                pipeline_stage = "IDLE"
 
             # Last completed production
             last_completed = (

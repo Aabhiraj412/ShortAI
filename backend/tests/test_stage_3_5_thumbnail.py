@@ -23,9 +23,12 @@ from backend.app.rendering.engines.creative_thumbnail_engine import (
 )
 
 WORKSPACE = r"D:\Agents\CrazzyDocs"
-TEST_IMG = os.path.join(WORKSPACE, "media", "images", "yamaguchi", "Atomic_cloud_over_Hiroshima_jpg.jpg")
-REPORT_PATH = os.path.join(WORKSPACE, "media", "audit", "thumbnail_stage_3_5_report.json")
-FINAL_THUMB_PATH = os.path.join(WORKSPACE, "media", "thumbnails", "showcase_stage_3_5_yamaguchi_refined.png")
+
+@pytest.fixture
+def test_asset_img(tmp_path):
+    p = str(tmp_path / "test_thumb_asset.jpg")
+    Image.new("RGB", (800, 600), (45, 55, 65)).save(p)
+    return p
 
 
 def test_archetype_detection():
@@ -43,13 +46,13 @@ def test_archetype_detection():
     assert arch4 == StoryArchetype.STRANGE_EVENT
 
 
-def test_candidate_word_limit():
+def test_candidate_word_limit(test_asset_img):
     engine = CreativeThumbnailEngine()
     candidates = engine.create_candidate_proposals(
         topic_title="Tsutomu Yamaguchi",
         topic_summary="Double atomic bomb survivor",
         category="Unbelievable Real-Life Stories",
-        available_assets=[TEST_IMG]
+        available_assets=[test_asset_img]
     )
     assert 3 <= len(candidates) <= 4, "Must generate 3 to 4 candidates"
     for c in candidates:
@@ -85,24 +88,26 @@ def test_evaluation_scoring_and_misleading_penalty():
     assert comp_misleading < comp_clean - 4.0, "Misleading risk penalty must heavily reduce score"
 
 
-def test_end_to_end_thumbnail_generation():
+def test_end_to_end_thumbnail_generation(test_asset_img, tmp_path):
     engine = CreativeThumbnailEngine()
+    final_thumb_path = str(tmp_path / "showcase_stage_3_5_yamaguchi_refined.png")
+    report_path = str(tmp_path / "thumbnail_stage_3_5_report.json")
     winner, report = engine.select_and_render_best_thumbnail(
         topic_title="Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
         topic_summary="Survived Hiroshima and Nagasaki",
         category="Unbelievable Real-Life Stories",
-        available_assets=[TEST_IMG],
-        final_output_path=FINAL_THUMB_PATH,
-        report_output_path=REPORT_PATH
+        available_assets=[test_asset_img],
+        final_output_path=final_thumb_path,
+        report_output_path=report_path
     )
-    assert os.path.exists(FINAL_THUMB_PATH)
-    img = Image.open(FINAL_THUMB_PATH)
+    assert os.path.exists(final_thumb_path)
+    img = Image.open(final_thumb_path)
     assert img.size == (1080, 1920), f"Expected 1080x1920, got {img.size}"
     assert winner.score.composite_score >= 9.0
     assert 2 <= winner.word_count <= 4
 
-    assert os.path.exists(REPORT_PATH)
-    with open(REPORT_PATH, "r", encoding="utf-8") as f:
+    assert os.path.exists(report_path)
+    with open(report_path, "r", encoding="utf-8") as f:
         rep = json.load(f)
     assert rep["winner_candidate_id"] == winner.id
     assert rep["safe_zone_compliance"]["passed"] is True

@@ -1,0 +1,29 @@
+{
+  "cleanup_timestamp": "2026-11-10T22:29:46.582142+00:00",
+  "sqlite_backup_path": "D:\\Agents\\CrazzyDocs\\backend\\backups\\studio_backup_pre_stage_3_21f_ledger_cleanup_20261111_035946.db",
+  "sqlite_backup_size_bytes": 6483968,
+  "sqlite_backup_sha256": "1bd7dd286e6a086dc3156d1d170ae85df5bb9ad2b7adda96f9d02c6e29fd2e97",
+  "deleted_record": {
+    "id": 32,
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "video_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\prod_cycle_4_20261110_1800\\video\\showcase_cycle_4_20261110_1800.mp4",
+    "thumbnail_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\prod_cycle_4_20261110_1800\\thumbnails\\thumb_cycle_4_20261110_1800.png",
+    "metadata_json": "{\"title\": \"The Flight Attendant Who Fell 33,000 Feet Wit... #Shorts\", \"description\": \"She fell over 33,000 feet without a parachute\\u2014and survived to tell the story.\\n\\nThe incredible, true historical story of The Flight Attendant Who Fell 33,000 Feet Wit.... Verified against primary historical documents and public domain archives.\\n\\n\\ud83d\\udcda Historical Source Credits & Public Archives:\\n\\u2022 vesna_archive.jpg \\u2014 Historical Press Archive (Public Domain)\\n\\u2022 dc9_aircraft.jpg \\u2014 Aviation Memorial Registry (CC BY-SA 3.0)\\n\\n\\ud83d\\udd14 Subscribe to CrazzyDocs for incredible true stories and astonishing history!\\n\\n#Shorts #History #CrazzyDocs #DidYouKnow #TrueStory #Documentary\", \"tags\": [\"shorts\", \"crazzydocs\", \"history\", \"true story\", \"documentary\", \"curiosity\", \"did you know\", \"unbelievable history\", \"vesna vulovic\", \"jat flight 367\", \"guinness world record\", \"aviation history\"], \"hashtags\": [\"#Shorts\", \"#History\", \"#CrazzyDocs\", \"#TrueStory\"], \"category_id\": \"27\", \"default_language\": \"en\", \"default_audio_language\": \"en\", \"attribution_text\": \"\\u2022 vesna_archive.jpg \\u2014 Historical Press Archive (Public Domain)\\n\\u2022 dc9_aircraft.jpg \\u2014 Aviation Memorial Registry (CC BY-SA 3.0)\", \"pinned_comment\": \"What part of this incredible story surprised you most? Let us know below! \\ud83d\\udc47\"}",
+    "youtube_video_id": "4DCas1e4vHI",
+    "upload_status": "uploaded_private",
+    "visibility": "private",
+    "video_hash": "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67",
+    "upload_timestamp": "2026-11-10T15:12:04.679658Z",
+    "scheduled_timestamp": null,
+    "error_details": null
+  },
+  "reason": "Operator authorized permanent deletion of incorrectly titled/mismatched YouTube Short (Stage 3.21F)",
+  "post_cleanup_state": {
+    "active_publishing_ledger_count": 0,
+    "historical_archive_count": 253,
+    "deleted_video_audit_count": 1,
+    "active_pending_queue": 0,
+    "verified_private_uploads": 0,
+    "public_uploads": 0
+  }
+}

@@ -52,6 +52,10 @@ def clean_test_db():
         db_session.query(JobModel).filter(JobModel.date_str == test_date).delete()
         db_session.commit()
 
+    with SessionLocal() as db_session:
+        db_session.query(JobModel).filter(JobModel.date_str == test_date).delete()
+        db_session.commit()
+
 
 def test_laptop_starts_at_0100(clean_test_db):
     """Simulates laptop starting at 01:00 IST (within Cycle 1 recovery window 00:00-04:00)."""
@@ -187,10 +191,14 @@ def test_internet_outage_past_recovery_window(clean_test_db):
 def test_checkpoint_resumption_skips_completed_stages(clean_test_db):
     """Verifies that an interrupted job resumes from checkpoint without re-rendering."""
     job_id = "test_checkpoint_job_001"
-    existing_video = os.path.join(r"D:\Agents\CrazzyDocs\media\productions\prod_cycle_4_20261110_1800\video\showcase_cycle_4_20261110_1800.mp4")
-    if not os.path.exists(existing_video):
-        existing_video = os.path.join(r"D:\Agents\CrazzyDocs\media\video\showcase_stage_3_4_tsutomu_yamaguchi.mp4")
-    existing_thumb = os.path.join(r"D:\Agents\CrazzyDocs\media\thumbnails\showcase_stage_3_9a_yamaguchi_poster.png")
+    test_tmp_dir = os.path.join(r"D:\Agents\CrazzyDocs\media", "_test_tmp")
+    os.makedirs(test_tmp_dir, exist_ok=True)
+    existing_video = os.path.join(test_tmp_dir, "test_checkpoint_video.mp4")
+    with open(existing_video, "wb") as f:
+        f.write(b"\x00" * 4096)
+    existing_thumb = os.path.join(test_tmp_dir, "test_checkpoint_thumb.png")
+    from PIL import Image
+    Image.new("RGB", (1080, 1920), (30, 30, 30)).save(existing_thumb)
 
     # Seed an interrupted job with Stage 4 and Stage 9 already completed
     with SessionLocal() as db_session:
@@ -226,11 +234,16 @@ def test_checkpoint_resumption_skips_completed_stages(clean_test_db):
         test_dir = os.path.join(r"D:\Agents\CrazzyDocs\media\productions", job_id)
         if os.path.exists(test_dir):
             shutil.rmtree(test_dir, ignore_errors=True)
-        # Clean test ledger entry so clean production slate is preserved
+        if os.path.exists(test_tmp_dir):
+            shutil.rmtree(test_tmp_dir, ignore_errors=True)
+        shutil.rmtree(r"D:\Agents\CrazzyDocs\media\audit", ignore_errors=True)
+        shutil.rmtree(r"D:\Agents\CrazzyDocs\media\thumbnails", ignore_errors=True)
+        # Clean test ledger entry and job record so clean production slate is preserved
         import sqlite3
         conn = sqlite3.connect(r"D:\Agents\CrazzyDocs\backend\studio.db")
         cur = conn.cursor()
-        cur.execute("DELETE FROM publishing_ledger WHERE id > 32 AND topic_title = 'Tsutomu Yamaguchi Resumed Story'")
+        cur.execute("DELETE FROM publishing_ledger WHERE topic_title = 'Tsutomu Yamaguchi Resumed Story'")
+        cur.execute("DELETE FROM persistent_jobs WHERE id = ?", (job_id,))
         conn.commit()
         conn.close()
 
