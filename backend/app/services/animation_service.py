@@ -21,9 +21,13 @@ from PIL import Image, ImageDraw, ImageFont
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE_DIR = r"D:\AI Arts\AI"
+BASE_DIR = r"D:\Agents\CrazzyDocs"
 SPRITES_DIR = os.path.join(BASE_DIR, "assets", "characters", "host", "sprites")
+if not os.path.exists(SPRITES_DIR):
+    SPRITES_DIR = os.path.join(BASE_DIR, "archive", "legacy_assets", "characters", "host", "sprites")
 BG_DIR = os.path.join(BASE_DIR, "assets", "backgrounds", "rendered")
+if not os.path.exists(BG_DIR):
+    BG_DIR = os.path.join(BASE_DIR, "archive", "legacy_assets", "backgrounds", "rendered")
 SFX_DIR = os.path.join(BASE_DIR, "assets", "audio", "sfx")
 MUSIC_DIR = os.path.join(BASE_DIR, "assets", "audio", "music")
 MEDIA_VIDEO_DIR = os.path.join(BASE_DIR, "media", "video")
@@ -252,7 +256,10 @@ def render_animation(
     t_load = time.time()
     
     char_rig = OptimizedCharacterRig(SPRITES_DIR)
-    bg_img = Image.open(os.path.join(BG_DIR, "bg_space.png")).convert("RGBA")
+    new_bg = os.path.join(BASE_DIR, "assets", "backgrounds", "pop_info", "bg_warm_cream.png")
+    legacy_bg = os.path.join(BG_DIR, "bg_space.png")
+    bg_path = new_bg if os.path.exists(new_bg) else legacy_bg
+    bg_img = Image.open(bg_path).convert("RGBA")
     particles = FastParticleSystem(30)
     
     try:

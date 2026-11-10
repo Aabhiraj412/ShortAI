@@ -3,7 +3,7 @@
     Starts the unified AI YouTube Shorts Studio server (FastAPI + React Dashboard).
 #>
 $ErrorActionPreference = "Stop"
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 Set-Location $baseDir
 
 Write-Host "============================================================" -ForegroundColor Cyan
@@ -19,6 +19,6 @@ $env:NPM_CONFIG_CACHE = "$baseDir\cache\npm"
 $env:TEMP = "$baseDir\cache\temp"
 $env:TMP = "$baseDir\cache\temp"
 $env:PYTHONPATH = "$baseDir\backend"
-$env:PATH = "$baseDir\python-env\Scripts;$baseDir\tools\nodejs;$baseDir\tools\ffmpeg\bin;$baseDir\tools\uv;$baseDir\tools\python;$env:PATH"
+$env:PATH = "$baseDir\.venv\Scripts;$baseDir\tools\nodejs;$baseDir\tools\ffmpeg\bin;$baseDir\tools\uv;$baseDir\tools\python;$env:PATH"
 
 & "$baseDir\tools\python\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000

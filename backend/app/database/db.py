@@ -8,7 +8,7 @@ from typing import Generator
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
-BASE_DIR = r"D:\AI Arts\AI"
+from backend.app.core.paths import PROJECT_ROOT_STR as BASE_DIR
 DB_PATH = os.path.join(BASE_DIR, "backend", "studio.db")
 SQLITE_URL = f"sqlite:///{DB_PATH}"
 
@@ -58,6 +58,13 @@ class JobModel(Base):
     youtube_video_id = Column(String(100), nullable=True)
     scheduled_publication_time = Column(String(50), default="10:00 AM IST")
     publishing_mode = Column(String(50), default="MANUAL_APPROVAL")
+
+    # Stage 3.10 Resilient Recovery & Slot Management
+    recovery_reason = Column(String(100), nullable=True) # STARTUP_RECONCILIATION, INTERNET_RESTORED, CHECKPOINT_RESUMED
+    recovery_policy = Column(String(50), default="CATCH_UP") # STRICT_WINDOW, CATCH_UP
+    original_target_pub = Column(String(100), nullable=True)
+    revised_target_pub = Column(String(100), nullable=True)
+    actual_start_at = Column(DateTime, nullable=True)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -143,20 +150,72 @@ class MediaAssetModel(Base):
     asset_id = Column(String(100), unique=True, index=True)
     title = Column(String(255), nullable=False)
     creator = Column(String(255), nullable=True)
-    source_repository = Column(String(100), nullable=False)
+    source_repository = Column(String(100), nullable=False)  # Openverse, Wikimedia, NASA
     source_url = Column(String(500), nullable=False)
     download_url = Column(String(500), nullable=False)
-    license_id = Column(String(50), nullable=False)
+    license_id = Column(String(50), nullable=False)          # CC0, Public Domain, CC BY 4.0
     license_url = Column(String(500), nullable=True)
     attribution_text = Column(Text, nullable=False)
     local_path = Column(String(500), nullable=True)
-    asset_hash = Column(String(100), nullable=True)
+    portrait_path = Column(String(500), nullable=True)
+    asset_hash = Column(String(100), nullable=True, index=True)
+    mime_type = Column(String(50), nullable=True)
+    file_size_bytes = Column(Integer, default=0)
     width = Column(Integer, default=0)
     height = Column(Integer, default=0)
-    verification_status = Column(String(50), default="VERIFIED")
+    aspect_ratio = Column(Float, default=1.0)
+    relevance_score = Column(Float, default=0.0)
+    search_query = Column(String(255), nullable=True)
+    verification_status = Column(String(50), default="APPROVED")  # APPROVED, REJECTED, PENDING
+    rejection_reason = Column(Text, nullable=True)
     job_id = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class PersistentNotificationModel(Base):
+    """
+    Persistent notification ledger for cycle summaries, daily digests, and alerts.
+    Enforces idempotency, restart survival, and delivery status tracking.
+    """
+    __tablename__ = "persistent_notifications"
+
+    id = Column(String(100), primary_key=True)  # notification_id
+    job_id = Column(String(100), index=True, nullable=True)
+    cycle_id = Column(String(50), index=True, nullable=True)
+    notification_type = Column(String(50), default="CYCLE_SUMMARY") # CYCLE_SUMMARY, DAILY_DIGEST, ALERT
+    recipient = Column(String(255), nullable=False)
+    status = Column(String(50), default="PENDING", index=True) # PENDING, SENT, FAILED, SUPPRESSED
+    attempt_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    idempotency_key = Column(String(255), unique=True, index=True, nullable=False)
+    subject = Column(String(500), nullable=False)
+    body_plain = Column(Text, nullable=False)
+    body_html = Column(Text, nullable=True)
+    payload_json = Column(Text, default="{}")
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Safe migration for Stage 3.10 persistent_jobs columns
+    try:
+        import sqlite3
+        con = sqlite3.connect(DB_PATH)
+        cur = con.cursor()
+        cur.execute("PRAGMA table_info(persistent_jobs)")
+        existing_cols = {row[1] for row in cur.fetchall()}
+        
+        new_cols = [
+            ("recovery_reason", "VARCHAR(100)"),
+            ("recovery_policy", "VARCHAR(50) DEFAULT 'CATCH_UP'"),
+            ("original_target_pub", "VARCHAR(100)"),
+            ("revised_target_pub", "VARCHAR(100)"),
+            ("actual_start_at", "DATETIME"),
+        ]
+        for col_name, col_type in new_cols:
+            if col_name not in existing_cols:
+                cur.execute(f"ALTER TABLE persistent_jobs ADD COLUMN {col_name} {col_type}")
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"Migration note: {e}")
     print("Database tables initialized successfully.")

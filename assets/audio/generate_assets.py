@@ -8,8 +8,8 @@ import struct
 import wave
 
 SAMPLE_RATE = 44100
-MUSIC_DIR = r"D:\AI Arts\AI\assets\audio\music"
-SFX_DIR = r"D:\AI Arts\AI\assets\audio\sfx"
+MUSIC_DIR = r"D:\Agents\CrazzyDocs\assets\audio\music"
+SFX_DIR = r"D:\Agents\CrazzyDocs\assets\audio\sfx"
 
 os.makedirs(MUSIC_DIR, exist_ok=True)
 os.makedirs(SFX_DIR, exist_ok=True)

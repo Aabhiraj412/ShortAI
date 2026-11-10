@@ -21,8 +21,8 @@ from backend.app.rendering.types import RenderTelemetry, SegmentResult
 logger = logging.getLogger(__name__)
 
 EDGE_DEFAULT_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-FFMPEG_DEFAULT_PATH = r"D:\AI Arts\AI\tools\ffmpeg\bin\ffmpeg.exe"
-PROFILE_DIR_DEFAULT = r"D:\AI Arts\AI\cache\edge_canvas_profile"
+FFMPEG_DEFAULT_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffmpeg.exe"
+PROFILE_DIR_DEFAULT = r"D:\Agents\CrazzyDocs\cache\edge_canvas_profile"
 
 
 class BrowserCanvasRunner:

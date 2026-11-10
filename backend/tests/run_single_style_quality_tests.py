@@ -25,7 +25,7 @@ import sys
 import time
 from PIL import Image, ImageDraw
 
-sys.path.insert(0, r"D:\AI Arts\AI")
+sys.path.insert(0, r"D:\Agents\CrazzyDocs")
 
 from backend.app.rendering.engines.browser_canvas.runner import BrowserCanvasRunner
 from backend.app.rendering.compositing.compositor import UniversalCompositor
@@ -36,7 +36,7 @@ from backend.app.services.tts_service import generate_narration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("SingleStyleQualitySuite")
 
-WORKSPACE_ROOT = r"D:\AI Arts\AI"
+WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
 WORKSPACE_URL = WORKSPACE_ROOT.replace("\\", "/")
 MEDIA_DIR = os.path.join(WORKSPACE_ROOT, "media")
 AUDIT_DIR = os.path.join(MEDIA_DIR, "audit")

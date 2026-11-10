@@ -1,0 +1,60 @@
+{
+  "title": "prod_55sec_narr",
+  "duration_sec": 57.528,
+  "full_text": "The first three seconds of your YouTube Short decide whether viewers watch or swipe away forever. Every single microsecond of hesitation destroys your audience retention before the story even begins. The fatal mistake that quietly ruins ninety percent of channels is the slow, polite introduction. Never greet your audience, explain who you are, or ask them to subscribe upfront. Instead, plunge straight into the visual conflict, open an irresistible curiosity gap, and deliberately withhold the payoff. Audience velocity is the lifeblood of mobile engagement. Frame every concept with continuous visual progression, zero dead air, and high-impact typography. When viewers watch past forty seconds, the YouTube recommendation algorithm notices the massive retention surge, triggering viral distribution across millions of feeds. Hold their attention, reward their curiosity, and subscribe now for daily viral storytelling masterclasses!",
+  "segments": [
+    {
+      "emotion": "neutral",
+      "text": "The first three seconds of your YouTube Short decide whether viewers watch or swipe away forever. Every single microsecond of hesitation destroys your audience retention before the story even begins. The fatal mistake that quietly ruins ninety percent of channels is the slow, polite introduction. Never greet your audience, explain who you are, or ask them to subscribe upfront. Instead, plunge straight into the visual conflict, open an irresistible curiosity gap, and deliberately withhold the payoff. Audience velocity is the lifeblood of mobile engagement. Frame every concept with continuous visual progression, zero dead air, and high-impact typography. When viewers watch past forty seconds, the YouTube recommendation algorithm notices the massive retention surge, triggering viral distribution across millions of feeds. Hold their attention, reward their curiosity, and subscribe now for daily viral storytelling masterclasses!",
+      "start_sec": 0.0,
+      "duration_sec": 57.53
+    }
+  ],
+  "word_cues": [
+    {
+      "start": 0.1,
+      "end": 5.62,
+      "text": "The first three seconds of your YouTube Short decide whether viewers watch or swipe away forever."
+    },
+    {
+      "start": 5.58,
+      "end": 11.9,
+      "text": "Every single microsecond of hesitation destroys your audience retention before the story even begins."
+    },
+    {
+      "start": 11.9,
+      "end": 17.75,
+      "text": "The fatal mistake that quietly ruins ninety percent of channels is the slow, polite introduction."
+    },
+    {
+      "start": 17.75,
+      "end": 22.93,
+      "text": "Never greet your audience, explain who you are, or ask them to subscribe upfront."
+    },
+    {
+      "start": 22.93,
+      "end": 30.79,
+      "text": "Instead, plunge straight into the visual conflict, open an irresistible curiosity gap, and deliberately withhold the payoff."
+    },
+    {
+      "start": 30.79,
+      "end": 34.84,
+      "text": "Audience velocity is the lifeblood of mobile engagement."
+    },
+    {
+      "start": 34.84,
+      "end": 41.17,
+      "text": "Frame every concept with continuous visual progression, zero dead air, and high-impact typography."
+    },
+    {
+      "start": 41.17,
+      "end": 50.77,
+      "text": "When viewers watch past forty seconds, the YouTube recommendation algorithm notices the massive retention surge, triggering viral distribution across millions of feeds."
+    },
+    {
+      "start": 50.77,
+      "end": 57.48,
+      "text": "Hold their attention, reward their curiosity, and subscribe now for daily viral storytelling masterclasses!"
+    }
+  ]
+}

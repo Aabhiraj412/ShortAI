@@ -133,3 +133,22 @@ playwright-report/
 
 # Preserve intentional placeholders
 !.gitkeep
+
+# Downloaded media library files (preserve folder structure, ignore large binaries)
+assets/media_library/images/*
+!assets/media_library/images/.gitkeep
+assets/media_library/portrait/*
+!assets/media_library/portrait/.gitkeep
+
+
+# Local secret credentials (never commit)
+.env.local
+
+# Production runs, isolation dirs and quarantine
+media/productions/
+media/quarantine/
+media/email_previews/
+media/thumbnails/
+media/images/
+media/source/
+tools/

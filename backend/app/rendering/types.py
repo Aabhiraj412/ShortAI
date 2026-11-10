@@ -99,3 +99,5 @@ class StoryboardPlan:
     ducking_db: float = -14.0
     subtitles_ass_path: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    include_crazzydocs_outro: bool = True
+    crazzydocs_outro_path: Optional[str] = None

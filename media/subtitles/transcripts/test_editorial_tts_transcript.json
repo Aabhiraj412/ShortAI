@@ -1,0 +1,42 @@
+{
+  "title": "test_editorial_tts",
+  "duration_sec": 13.896,
+  "full_text": "The company lost almost five hundred million dollars because of one accounting mistake. For six months, internal auditors suspected nothing. Then federal investigators examined the spreadsheets.",
+  "segments": [
+    {
+      "emotion": "curious",
+      "text": "The company lost almost five hundred million dollars because of one accounting mistake.",
+      "start_sec": 0.0,
+      "duration_sec": 5.16
+    },
+    {
+      "emotion": "suspenseful",
+      "text": "For six months, internal auditors suspected nothing.",
+      "start_sec": 5.16,
+      "duration_sec": 4.51
+    },
+    {
+      "emotion": "dramatic",
+      "text": "Then federal investigators examined the spreadsheets.",
+      "start_sec": 9.67,
+      "duration_sec": 4.22
+    }
+  ],
+  "word_cues": [
+    {
+      "start": 0.1,
+      "end": 5.16,
+      "text": "The company lost almost five hundred million dollars because of one accounting mistake."
+    },
+    {
+      "start": 5.26,
+      "end": 9.66,
+      "text": "For six months, internal auditors suspected nothing."
+    },
+    {
+      "start": 9.77,
+      "end": 13.89,
+      "text": "Then federal investigators examined the spreadsheets."
+    }
+  ]
+}

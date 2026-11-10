@@ -2,7 +2,7 @@
 .SYNOPSIS
     Scans for interrupted or stalled jobs and resets them for safe resumption.
 #>
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 Set-Location $baseDir
 
 $env:PYTHONPATH = "$baseDir\backend"

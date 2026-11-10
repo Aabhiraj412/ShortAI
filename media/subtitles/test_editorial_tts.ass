@@ -1,0 +1,18 @@
+[Script Info]
+Title: CrazzyDocs Editorial Text (pop_info)
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: EditorialPrimary,Fredoka,82,&H000AD6FF,&H00FFFFFF,&H002A2A1D,&H90000000,-1,0,0,0,100,100,2,0,1,6,4,2,80,80,430,1
+Style: EditorialAlert,Fredoka,86,&H004D4DFF,&H00FFFFFF,&H00101010,&HA0000000,-1,0,0,0,100,100,2,0,1,7,4,2,80,80,430,1
+Style: EditorialMetric,Fredoka,84,&H005EC522,&H00FFFFFF,&H00101010,&HA0000000,-1,0,0,0,100,100,2,0,1,6,4,2,80,80,430,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.30,0:00:02.80,EditorialAlert,,0,0,0,,MILLION DOLLARS LOST
+Dialogue: 0,0:00:05.46,0:00:07.94,EditorialPrimary,,0,0,0,,SIX MONTHS INTERNAL
+Dialogue: 0,0:00:09.97,0:00:12.30,EditorialPrimary,,0,0,0,,THEN FEDERAL INVESTIGATORS

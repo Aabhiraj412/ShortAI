@@ -1,12 +1,12 @@
 # Session Environment Configuration for AI Studio
 # Dot-source this in any PowerShell terminal: . .\env.ps1
 
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 $toolsDir = Join-Path $baseDir "tools"
 $pyBase = Join-Path $toolsDir "python\cpython-3.11.11-windows-x86_64-none"
 
 $pathsToAdd = @(
-    (Join-Path $baseDir "python-env\Scripts"),
+    (Join-Path $baseDir ".venv\Scripts"),
     $pyBase,
     (Join-Path $pyBase "Scripts"),
     (Join-Path $toolsDir "uv"),

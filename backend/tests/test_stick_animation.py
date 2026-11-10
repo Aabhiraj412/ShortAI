@@ -8,7 +8,7 @@ import os
 import sys
 import time
 
-BASE_DIR = r"D:\AI Arts\AI"
+BASE_DIR = r"D:\Agents\CrazzyDocs"
 sys.path.append(os.path.join(BASE_DIR, "backend"))
 
 from app.services.stick_animation_service import (
@@ -62,7 +62,10 @@ def test_single_frame():
     print("=== TEST 1: Stick Figure Single Frame ===", flush=True)
     t0 = time.time()
     stick_rig = StickFigureRig()
-    bg_img = Image.open(os.path.join(BASE_DIR, "assets", "backgrounds", "rendered", "bg_space.png")).convert("RGBA")
+    chalk_bg = os.path.join(BASE_DIR, "assets", "backgrounds", "chalk_talk", "bg_slate_blackboard.png")
+    legacy_bg = os.path.join(BASE_DIR, "archive", "legacy_assets", "backgrounds", "rendered", "bg_space.png")
+    bg_path = chalk_bg if os.path.exists(chalk_bg) else legacy_bg
+    bg_img = Image.open(bg_path).convert("RGBA")
     try:
         font_large = ImageFont.truetype("arialbd.ttf", 52)
         font_badge = ImageFont.truetype("arialbd.ttf", 36)

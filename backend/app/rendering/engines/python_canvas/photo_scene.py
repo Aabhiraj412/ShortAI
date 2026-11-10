@@ -17,7 +17,7 @@ from backend.app.rendering.types import RenderTelemetry, SegmentResult
 
 logger = logging.getLogger(__name__)
 
-FFMPEG_DEFAULT_PATH = r"D:\AI Arts\AI\tools\ffmpeg\bin\ffmpeg.exe"
+FFMPEG_DEFAULT_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffmpeg.exe"
 
 
 class PhotoSceneRenderer:

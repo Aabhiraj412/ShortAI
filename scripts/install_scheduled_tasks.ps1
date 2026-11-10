@@ -3,7 +3,7 @@
     Installs the Windows Task Scheduler task for daily production at 11:00 PM IST.
 #>
 $taskName = "AIShortsStudio_DailyProduction"
-$scriptPath = "D:\AI Arts\AI\scripts\start_daily_pipeline.ps1"
+$scriptPath = "D:\Agents\CrazzyDocs\scripts\start_daily_pipeline.ps1"
 $actionCmd = "powershell.exe"
 $actionArgs = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
 

@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE_DIR = r"D:\AI Arts\AI"
+BASE_DIR = r"D:\Agents\CrazzyDocs"
 MEDIA_VIDEO_DIR = os.path.join(BASE_DIR, "media", "video")
 THUMB_DIR = os.path.join(BASE_DIR, "thumbnails", "output")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
@@ -339,7 +339,10 @@ def render_stick_animation(
     t0 = time.time()
     
     stick_rig = StickFigureRig()
-    bg_img = Image.open(os.path.join(BASE_DIR, "assets", "backgrounds", "rendered", "bg_space.png")).convert("RGBA")
+    chalk_bg = os.path.join(BASE_DIR, "assets", "backgrounds", "chalk_talk", "bg_slate_blackboard.png")
+    legacy_bg = os.path.join(BASE_DIR, "assets", "backgrounds", "rendered", "bg_space.png")
+    bg_to_open = chalk_bg if os.path.exists(chalk_bg) else legacy_bg
+    bg_img = Image.open(bg_to_open).convert("RGBA")
     
     try:
         font_large = ImageFont.truetype("arialbd.ttf", 52)

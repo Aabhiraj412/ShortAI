@@ -14,8 +14,8 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-FFMPEG_DEFAULT_PATH = r"D:\AI Arts\AI\tools\ffmpeg\bin\ffmpeg.exe"
-FFPROBE_DEFAULT_PATH = r"D:\AI Arts\AI\tools\ffmpeg\bin\ffprobe.exe"
+FFMPEG_DEFAULT_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffmpeg.exe"
+FFPROBE_DEFAULT_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffprobe.exe"
 
 
 class FrameValidator:

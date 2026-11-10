@@ -1,0 +1,235 @@
+[
+  {
+    "topic_id": "topic_hist_001_bank",
+    "topic_title": "The Man Who Bought an Entire Bank for ",
+    "opening_hook": "The man who bought an entire bank for one single dollar.",
+    "main_subject": "Collapse and acquisition of Barings Bank by ING in 1995",
+    "key_entities": [
+      "Barings Bank",
+      "Nick Leeson",
+      "ING",
+      "Bank of England"
+    ],
+    "script_fingerprint": "0cb0fb3768df5b88a54cf25ae8fdfcf11b5a8e60310154fdf0386fcfb2562e05",
+    "category": "Business & Global Economics",
+    "visual_style": "pop_info",
+    "created_at": "2026-11-10T09:00:00",
+    "publication_status": "archived"
+  },
+  {
+    "topic_id": "topic_hist_002_moon",
+    "topic_title": "Why Does the Moon Not Fall to Earth?",
+    "opening_hook": "The Moon is constantly falling directly toward Earth right now.",
+    "main_subject": "Orbital mechanics and perpetual free fall",
+    "key_entities": [
+      "Moon",
+      "Earth",
+      "Newton",
+      "Orbital Velocity",
+      "Gravity"
+    ],
+    "script_fingerprint": "ecdc68cadec4fcf631c89c75470ba460d3420387cbf2f48ca940c432075a7266",
+    "category": "Space & Astrophysics",
+    "visual_style": "chalk_talk",
+    "created_at": "2026-11-10T07:00:00",
+    "publication_status": "archived"
+  },
+  {
+    "topic_id": "topic_hist_003_solar",
+    "topic_title": "Why Solar Energy Became the Cheapest Power in History",
+    "opening_hook": "Solar power just became the cheapest source of electricity in human history.",
+    "main_subject": "Swanson's Law and photovoltaic cost reduction",
+    "key_entities": [
+      "Solar",
+      "Swanson's Law",
+      "Photovoltaics",
+      "LCOE"
+    ],
+    "script_fingerprint": "943322a6a4ce7295c33750db2b09059f0b4983d9abd8187888afe48e915135f6",
+    "category": "Business & Global Economics",
+    "visual_style": "data_story",
+    "created_at": "2026-11-10T06:00:00",
+    "publication_status": "archived"
+  },
+  {
+    "topic_id": "topic_hist_004_baby",
+    "topic_title": "Why You Can't Remember Being a Baby",
+    "opening_hook": "You have completely lost every single memory from your first three years of life.",
+    "main_subject": "Infantile amnesia and hippocampal neurogenesis",
+    "key_entities": [
+      "Infantile Amnesia",
+      "Neurogenesis",
+      "Hippocampus",
+      "Memory"
+    ],
+    "script_fingerprint": "49e98a4281cb92d149c69ab9a2b6421072860d5e1ad092d0501c02b2b0c33c04",
+    "category": "Human Psychology & Paradoxes",
+    "visual_style": "pop_info",
+    "created_at": "2026-11-10T05:00:00",
+    "publication_status": "archived"
+  },
+  {
+    "topic_id": "topic_stage_3_2_marathon",
+    "topic_title": "The 1904 Olympic Marathon: The Wildest Race in History",
+    "opening_hook": "[Curious] In 1904, an Olympic runner won gold using rat poison and brandy.",
+    "main_subject": "1904 Olympic Marathon",
+    "key_entities": [
+      "1904 Olympics",
+      "Thomas Hicks",
+      "Strychnine",
+      "Felix Carvajal",
+      "Len Tau"
+    ],
+    "script_fingerprint": "5194c7bfbb8deb86ebb5ecd830e3ed4dff68f1c0cdf45172ed6ab8c44395d23e",
+    "category": "Ancient History & Mysteries",
+    "visual_style": "pop_info",
+    "created_at": "2026-11-10T10:12:50.716239",
+    "publication_status": "approved"
+  },
+  {
+    "topic_id": "topic_stage_3_3_molasses_flood",
+    "topic_title": "The Great Molasses Flood of 1919 \u2014 When a Wave of Molasses Destroyed a City",
+    "opening_hook": "In January 1919, a two-million-gallon wave of molasses swallowed downtown Boston.",
+    "main_subject": "Great Molasses Flood of 1919 (Boston, MA)",
+    "key_entities": [
+      "Purity Distilling Co",
+      "USIA",
+      "North End Boston",
+      "Hugh W Ogden",
+      "Professional Engineer"
+    ],
+    "script_fingerprint": "cfb675192a72697831610de504b60be0414436a59a27cb20c58d025597a317f7",
+    "category": "untold_history",
+    "visual_style": "data_story",
+    "created_at": "2026-11-10T17:04:54.267251",
+    "publication_status": "approved"
+  },
+  {
+    "topic_id": "topic_stage_3_4_yamaguchi",
+    "topic_title": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
+    "opening_hook": "He survived the atomic blast in Hiroshima. Three days later, he was in Nagasaki.",
+    "main_subject": "Tsutomu Yamaguchi",
+    "key_entities": [
+      "Tsutomu Yamaguchi",
+      "Hiroshima",
+      "Nagasaki",
+      "Little Boy",
+      "Fat Man",
+      "Hibakusha",
+      "Mitsubishi"
+    ],
+    "script_fingerprint": "ecbaa1d517a93e8560ca467a44e7220cc0fa6a7bb1d6dad0ddc8836b477a2732",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T12:41:31.722451Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_cycle_4_20261110_1800",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "The unbelievable documented story of The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [
+      "Vesna Vulovic",
+      "JAT Flight 367",
+      "Czechoslovakia",
+      "Srbska Kamenice",
+      "Guinness World Record"
+    ],
+    "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T14:44:23.857221Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_interrupted_render_job",
+    "topic_title": "The Demon Core",
+    "opening_hook": "The 14-pound plutonium sphere.",
+    "main_subject": "The Demon Core",
+    "key_entities": [],
+    "script_fingerprint": "ff253e2b307582238899616bfa35d37ea81b26d1209327fcf01be658be64f8d4",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T14:59:20.191480Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_interrupted_tts_job",
+    "topic_title": "Interrupted TTS Story",
+    "opening_hook": "Audio checkpoint test hook.",
+    "main_subject": "Interrupted TTS Story",
+    "key_entities": [],
+    "script_fingerprint": "e19be7aa4d0308cf209e3e3ac01483cd9b8a414b39277748abe403b3183e9c1e",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T14:59:23.555093Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_prod_stage_3_16_verification",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "The unbelievable documented story of The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [
+      "Vesna Vulovic",
+      "JAT Flight 367",
+      "Czechoslovakia",
+      "Srbska Kamenice",
+      "Guinness World Record"
+    ],
+    "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T17:37:06.643130Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_auto_job_001",
+    "topic_title": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
+    "opening_hook": "He survived the atomic blast in Hiroshima. Three days later, he was in Nagasaki.",
+    "main_subject": "Tsutomu Yamaguchi: The Man Who Survived Both Atomic Bombs",
+    "key_entities": [
+      "Tsutomu Yamaguchi",
+      "Hiroshima",
+      "Nagasaki",
+      "Mitsubishi Heavy Industries",
+      "Atomic Bomb"
+    ],
+    "script_fingerprint": "4ab19655e30b28c81d5c4f80cde033f5323bfd76f093e206fbcdd4ac16598cff",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T17:48:05.588730Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_vesna_integrity_run",
+    "topic_title": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "opening_hook": "The unbelievable documented story of The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived.",
+    "main_subject": "The Flight Attendant Who Fell 33,000 Feet Without a Parachute and Survived",
+    "key_entities": [
+      "Vesna Vulovic",
+      "JAT Flight 367",
+      "Czechoslovakia",
+      "Srbska Kamenice",
+      "Guinness World Record"
+    ],
+    "script_fingerprint": "057d9aa661f800012d4c8435354ff9d6453a35fe95c919066b0ed926225cfd01",
+    "category": "Unbelievable Real-Life Stories",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T17:55:01.829938Z",
+    "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_test_checkpoint_job_001",
+    "topic_title": "Tsutomu Yamaguchi Resumed Story",
+    "opening_hook": "He lived through two nuclear blasts.",
+    "main_subject": "Tsutomu Yamaguchi Resumed Story",
+    "key_entities": [],
+    "script_fingerprint": "c6042594b215e88bf15f776b33c6e6a262537fbb154c223cd8410fe3216da4c0",
+    "category": "history",
+    "visual_style": "historical_documentary",
+    "created_at": "2026-11-10T17:55:20.701937Z",
+    "publication_status": "produced"
+  }
+]

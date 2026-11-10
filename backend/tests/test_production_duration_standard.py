@@ -20,7 +20,7 @@ import time
 from typing import Dict, List
 
 # Setup workspace sys.path
-WORKSPACE_ROOT = r"D:\AI Arts\AI"
+WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
 if WORKSPACE_ROOT not in sys.path:
     sys.path.insert(0, WORKSPACE_ROOT)
 
@@ -52,8 +52,8 @@ VIDEO_DIR = os.path.join(WORKSPACE_ROOT, "media", "video")
 AUDIT_DIR = os.path.join(WORKSPACE_ROOT, "media", "audit")
 SUBTITLE_DIR = os.path.join(WORKSPACE_ROOT, "media", "subtitles")
 AUDIO_DIR = os.path.join(WORKSPACE_ROOT, "media", "audio")
-FFMPEG_PATH = r"D:\AI Arts\AI\tools\ffmpeg\bin\ffmpeg.exe"
-FFPROBE_PATH = r"D:\AI Arts\AI\tools\ffmpeg\bin\ffprobe.exe"
+FFMPEG_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffmpeg.exe"
+FFPROBE_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffprobe.exe"
 
 
 def test_duration_validation_rules():
@@ -92,7 +92,7 @@ def test_duration_validation_rules():
 async def test_scriptwriter_duration_and_structure():
     """Validates that Scriptwriter generates 50-60s scripts with 5-stage storytelling arc."""
     logger.info("--- UNIT TEST 2: Scriptwriter 50-60s & 5-Stage Storytelling Arc ---")
-    writer = Scriptwriter()
+    writer = Scriptwriter(api_key=None)
     topic = {
         "title": "Why Spacetime Curves Around Massive Stars",
         "category": "Physics",

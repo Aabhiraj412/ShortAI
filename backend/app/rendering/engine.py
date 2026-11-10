@@ -26,7 +26,7 @@ from backend.app.rendering.types import (
 
 logger = logging.getLogger(__name__)
 
-WORKSPACE_ROOT = r"D:\AI Arts\AI"
+from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE_ROOT
 STYLES_DIR = os.path.join(WORKSPACE_ROOT, "backend", "app", "rendering", "styles")
 
 
@@ -84,8 +84,10 @@ class HybridVisualEngine:
         elif beat.modality == VisualModality.REAL_PHOTO or beat.modality == VisualModality.CINEMATIC_STILL:
             img_path = beat.params.get("image_path")
             if not img_path or not os.path.exists(img_path):
-                # Fallback to default background
-                img_path = os.path.join(self.workspace_root, "assets", "backgrounds", "rendered", "bg_space.png")
+                # Fallback to high-res style background, then legacy if present
+                new_fallback = os.path.join(self.workspace_root, "assets", "backgrounds", "pop_info", "bg_warm_cream.png")
+                legacy_fallback = os.path.join(self.workspace_root, "assets", "backgrounds", "rendered", "bg_space.png")
+                img_path = new_fallback if os.path.exists(new_fallback) else legacy_fallback
 
             return self.photo_renderer.render_photo_short(
                 scene_id=beat.id,
@@ -97,8 +99,17 @@ class HybridVisualEngine:
             )
 
         elif beat.modality == VisualModality.SPLIT_SCREEN:
-            top_img = beat.params.get("top_image") or os.path.join(self.workspace_root, "assets", "backgrounds", "rendered", "bg_space.png")
-            bot_img = beat.params.get("bottom_image") or os.path.join(self.workspace_root, "assets", "backgrounds", "rendered", "bg_tech_lab.png")
+            top_img = beat.params.get("top_image")
+            if not top_img or not os.path.exists(top_img):
+                new_top = os.path.join(self.workspace_root, "assets", "backgrounds", "data_story", "bg_dark_slate_grid.png")
+                legacy_top = os.path.join(self.workspace_root, "assets", "backgrounds", "rendered", "bg_space.png")
+                top_img = new_top if os.path.exists(new_top) else legacy_top
+
+            bot_img = beat.params.get("bottom_image")
+            if not bot_img or not os.path.exists(bot_img):
+                new_bot = os.path.join(self.workspace_root, "assets", "backgrounds", "creator", "bg_studio_black.png")
+                legacy_bot = os.path.join(self.workspace_root, "assets", "backgrounds", "rendered", "bg_tech_lab.png")
+                bot_img = new_bot if os.path.exists(new_bot) else legacy_bot
 
             return self.split_renderer.render_split_short(
                 scene_id=beat.id,
@@ -150,15 +161,31 @@ class HybridVisualEngine:
             self.compositor.concatenate_segments(video_paths, stitched_video)
 
             # Final audio mix & export
+            narrative_mp4 = os.path.join(work_dir, "narrative_short.mp4") if plan.include_crazzydocs_outro else output_final_mp4
             final_path = self.compositor.mix_and_finalize_short(
                 video_path=stitched_video,
                 voiceover_audio=plan.voiceover_path,
                 sfx_audios=sfx_paths,
                 music_audio=plan.music_track,
-                output_final_mp4=output_final_mp4,
+                output_final_mp4=narrative_mp4,
                 ducking_db=plan.ducking_db,
                 subtitles_ass_path=plan.subtitles_ass_path,
             )
+
+            # Append CrazzyDocs Branded Outro if requested
+            if plan.include_crazzydocs_outro:
+                default_outro = os.path.join(self.workspace_root, "assets", "branding", "crazzydocs", "crazzydocs_outro_1080x1920.mp4")
+                outro_path = plan.crazzydocs_outro_path or default_outro
+                if os.path.exists(outro_path):
+                    final_path = self.compositor.append_branded_outro(
+                        main_video_path=narrative_mp4,
+                        outro_video_path=outro_path,
+                        output_final_path=output_final_mp4,
+                        subtitles_ass_path=plan.subtitles_ass_path,
+                    )
+                else:
+                    logger.warning("CrazzyDocs outro '%s' not found, using narrative video.", outro_path)
+                    final_path = narrative_mp4
 
             t_global_end = time.time()
             total_elapsed = t_global_end - t_global_start

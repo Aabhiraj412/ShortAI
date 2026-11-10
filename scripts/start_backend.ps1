@@ -2,7 +2,7 @@
 .SYNOPSIS
     Starts the FastAPI backend and unified React Dashboard server.
 #>
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 Set-Location $baseDir
 
 $env:UV_CACHE_DIR = "$baseDir\cache\uv"

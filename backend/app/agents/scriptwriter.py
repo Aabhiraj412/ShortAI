@@ -19,8 +19,11 @@ from backend.app.rendering.duration_standards import (
 )
 
 class Scriptwriter:
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or settings.GEMINI_API_KEY
+    def __init__(self, api_key: Optional[str] = "USE_DEFAULT"):
+        if api_key == "USE_DEFAULT":
+            self.api_key = settings.GEMINI_API_KEY
+        else:
+            self.api_key = api_key
         self.client = genai.Client(api_key=self.api_key) if self.api_key else None
 
     def clean_script_text(self, text: str) -> str:

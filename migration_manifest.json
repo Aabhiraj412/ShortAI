@@ -1,0 +1,124 @@
+{
+  "migration_stage": "Stage 3.15",
+  "migrated_at": "2026-11-10T17:26:08.102133+00:00",
+  "source_canonical_previous": "D:\\AI Arts\\AI",
+  "source_preserved_rollback": "D:\\AI Arts\\AI",
+  "destination_canonical_new": "D:\\Agents\\CrazzyDocs",
+  "agent_topology": {
+    "agent_id": "crazzydocs",
+    "agent_name": "CrazzyDocs",
+    "agent_root": "D:\\Agents\\CrazzyDocs",
+    "timezone": "Asia/Kolkata",
+    "publishing_mode": "manual_approval",
+    "future_topology_root": "D:\\Agents"
+  },
+  "python_environment": {
+    "type": ".venv",
+    "python_version": "3.11.9",
+    "path": "D:\\Agents\\CrazzyDocs\\.venv",
+    "package_count": 79,
+    "runtime_tools": {
+      "python": "D:\\Agents\\CrazzyDocs\\tools\\python\\python.exe",
+      "ffmpeg": "D:\\Agents\\CrazzyDocs\\tools\\ffmpeg\\bin\\ffmpeg.exe",
+      "ffprobe": "D:\\Agents\\CrazzyDocs\\tools\\ffmpeg\\bin\\ffprobe.exe",
+      "uv": "D:\\Agents\\CrazzyDocs\\tools\\uv\\uv.exe"
+    }
+  },
+  "statistics": {
+    "total_destination_files": 16217,
+    "total_destination_bytes": 1438520854,
+    "total_destination_mb": 1371.88,
+    "excluded_old_python_env_bytes": 1290000000
+  },
+  "verified_critical_assets": {
+    "backend/studio.db": {
+      "sha256": "92fb750229315cfeb1f99420089c8281738c028c31b4188ea7eb3956717cfd77",
+      "size_bytes": 6483968,
+      "verified": true
+    },
+    "backend/client_secrets.json": {
+      "sha256": "fc8892b51f4e53798b53c494395c300565250c8d63eff2cae2ec516c9870e8e7",
+      "size_bytes": 481,
+      "verified": true
+    },
+    "backend/token.json": {
+      "sha256": "f3164b4906464415f9bba5deea169a04995952ab5aaa5afa6f6aea973871e31d",
+      "size_bytes": 837,
+      "verified": true
+    },
+    ".env.local": {
+      "sha256": "d4dc50be06affdcef316cf2828abed3f0ffefbc305da64be4ce5397695d6697e",
+      "size_bytes": 344,
+      "verified": true
+    },
+    "Youtube Channel Src/Youtube-Icon.png": {
+      "sha256": "65b14bb348376d3b91c62538f91eadfd5e5e36d4109a525af7bb63e817730060",
+      "size_bytes": 1970267,
+      "verified": true
+    },
+    "media/source/branding/crazzydocs_outro_1080x1920.mp4": {
+      "sha256": "b244ba1141b8622a654afca9014a63d5bd97d7630ddf4f3935a37980dec14945",
+      "size_bytes": 534190,
+      "verified": true
+    },
+    "media/video/showcase_stage_3_4_tsutomu_yamaguchi.mp4": {
+      "sha256": "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67",
+      "size_bytes": 19044816,
+      "verified": true
+    },
+    "media/thumbnails/showcase_stage_3_9a_yamaguchi_poster.png": {
+      "sha256": "ec998f4552548bc6a805d0761f776b1b34669f2a4abac1aba4ef0c9de47aca93",
+      "size_bytes": 2338309,
+      "verified": true
+    },
+    "media/productions/prod_cycle_4_20261110_1800/video/showcase_cycle_4_20261110_1800.mp4": {
+      "sha256": "75ca472335dc65c9acba86e3a8ef85c77c576590be2f7a5ce560afa60fa66c67",
+      "size_bytes": 19044816,
+      "verified": true
+    },
+    "media/productions/prod_cycle_4_20261110_1800/thumbnails/thumb_cycle_4_20261110_1800.png": {
+      "sha256": "bb28cde1c3adb78e02fbf63ae3c3dae9fc919c2c0073683783a218b91aff871e",
+      "size_bytes": 2098371,
+      "verified": true
+    },
+    "media/productions/prod_20261110_vesna_vulovic/video/showcase_vesna_vulovic_verified.mp4": {
+      "sha256": "0a172c987505e8488c4f98126faa6000c824f8ed5f7c96b222d3dae9f9187655",
+      "size_bytes": 14925960,
+      "verified": true
+    },
+    "media/productions/prod_20261110_vesna_vulovic/thumbnails/thumb_vesna_vulovic_verified.png": {
+      "sha256": "a4024b3f401b378567e1cf3e04b6c75f943593ff7931cc6e781b64412aa879d5",
+      "size_bytes": 1483617,
+      "verified": true
+    },
+    "docs/reference_styles/pop_info.html": {
+      "sha256": "47080baf5cfd8ce5daa260eb24197a039ecb30d1bb747be190c76ee7134d74ba",
+      "size_bytes": 57474,
+      "verified": true
+    },
+    "docs/reference_styles/chalk_talk.html": {
+      "sha256": "cab7c70ad3fc5da2670d5183061d16d861a83f0ebc0fbafc7e6cfbdeefa5dc59",
+      "size_bytes": 56535,
+      "verified": true
+    },
+    "docs/reference_styles/creator_motion_graphics.html": {
+      "sha256": "a0145a30e8a90b1367e1ecbbe3fa3570498298bc00ab1283ab7bc450f72cbfea",
+      "size_bytes": 73908,
+      "verified": true
+    },
+    "docs/reference_styles/data_story.html": {
+      "sha256": "64748900d49f00a49684aa1b99993cb94ede980d8a5a22735caf0bb7f48ac3f7",
+      "size_bytes": 56250,
+      "verified": true
+    }
+  },
+  "verification_results": {
+    "pytest_regression_suite": "65/65 passed (100%)",
+    "database_integrity": "PRAGMA integrity_check: ok",
+    "youtube_oauth_status": "authenticated=True, can_refresh=True",
+    "private_youtube_record": "4DCas1e4vHI (uploaded_private)",
+    "scheduler_profile": "FOUR_CYCLES_DAILY (4 cycles)",
+    "controlled_rendering_test": "1080x1920 test render successful",
+    "active_runtime_old_path_dependencies": 0
+  }
+}

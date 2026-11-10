@@ -28,7 +28,7 @@ from backend.app.rendering.timeline.narration_timeline import ImpactWordEvent
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ChalkTalkBoundaryAudit")
 
-WORKSPACE_ROOT = r"D:\AI Arts\AI"
+WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
 FFMPEG_PATH = os.path.join(WORKSPACE_ROOT, "tools", "ffmpeg", "bin", "ffmpeg.exe")
 FFPROBE_PATH = os.path.join(WORKSPACE_ROOT, "tools", "ffmpeg", "bin", "ffprobe.exe")
 EDGE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"

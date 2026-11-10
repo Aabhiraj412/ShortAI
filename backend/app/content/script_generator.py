@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 # Banned intro fluff phrases that waste the first 3 seconds
 FORBIDDEN_INTRO_PHRASES = [
     "hey guys", "welcome back", "in this video", "today we are",
-    "today we will", "hello everyone", "did you know that", "have you ever wondered"
+    "today we will", "hello everyone", "did you know that", "have you ever wondered",
+    "welcome to crazzydocs", "welcome to", "today i'm going", "in this short",
+    "today we're going", "hi everyone", "hello guys", "what's up guys", "did you know"
 ]
 
 
@@ -115,15 +117,16 @@ class ScriptGenerator:
                 "Topic explains mathematical and physical laws (gravitational vectors, orbital arcs, Newton's velocity) ideal for progressive hand-drawn chalk diagrams."
             )
 
-        # 3. Pop Info: Everyday psychology, retail curiosities, consumer habits, human biology trivia
+        # 3. Pop Info: Everyday psychology, retail curiosities, consumer habits, human biology trivia, bizarre history
         if (
             "curiosities" in cat_lower or "psychology" in cat_lower or "baby" in title_lower or
             "store" in title_lower or "grocery" in title_lower or "milk" in title_lower or
-            "amnesia" in title_lower or "habit" in title_lower
+            "amnesia" in title_lower or "habit" in title_lower or "marathon" in title_lower or
+            "olympic" in title_lower
         ):
             return (
                 VisualStyle.POP_INFO,
-                "Topic explores everyday human phenomena and cognitive paradoxes, best conveyed through friendly cartoon infographics, expressive characters, and thought bubbles."
+                "Topic explores bizarre human phenomena, historical curiosities, and cognitive paradoxes, best conveyed through friendly cartoon infographics, expressive characters, and thought bubbles."
             )
 
         # 4. Creator Motion Graphics: Algorithms, computer science, high-tech, viral workflows
@@ -289,7 +292,50 @@ class ScriptGenerator:
         """
         title_lower = title.lower()
 
-        if "moon" in title_lower and "fall" in title_lower:
+        if "molasses" in title_lower or "1919" in title_lower or "boston flood" in title_lower:
+            hook = "[Curious] In January 1919, a two-million-gallon wave of molasses swallowed downtown Boston."
+            context = "[Suspenseful] Standing fifty feet tall, the Purity Distilling steel tank leaked so badly from its rivets that the company painted it brown just to hide the leaks."
+            main_expl = (
+                "[Dramatic] When rapid warming accelerated fermentation, internal carbon dioxide pressure surged. "
+                "Rivets exploded like machine guns, unleashing a twenty-five-foot wave surging at thirty-five miles per hour! "
+                "[Serious] The immense kinetic force crushed buildings, ripped the elevated railway, and trapped hundreds in waist-deep sludge. "
+                "Twenty-one died and one hundred fifty were injured."
+            )
+            payoff = (
+                "[Surprised] The company blamed anarchist bombers, but engineering investigations proved the steel was half as thick as safety required—a total failure of corporate oversight."
+            )
+            closing = "[Emphatic] Victims won a landmark settlement, and Massachusetts passed the first law requiring licensed engineers to sign all building blueprints. Follow CrazzyDocs for more wild history!"
+
+        elif "marathon" in title_lower or "1904" in title_lower or "olympic" in title_lower:
+            hook = "[Curious] In 1904, an Olympic runner won gold using rat poison and brandy."
+            context = "[Suspenseful] The St. Louis marathon was a ninety-degree nightmare with only one water station across twenty-six dust-choked miles."
+            main_expl = (
+                "[Serious] Only fourteen of thirty-two competitors finished alive. "
+                "One runner was chased a mile off course into a cornfield by aggressive stray dogs. "
+                "Meanwhile, a Cuban postman ran in street boots, stopped to eat apples, took an hour nap, and finished fourth! "
+                "When leader Thomas Hicks began collapsing, his handlers administered doses of strychnine rat poison mixed with brandy."
+            )
+            payoff = (
+                "[Surprised] Hallucinating wildly and barely conscious, "
+                "Hicks was carried across the finish line to claim Olympic gold."
+            )
+            closing = "[Emphatic] It remains the most chaotic race in athletic history. Follow CrazzyDocs for more wild historical breakthroughs!"
+
+        elif "bank" in title_lower or "dollar" in title_lower or "bought" in title_lower:
+            hook = "[Curious] The man who bought an entire bank for one single dollar."
+            context = "[Suspenseful] In 1995, Britain's oldest merchant bank, Barings, collapsed after two centuries of storied imperial prestige."
+            main_expl = (
+                "[Serious] A rogue trader in Singapore racked up 1.3 billion dollars in unauthorized futures losses, wiping out the entire balance sheet overnight. "
+                "[Dramatic] With liabilities exceeding assets, the Bank of England refused a government bailout. "
+                "Dutch bank ING stepped forward with an audacious rescue offer: they assumed all outstanding debts and acquired Barings for exactly one pound sterling."
+            )
+            payoff = (
+                "[Surprised] A legendary financial dynasty older than the United States, "
+                "which once funded the Napoleonic Wars, was sold for the price of a cup of tea."
+            )
+            closing = "[Emphatic] One unchecked rogue trader erased two centuries in forty-eight hours. Follow CrazzyDocs for more jaw-dropping financial history!"
+
+        elif "moon" in title_lower and "fall" in title_lower:
             hook = "The Moon is constantly falling directly toward Earth right now."
             context = "Yet it never crashes into our ground, pulled relentlessly by planetary gravity every single second across 384,000 kilometers of silent empty space."
             main_expl = (
@@ -352,7 +398,8 @@ class ScriptGenerator:
             closing = "The universe is far stranger than we ever imagined. Follow along for more mindblowing discoveries!"
 
         full_script = f"{hook} {context} {main_expl} {payoff} {closing}".strip()
-        wc = len(full_script.split())
+        clean_spoken = self.clean_text(full_script)
+        wc = len(clean_spoken.split())
         dur_est = round(wc / WORDS_PER_SECOND_AVG, 1)
 
         script = self._build_production_script(

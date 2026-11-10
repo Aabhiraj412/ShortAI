@@ -19,7 +19,7 @@ import sys
 import subprocess
 import time
 
-sys.path.insert(0, r"D:\AI Arts\AI")
+sys.path.insert(0, r"D:\Agents\CrazzyDocs")
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.app.rendering.engine import HybridVisualEngine
@@ -33,7 +33,7 @@ from backend.app.services.tts_service import generate_narration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("HybridBenchmark")
 
-WORKSPACE_ROOT = r"D:\AI Arts\AI"
+WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
 OUTPUT_VIDEO_PATH = os.path.join(WORKSPACE_ROOT, "media", "video", "hybrid_benchmark_short.mp4")
 AUDIT_DIR = os.path.join(WORKSPACE_ROOT, "media", "audit", "hybrid_engine")
 CONTACT_SHEET_PATH = os.path.join(WORKSPACE_ROOT, "media", "audit", "contact_sheet_hybrid_engine.png")
@@ -154,7 +154,7 @@ async def main():
                 duration=2.5,
                 narration_text="From the deepest reaches of the cosmos...",
                 params={
-                    "image_path": os.path.join(WORKSPACE_ROOT, "assets", "backgrounds", "rendered", "bg_space.png"),
+                    "image_path": os.path.join(WORKSPACE_ROOT, "assets", "backgrounds", "pop_info", "bg_warm_cream.png"),
                     "title": "THE COSMIC PERSPECTIVE",
                     "subtitle": "Deep Space Observational Array",
                 },
@@ -189,8 +189,8 @@ async def main():
                 duration=2.5,
                 narration_text="...and start engineering videos that captivate.",
                 params={
-                    "top_image": os.path.join(WORKSPACE_ROOT, "assets", "backgrounds", "rendered", "bg_space.png"),
-                    "bottom_image": os.path.join(WORKSPACE_ROOT, "assets", "backgrounds", "rendered", "bg_tech_lab.png"),
+                    "top_image": os.path.join(WORKSPACE_ROOT, "assets", "backgrounds", "data_story", "bg_dark_slate_grid.png"),
+                    "bottom_image": os.path.join(WORKSPACE_ROOT, "assets", "backgrounds", "creator", "bg_studio_black.png"),
                     "top_label": "THEORY & COSMOS",
                     "bottom_label": "LABORATORY & REALITY",
                 },

@@ -13,7 +13,7 @@ from datetime import datetime
 socket.setdefaulttimeout(3.0)
 
 # Set up paths
-BASE_DIR = r"D:\AI Arts\AI"
+BASE_DIR = r"D:\Agents\CrazzyDocs"
 sys.path.append(os.path.join(BASE_DIR, "backend"))
 
 from app.core.config import settings

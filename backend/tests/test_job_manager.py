@@ -8,7 +8,7 @@ import os
 import sys
 import time
 
-BASE_DIR = r"D:\AI Arts\AI"
+BASE_DIR = r"D:\Agents\CrazzyDocs"
 sys.path.append(os.path.join(BASE_DIR, "backend"))
 
 from app.database.db import init_db, SessionLocal, JobModel

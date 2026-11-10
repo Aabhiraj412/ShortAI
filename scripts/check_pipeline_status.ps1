@@ -2,7 +2,7 @@
 .SYNOPSIS
     Checks the status of persistent production jobs and system health.
 #>
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 Set-Location $baseDir
 
 $env:PYTHONPATH = "$baseDir\backend"

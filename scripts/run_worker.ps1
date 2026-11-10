@@ -2,7 +2,7 @@
 .SYNOPSIS
     Continuous background worker daemon for job processing and recovery.
 #>
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 Set-Location $baseDir
 
 $env:UV_CACHE_DIR = "$baseDir\cache\uv"

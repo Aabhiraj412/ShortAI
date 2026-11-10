@@ -8,7 +8,7 @@ param(
     [string]$ManualTopic = ""
 )
 
-$baseDir = "D:\AI Arts\AI"
+$baseDir = "D:\Agents\CrazzyDocs"
 Set-Location $baseDir
 
 $logFile = "$baseDir\logs\daily_pipeline_$DateStr.log"
