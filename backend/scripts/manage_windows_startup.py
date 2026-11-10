@@ -138,7 +138,7 @@ _tasks_cache: Dict[str, Any] = {}
 _tasks_cache_time: float = 0.0
 
 
-def get_all_tasks_status(ttl_seconds: float = 15.0) -> Dict[str, Any]:
+def get_all_tasks_status(ttl_seconds: float = 30.0) -> Dict[str, Any]:
     """Queries both CrazzyDocs production scheduled tasks with in-memory TTL caching."""
     global _tasks_cache, _tasks_cache_time
     now = time.time()
