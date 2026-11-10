@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -288,10 +288,10 @@ async def get_dashboard_activity(limit: int = 25):
     return production_health_dashboard.get_recent_activity(limit=limit)
 
 
-# Mount frontend production build as fallback
-DIST_DIR = os.path.join(settings.BASE_DIR, "frontend", "dist")
-if os.path.exists(DIST_DIR):
-    app.mount("/", StaticFiles(directory=DIST_DIR, html=True), name="frontend")
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Redirects root browser access directly to the Production Health Dashboard."""
+    return RedirectResponse(url="/dashboard")
 
 if __name__ == "__main__":
     import uvicorn

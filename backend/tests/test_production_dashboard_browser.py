@@ -37,6 +37,12 @@ def test_dashboard_html_page_served():
     assert "FOUR_CYCLES_DAILY" in response.text
 
 
+def test_root_redirect_to_dashboard():
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code in (302, 307)
+    assert response.headers["location"] == "/dashboard"
+
+
 def test_dashboard_overview_endpoint():
     response = client.get("/api/dashboard/overview")
     assert response.status_code == 200
