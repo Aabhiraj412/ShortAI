@@ -94,6 +94,10 @@ class HybridVisualEngine:
                 image_path=img_path,
                 duration=beat.duration,
                 out_mp4_path=seg_mp4,
+                zoom_start=float(beat.params.get("zoom_start", 1.00)),
+                zoom_end=float(beat.params.get("zoom_end", 1.08)),
+                pan_dx=float(beat.params.get("pan_dx", 0.02)),
+                pan_dy=float(beat.params.get("pan_dy", -0.015)),
                 title_text=beat.params.get("title"),
                 subtitle_text=beat.params.get("subtitle"),
             )
@@ -174,7 +178,9 @@ class HybridVisualEngine:
 
             # Append CrazzyDocs Branded Outro if requested
             if plan.include_crazzydocs_outro:
-                default_outro = os.path.join(self.workspace_root, "assets", "branding", "crazzydocs", "crazzydocs_outro_1080x1920.mp4")
+                assets_outro = os.path.join(self.workspace_root, "assets", "branding", "crazzydocs", "crazzydocs_outro_1080x1920.mp4")
+                media_outro = os.path.join(self.workspace_root, "media", "source", "branding", "crazzydocs_outro_1080x1920.mp4")
+                default_outro = media_outro if os.path.exists(media_outro) else assets_outro
                 outro_path = plan.crazzydocs_outro_path or default_outro
                 if os.path.exists(outro_path):
                     final_path = self.compositor.append_branded_outro(

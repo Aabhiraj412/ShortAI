@@ -275,12 +275,15 @@ class TopicLedger:
         execution_context: str = "production"
     ) -> bool:
         """Saves a verified content record to both SQLite and the JSON mirror.
-        Strictly prevents tests from polluting the production database (DB_PATH).
+        Strictly prevents tests, validation runs, dev, and maintenance contexts
+        from polluting the production database (DB_PATH).
         """
-        is_ctx_test = "test" in str(execution_context).lower()
+        raw_ctx = execution_context.value if hasattr(execution_context, "value") else str(execution_context)
+        norm_ctx = raw_ctx.strip().upper()
+        is_non_prod = any(tok in norm_ctx for tok in ("TEST", "VALIDATION", "DEV", "MAINTENANCE"))
         is_env_test = os.environ.get("CRAZZYDOCS_TEST_MODE") == "1"
-        if not allow_override and (is_ctx_test or is_env_test):
-            logger.info("Test execution context; skipping write to persistent content_ledger.")
+        if not allow_override and (is_non_prod or is_env_test):
+            logger.info("Non-production execution context (%s); skipping write to persistent content_ledger.", raw_ctx)
             return True
 
         if not allow_override:

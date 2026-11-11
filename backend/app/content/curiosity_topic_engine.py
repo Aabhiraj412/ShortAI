@@ -22,11 +22,15 @@ Generates and evaluates 5 distinct hook directions for selected topics.
 """
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import html
 import json
 import logging
 import re
 from typing import Dict, List, Optional, Tuple
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 
 from backend.app.content.topic_ledger import TopicLedger
 
@@ -281,6 +285,10 @@ class ScoredTopic:
     duplicate_reason: str = ""
     hook_candidates: List[HookCandidate] = field(default_factory=list)
     selected_hook: Optional[HookCandidate] = None
+    extended_extract: str = ""
+    factual_bullets: List[str] = field(default_factory=list)
+    image_urls: List[str] = field(default_factory=list)
+    discovery_source: str = "curated"
 
 
 class CuriosityTopicEngine:
@@ -337,8 +345,355 @@ class CuriosityTopicEngine:
             sources=cand.get("sources", []),
             key_entities=cand.get("key_entities", []),
             is_duplicate=is_dup,
-            duplicate_reason=reason
+            duplicate_reason=reason,
+            extended_extract=cand.get("extended_extract", ""),
+            factual_bullets=cand.get("factual_bullets", []),
+            image_urls=cand.get("image_urls", []),
+            discovery_source=cand.get("discovery_source", "curated"),
         )
+
+    @staticmethod
+    def _http_get_json(url: str, timeout: float = 12.0) -> Optional[Dict]:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "CrazzyDocsStudio/1.0 (Autonomous Documentary Pipeline)",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    @staticmethod
+    def _http_get_text(url: str, timeout: float = 12.0) -> Optional[str]:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "CrazzyDocsStudio/1.0 (Autonomous Documentary Pipeline)"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            return resp.read().decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _clean_text(raw: str) -> str:
+        txt = html.unescape(raw or "")
+        txt = re.sub(r"<[^>]+>", " ", txt)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+
+    @staticmethod
+    def _split_clean_sentences(text: str) -> List[str]:
+        if not text:
+            return []
+        raw_sents = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text.strip())
+        cleaned: List[str] = []
+        for s in raw_sents:
+            s_clean = re.sub(r"\s+", " ", s).strip()
+            # Drop headings or tiny fragments or parenthetical citation junk
+            if s_clean.startswith("=="):
+                continue
+            if len(s_clean.split()) < 7 or len(s_clean) > 260:
+                continue
+            cleaned.append(s_clean)
+        return cleaned
+
+    @staticmethod
+    def _extract_entities(title: str, text: str) -> List[str]:
+        entities: List[str] = []
+        seen = set()
+        # Title nouns + capitalized phrases from extract
+        candidates = [title] + re.findall(r"\b([A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+){0,2})\b", text or "")
+        stopwords = {"In", "The", "On", "At", "When", "After", "During", "Since", "By", "For", "From", "A", "An", "As", "It", "He", "She", "They", "This", "That"}
+        for item in candidates:
+            clean = item.strip(" ,.;:()\"'")
+            if len(clean) < 3 or clean in stopwords:
+                continue
+            low = clean.lower()
+            if low not in seen:
+                seen.add(low)
+                entities.append(clean)
+            if len(entities) >= 8:
+                break
+        return entities
+
+    @staticmethod
+    def _infer_category(title: str, text: str) -> Tuple[str, str]:
+        blob = f"{title} {text}".lower()
+        if any(k in blob for k in ("nasa", "telescope", "orbit", "spacecraft", "physics", "quantum", "discovery", "volcano", "geolog", "observatory", "rocket", "mission", "patent", "invented")):
+            return "Science & Technology", "C"
+        if any(k in blob for k in ("ship", "expedition", "survived", "rescue", "crash", "wreck", "submarine", "atlantic", "antarctica", "mount")):
+            return "Unbelievable Real-Life Stories", "B"
+        if any(k in blob for k in ("company", "bank", "market", "billion", "million", "factory", "patent", "corporation", "trade")):
+            return "Corporate & Financial Stories", "D"
+        if any(k in blob for k in ("mystery", "disappear", "crypt", "signal", "unexplained", "cipher", "code")):
+            return "Mysteries & Unexplained Events", "E"
+        return "Strange but True History", "A"
+
+    def enrich_wikipedia_candidate(
+        self,
+        wiki_title: str,
+        event_blurb: str = "",
+        discovery_origin: str = "wikipedia_featured",
+    ) -> Optional[Dict]:
+        """Fetches verified Wikipedia extract, canonical URL, image URL, and factual bullets."""
+        if not wiki_title:
+            return None
+        try:
+            encoded = urllib.parse.quote(wiki_title.replace(" ", "_"))
+            summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
+            summary_json = self._http_get_json(summary_url, timeout=10.0)
+            if not summary_json or summary_json.get("type") == "disambiguation":
+                return None
+
+            canon_title = summary_json.get("title") or wiki_title
+            short_extract = self._clean_text(summary_json.get("extract", ""))
+            page_url = (
+                summary_json.get("content_urls", {})
+                .get("desktop", {})
+                .get("page", f"https://en.wikipedia.org/wiki/{encoded}")
+            )
+            image_urls: List[str] = []
+            orig_img = summary_json.get("originalimage", {}).get("source")
+            if orig_img and orig_img.lower().endswith((".jpg", ".jpeg", ".png")):
+                image_urls.append(orig_img)
+
+            # Query Wikipedia REST media-list for article-specific Wikimedia Commons filenames
+            commons_file_titles: List[str] = []
+            try:
+                ml_url = f"https://en.wikipedia.org/api/rest_v1/page/media-list/{encoded}"
+                ml_json = self._http_get_json(ml_url, timeout=8.0) or {}
+                for item in ml_json.get("items", []):
+                    t = item.get("title", "")
+                    if item.get("type") == "image" and t.startswith("File:"):
+                        low_t = t.lower()
+                        if low_t.endswith((".jpg", ".jpeg", ".png")) and "flag_" not in low_t and "locator" not in low_t and "commons-logo" not in low_t:
+                            commons_file_titles.append(t)
+                    if len(commons_file_titles) >= 8:
+                        break
+            except Exception:
+                pass
+
+            # Fetch multi-paragraph extract for deep script/storyboard facts
+            mw_url = (
+                "https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info"
+                "&exintro=true&explaintext=true&exchars=2600&inprop=url&redirects=1"
+                f"&titles={urllib.parse.quote(canon_title)}&format=json"
+            )
+            mw_json = self._http_get_json(mw_url, timeout=10.0)
+            extended_extract = short_extract
+            if mw_json:
+                pages = mw_json.get("query", {}).get("pages", {})
+                for pdata in pages.values():
+                    ext = self._clean_text(pdata.get("extract", ""))
+                    if len(ext) > len(extended_extract):
+                        extended_extract = ext
+                    if pdata.get("fullurl"):
+                        page_url = pdata["fullurl"]
+
+            if len(extended_extract) < 380:
+                return None
+
+            sentences = self._split_clean_sentences(extended_extract)
+            if len(sentences) < 3:
+                return None
+
+            summary_text = (f"{event_blurb.strip()} " if event_blurb else "") + " ".join(sentences[:2])
+            summary_text = summary_text.strip()
+            cat_name, cat_code = self._infer_category(canon_title, extended_extract)
+            entities = self._extract_entities(canon_title, extended_extract)
+
+            # Score documentary curiosity dynamically based on concrete facts, numbers, and narrative tension
+            blob_low = extended_extract.lower()
+            has_numbers = len(re.findall(r"\b\d{2,4}\b", extended_extract)) >= 3
+            has_dramatic_markers = any(
+                m in blob_low
+                for m in (
+                    "first", "discovered", "deepest", "largest", "record", "accident",
+                    "collapsed", "launched", "surviving", "built", "engineered",
+                    "mysterious", "unusual", "century", "mile", "kilometer", "meters",
+                )
+            )
+            curiosity = 9.4 if has_dramatic_markers else 8.7
+            surprise = 9.2 if has_numbers else 8.5
+            storytelling = 9.3 if len(sentences) >= 5 else 8.6
+            visual_pot = 9.4 if image_urls else 8.7
+            emotional = 8.9
+            factual = 9.6  # Multi-paragraph encyclopedic Wikipedia primary record
+
+            slug = re.sub(r"[^a-z0-9]+", "_", canon_title.lower()).strip("_")[:36]
+            return {
+                "id": f"live_{slug}",
+                "title": canon_title,
+                "category": cat_name,
+                "category_code": cat_code,
+                "summary": summary_text,
+                "extended_extract": extended_extract,
+                "factual_bullets": sentences[:10],
+                "curiosity": curiosity,
+                "surprise": surprise,
+                "storytelling": storytelling,
+                "visual_potential": visual_pot,
+                "emotional_connection": emotional,
+                "factual_reliability": factual,
+                "sources": [
+                    f"Wikipedia Encyclopedia Archive: {page_url}",
+                    f"Wikimedia REST Summary Source: {summary_url}",
+                ],
+                "key_entities": entities,
+                "image_urls": image_urls + commons_file_titles,
+                "discovery_source": discovery_origin,
+            }
+        except Exception as e:
+            logger.debug("Wikipedia enrichment failed for '%s': %s", wiki_title, e)
+            return None
+
+    def discover_live_candidates(self, max_candidates: int = 10) -> List[Dict]:
+        """Discovers genuine, fresh documentary topics from live external feeds (Wikipedia + Phys.org)."""
+        raw_proposals: List[Tuple[str, str, str]] = []  # (wiki_title_or_query, event_blurb, origin)
+        rss_candidates: List[Dict] = []
+
+        # 1. Wikipedia Featured / On-This-Day Feed (yesterday UTC ensures complete feed availability)
+        try:
+            ref_dt = datetime.now(timezone.utc) - timedelta(days=1)
+            feed_url = f"https://en.wikipedia.org/api/rest_v1/feed/featured/{ref_dt.strftime('%Y/%m/%d')}"
+            feed = self._http_get_json(feed_url, timeout=12.0) or {}
+
+            # High-curiosity On-This-Day historical events (prioritize science/engineering/expeditions)
+            blocked_terms = ("election", "president", "prime minister", "parliament", "season", "league", "album", "film)", "episode", "birth", "deaths in")
+            preferred_terms = ("space", "expedition", "ship", "bridge", "telescope", "discovery", "earthquake", "volcano", "submarine", "observatory", "apollo", "voyager", "invention", "tunnel", "dam")
+
+            onthisday_items = feed.get("onthisday", [])
+            scored_otd: List[Tuple[int, Dict]] = []
+            for ev in onthisday_items:
+                ev_text = self._clean_text(ev.get("text", ""))
+                pages = ev.get("pages", [])
+                if not pages or not ev_text:
+                    continue
+                low_ev = ev_text.lower()
+                if any(b in low_ev for b in blocked_terms):
+                    continue
+                prio = sum(1 for p in preferred_terms if p in low_ev)
+                scored_otd.append((prio, ev))
+
+            scored_otd.sort(key=lambda x: x[0], reverse=True)
+            for _, ev in scored_otd[:6]:
+                pages = ev.get("pages", [])
+                # Prefer the first page that isn't just a bare year or country
+                for pg in pages[:2]:
+                    t = pg.get("title", "")
+                    if t and not t.isdigit():
+                        raw_proposals.append((t, ev.get("text", ""), "wikipedia_onthisday"))
+                        break
+
+            # Today's Featured Article
+            tfa = feed.get("tfa", {})
+            if tfa.get("title") and not any(b in tfa["title"].lower() for b in blocked_terms):
+                raw_proposals.append((tfa["title"], "", "wikipedia_tfa"))
+
+            # Most-read non-political factual articles
+            for art in feed.get("mostread", {}).get("articles", [])[:15]:
+                t = art.get("title", "")
+                desc = (art.get("description") or "").lower()
+                if not t or ":" in t or t.startswith("Main_Page") or t.startswith("List_of"):
+                    continue
+                if any(b in desc or b in t.lower() for b in blocked_terms + ("actor", "actress", "singer", "rapper", "politician", "television", "footballer", "deaths")):
+                    continue
+                raw_proposals.append((t, "", "wikipedia_mostread"))
+        except Exception as e:
+            logger.warning("Wikipedia Featured Feed unavailable: %s", e)
+
+        # 2. Enrich Wikipedia candidates with full verified multi-paragraph extracts
+        enriched_candidates: List[Dict] = []
+        seen_titles = set()
+        for wiki_title, blurb, origin in raw_proposals:
+            if len(enriched_candidates) >= max_candidates:
+                break
+            norm_key = re.sub(r"\W+", "", wiki_title.lower())
+            if norm_key in seen_titles:
+                continue
+            cand = self.enrich_wikipedia_candidate(wiki_title, event_blurb=blurb, discovery_origin=origin)
+            if cand:
+                seen_titles.add(norm_key)
+                enriched_candidates.append(cand)
+
+        # 3. Phys.org Live Science & Space RSS Feed
+        for feed_url in (
+            "https://phys.org/rss-feed/space-news/",
+            "https://phys.org/rss-feed/science-news/",
+        ):
+            try:
+                xml_txt = self._http_get_text(feed_url, timeout=10.0)
+                if not xml_txt:
+                    continue
+                root = ET.fromstring(xml_txt)
+                items = root.findall(".//item")
+                for item in items[:3]:
+                    title = self._clean_text(item.findtext("title", ""))
+                    desc = self._clean_text(item.findtext("description", ""))
+                    link = (item.findtext("link", "") or "").strip()
+                    if len(desc) < 120 or not link.startswith("http"):
+                        continue
+                    sents = self._split_clean_sentences(desc)
+                    # Require >= 4 distinct verified sentences for RSS items so scripts never repeat lines
+                    if len(sents) < 4:
+                        continue
+                    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:36]
+                    rss_candidates.append({
+                        "id": f"rss_{slug}",
+                        "title": title,
+                        "category": "Science & Technology",
+                        "category_code": "C",
+                        "summary": desc,
+                        "extended_extract": desc,
+                        "factual_bullets": sents if sents else [desc],
+                        "curiosity": 8.9,
+                        "surprise": 8.8,
+                        "storytelling": 8.5,
+                        "visual_potential": 8.8,
+                        "emotional_connection": 8.3,
+                        "factual_reliability": 9.2,
+                        "sources": [f"Phys.org Science Archive Source: {link}"],
+                        "key_entities": self._extract_entities(title, desc),
+                        "image_urls": [],
+                        "discovery_source": "physorg_rss",
+                    })
+            except Exception as e:
+                logger.warning("Phys.org RSS fetch error (%s): %s", feed_url, e)
+
+        # Prefer rich multi-paragraph Wikipedia documentary subjects first, followed by live RSS
+        return (enriched_candidates + rss_candidates)[: max_candidates + 4]
+
+    def discover_and_rank_live_topics(
+        self,
+        filter_duplicates: bool = True,
+        max_candidates: int = 10,
+    ) -> List[ScoredTopic]:
+        """Discovers, verifies, scores, and filters genuinely fresh topics strictly from live feeds."""
+        live_cands = self.discover_live_candidates(max_candidates=max_candidates)
+        if not live_cands:
+            return []
+
+        scored = [self.score_candidate(c) for c in live_cands]
+        if filter_duplicates:
+            valid = [t for t in scored if not t.is_duplicate and t.composite_score > 0]
+        else:
+            valid = [t for t in scored if t.composite_score > 0]
+        valid.sort(key=lambda x: x.composite_score, reverse=True)
+        return valid
+
+    def select_best_live_topic(self) -> Tuple[ScoredTopic, HookCandidate]:
+        """Selects top live-discovered verified topic. Fails closed; never falls back to historical topics."""
+        ranked = self.discover_and_rank_live_topics(filter_duplicates=True)
+        if not ranked:
+            raise RuntimeError(
+                "Live topic discovery failed or yielded no eligible verified topics; stopping safely without old-topic fallback."
+            )
+        winner = ranked[0]
+        hooks = self.generate_five_hooks(winner)
+        return winner, hooks[0]
 
     def discover_and_rank_topics(self, filter_duplicates: bool = True) -> List[ScoredTopic]:
         """Scores all candidates, optionally filters duplicates, and returns sorted ranking."""
@@ -486,13 +841,41 @@ class CuriosityTopicEngine:
                 HookCandidate("Extraordinary Human Decision", "Drillers kept going for twenty-four years until the collapse of the Soviet Union sealed the hole forever.", 9.5, 9.6, 9.7, 9.9, 9.3, 9.6),
             ]
         else:
-            # General template using topic title
+            # Data-driven factual hook synthesis from verified research extract & bullets
+            bullets = list(getattr(topic, "factual_bullets", []) or [])
+            if not bullets:
+                bullets = self._split_clean_sentences(topic.summary)
+            first_fact = bullets[0] if len(bullets) > 0 else topic.summary.split(".")[0].strip() + "."
+            second_fact = bullets[1] if len(bullets) > 1 else first_fact
+            numeric_match = next((b for b in bullets if re.search(r"\b\d{2,4}\b", b)), first_fact)
+            ent = topic.key_entities[0] if topic.key_entities else topic.title
+
             hooks = [
-                HookCandidate("Shocking Revelation", f"The unbelievable documented story of {topic.title}.", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
-                HookCandidate("Paradox / Contradiction", f"Why the truth behind {topic.title} contradicts everything.", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
-                HookCandidate("Unexpected Consequence", f"One unexpected detail changed the entire outcome of {topic.title}.", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
-                HookCandidate("Intriguing Question", f"How was it physically possible for {topic.title} to happen?", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
-                HookCandidate("Extraordinary Human Decision", f"The extraordinary real-world incident behind {topic.title}.", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
+                HookCandidate(
+                    "Shocking Revelation",
+                    first_fact[:180],
+                    9.5, 9.6, 9.4, 9.8, 9.3, 9.6,
+                ),
+                HookCandidate(
+                    "Paradox / Contradiction",
+                    f"How did {topic.title} change history in ways almost no one expected?",
+                    9.3, 9.4, 9.3, 9.6, 9.2, 9.5,
+                ),
+                HookCandidate(
+                    "Unexpected Consequence",
+                    numeric_match[:180],
+                    9.4, 9.5, 9.4, 9.8, 9.3, 9.5,
+                ),
+                HookCandidate(
+                    "Intriguing Question",
+                    f"What makes {ent} one of the most extraordinary documented cases in {topic.category}?",
+                    9.1, 9.3, 9.1, 9.7, 9.0, 9.4,
+                ),
+                HookCandidate(
+                    "Factual Turning Point",
+                    second_fact[:180],
+                    9.2, 9.2, 9.2, 9.8, 9.1, 9.4,
+                ),
             ]
 
         for h in hooks:

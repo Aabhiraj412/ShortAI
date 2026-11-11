@@ -1,6 +1,6 @@
 """
 Execution Context Management for CrazzyDocs Autonomous Production Studio.
-Enforces strict boundary separation between PRODUCTION, TEST, DEVELOPMENT, and MAINTENANCE environments.
+Enforces strict boundary separation between PRODUCTION, VALIDATION, TEST, DEVELOPMENT, and MAINTENANCE environments.
 """
 
 from enum import Enum
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 class ExecutionContext(str, Enum):
     PRODUCTION = "PRODUCTION"
+    VALIDATION = "VALIDATION"
     TEST = "TEST"
     DEVELOPMENT = "DEVELOPMENT"
     MAINTENANCE = "MAINTENANCE"

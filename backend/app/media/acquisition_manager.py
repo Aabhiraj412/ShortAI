@@ -110,9 +110,10 @@ class MediaAcquisitionEngine:
             a.relevance_score = score
             scored_candidates.append((score, a))
 
-        # Sort descending by relevance score
+        # Sort descending by relevance score and reject unrelated (zero-overlap < 0.20) candidates
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        top_candidates = [item[1] for item in scored_candidates[:max_assets]]
+        relevant = [item[1] for item in scored_candidates if item[0] >= 0.20]
+        top_candidates = (relevant or [item[1] for item in scored_candidates])[:max_assets]
 
         # 3. Download and process top candidates
         acquired_assets: List[MediaAsset] = []

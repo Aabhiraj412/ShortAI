@@ -145,190 +145,87 @@ class CreativeThumbnailEngine:
         primary_asset = available_assets[0] if available_assets else None
         secondary_asset = available_assets[1] if len(available_assets) > 1 else primary_asset
 
-        if archetype == StoryArchetype.HISTORICAL_SURVIVAL:
-            title_lower = topic_title.lower() + " " + topic_summary.lower()
-            if any(k in title_lower for k in ("vesna", "flight attendant", "33,000", "parachute", "vulovic")):
-                # Vesna Vulovic aviation survival proposals
-                candidates.append(ThumbnailCandidate(
-                    id="cand_01_vesna_fall",
-                    concept_name="Aviation Altitude Drama",
-                    archetype=archetype,
-                    headline_words=["FELL", "33,000", "FEET"],
-                    focal_asset_path=primary_asset,
-                    accent_color=(255, 77, 77), # Emergency Red
-                    composition_mode="dramatic_center",
-                    text_placement="lower_third"
-                ))
-                candidates.append(ThumbnailCandidate(
-                    id="cand_02_vesna_no_chute",
-                    concept_name="Zero Parachute Miracle",
-                    archetype=archetype,
-                    headline_words=["NO", "PARACHUTE"],
-                    focal_asset_path=secondary_asset,
-                    accent_color=(254, 224, 4), # Gold
-                    composition_mode="split_contrast",
-                    text_placement="upper_third"
-                ))
-                candidates.append(ThumbnailCandidate(
-                    id="cand_03_vesna_survived",
-                    concept_name="Miraculous Recovery",
-                    archetype=archetype,
-                    headline_words=["SURVIVED", "33,000", "FT"],
-                    focal_asset_path=primary_asset,
-                    accent_color=(32, 201, 151), # Emerald Teal
-                    composition_mode="epic_lower_third",
-                    text_placement="lower_third"
-                ))
-                candidates.append(ThumbnailCandidate(
-                    id="cand_04_vesna_record",
-                    concept_name="Aviation Miracle",
-                    archetype=archetype,
-                    headline_words=["HIGHEST", "SURVIVED", "FALL"],
-                    focal_asset_path=secondary_asset,
-                    accent_color=(255, 255, 255), # Stark White
-                    composition_mode="minimalist_focus",
-                    text_placement="upper_third"
-                ))
+        # Detect explicit legacy showcase topics vs genuinely new topics
+        blob = (topic_title + " " + topic_summary).lower()
+        is_vesna = any(k in blob for k in ("vesna", "flight attendant", "33,000", "parachute", "vulovic"))
+        is_yamaguchi = any(k in blob for k in ("yamaguchi", "hiroshima", "nagasaki"))
+        is_demon_core = "demon core" in blob or "louis slotin" in blob
+        is_bank_corp = any(k in blob for k in ("one dollar", "bought a bank", "pepsi"))
+        is_molasses = "molasses flood" in blob
+
+        if is_vesna:
+            candidates.append(ThumbnailCandidate("cand_01_vesna_fall", "Aviation Altitude Drama", archetype, ["FELL", "33,000", "FEET"], primary_asset, (255, 77, 77), "dramatic_center", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_02_vesna_no_chute", "Zero Parachute Miracle", archetype, ["NO", "PARACHUTE"], secondary_asset, (254, 224, 4), "split_contrast", "upper_third"))
+            candidates.append(ThumbnailCandidate("cand_03_vesna_survived", "Miraculous Recovery", archetype, ["SURVIVED", "33,000", "FT"], primary_asset, (32, 201, 151), "epic_lower_third", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_04_vesna_record", "Aviation Miracle", archetype, ["HIGHEST", "SURVIVED", "FALL"], secondary_asset, (255, 255, 255), "minimalist_focus", "upper_third"))
+        elif is_yamaguchi:
+            candidates.append(ThumbnailCandidate("cand_01_direct_survival", "Direct High-Stakes Action", archetype, ["SURVIVED", "BOTH", "BOMBS"], primary_asset, (254, 224, 4), "dramatic_center", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_02_personal_impossibility", "Personal Impossibility Focus", archetype, ["HE", "SURVIVED", "TWICE"], secondary_asset, (255, 77, 77), "split_contrast", "upper_third"))
+            candidates.append(ThumbnailCandidate("cand_03_astronomical_odds", "Extreme Historical Odds", archetype, ["DOUBLE", "SURVIVOR"], primary_asset, (32, 201, 151), "epic_lower_third", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_04_astounding_fact", "Curiosity Revelation", archetype, ["HIROSHIMA", "THEN", "NAGASAKI", "AGAIN"], secondary_asset, (255, 255, 255), "minimalist_focus", "upper_third"))
+        elif is_demon_core:
+            candidates.append(ThumbnailCandidate("cand_01_science_core", "Central Mystery Sphere", archetype, ["THE", "DEMON", "CORE"], primary_asset, (77, 166, 255), "dramatic_center", "upper_third"))
+            candidates.append(ThumbnailCandidate("cand_02_science_fatal", "Fatal Discovery Event", archetype, ["ONE", "FATAL", "SLIP"], secondary_asset, (255, 77, 77), "epic_lower_third", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_03_science_radiation", "Invisible Peril Revelation", archetype, ["LETHAL", "BLUE", "FLASH"], primary_asset, (254, 224, 4), "split_contrast", "lower_third"))
+        elif is_bank_corp:
+            candidates.append(ThumbnailCandidate("cand_01_corp_absurd", "Corporate Absurdity", archetype, ["BOUGHT", "A", "BANK"], primary_asset, (32, 201, 151), "dramatic_center", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_02_corp_one_dollar", "Dollar Metaphor", archetype, ["FOR", "ONE", "DOLLAR"], secondary_asset, (254, 224, 4), "epic_lower_third", "upper_third"))
+            candidates.append(ThumbnailCandidate("cand_03_corp_heist", "Audacious Acquisition", archetype, ["LEGAL", "BANK", "HEIST"], primary_asset, (255, 77, 77), "split_contrast", "lower_third"))
+        elif is_molasses:
+            candidates.append(ThumbnailCandidate("cand_01_strange_event", "Dramatic Historical Incident", archetype, ["THE", "DEADLY", "WAVE"], primary_asset, (254, 224, 4), "dramatic_center", "lower_third"))
+            candidates.append(ThumbnailCandidate("cand_02_strange_disaster", "Bizarre Calamity", archetype, ["STRANGEST", "DISASTER", "EVER"], secondary_asset, (255, 77, 77), "epic_lower_third", "upper_third"))
+            candidates.append(ThumbnailCandidate("cand_03_strange_tsunami", "Direct Scale Impact", archetype, ["25-FOOT", "TSUNAMI"], primary_asset, (32, 201, 151), "split_contrast", "lower_third"))
+        else:
+            # Dynamic topic-grounded headline extraction (strictly derived from topic_title & topic_summary)
+            import re
+            stopwords = {
+                "THE", "A", "AN", "OF", "IN", "ON", "AT", "FOR", "TO", "AND", "OR", "HOW", "WHY",
+                "WHEN", "THAT", "THIS", "WITH", "FROM", "POSES", "KNOWN", "INTO", "BEHIND", "TRUE",
+            }
+            raw_tokens = [re.sub(r"[^A-Z0-9\-]", "", w.upper()) for w in topic_title.split()]
+            content_tokens = [t for t in raw_tokens if t and t not in stopwords and len(t) >= 3]
+            head_a = content_tokens[:3] if len(content_tokens) >= 2 else (raw_tokens[:3] or ["TRUE", "STORY"])
+            head_b = content_tokens[-3:] if len(content_tokens) >= 3 else head_a
+
+            m_num = re.search(
+                r"\b(\d[\d,\.]*(?:\s*(?:MILLION|BILLION|THOUSAND|YEARS|FEET|METERS|DAYS|MILES))?)\b",
+                (topic_title + " " + topic_summary).upper(),
+            )
+            if m_num:
+                num_words = m_num.group(1).split()[:2]
+                head_c = (head_a[:2] + num_words)[:4]
             else:
-                # Candidate 1: Direct High-Stakes Action (3 words)
-                candidates.append(ThumbnailCandidate(
-                    id="cand_01_direct_survival",
-                    concept_name="Direct High-Stakes Action",
-                    archetype=archetype,
-                    headline_words=["SURVIVED", "BOTH", "BOMBS"],
-                    focal_asset_path=primary_asset,
-                    accent_color=(254, 224, 4), # Gold
-                    composition_mode="dramatic_center",
-                    text_placement="lower_third"
-                ))
-                # Candidate 2: Personal Impossibility (3 words)
-                candidates.append(ThumbnailCandidate(
-                    id="cand_02_personal_impossibility",
-                    concept_name="Personal Impossibility Focus",
-                    archetype=archetype,
-                    headline_words=["HE", "SURVIVED", "TWICE"],
-                    focal_asset_path=secondary_asset,
-                    accent_color=(255, 77, 77), # Emergency Red
-                    composition_mode="split_contrast",
-                    text_placement="upper_third"
-                ))
-                # Candidate 3: Astronomical Odds (2 words)
-                candidates.append(ThumbnailCandidate(
-                    id="cand_03_astronomical_odds",
-                    concept_name="Extreme Historical Odds",
-                    archetype=archetype,
-                    headline_words=["DOUBLE", "SURVIVOR"],
-                    focal_asset_path=primary_asset,
-                    accent_color=(32, 201, 151), # Emerald Teal
-                    composition_mode="epic_lower_third",
-                    text_placement="lower_third"
-                ))
-                # Candidate 4: Astounding Fact (4 words)
-                candidates.append(ThumbnailCandidate(
-                    id="cand_04_astounding_fact",
-                    concept_name="Curiosity Revelation",
-                    archetype=archetype,
-                    headline_words=["HIROSHIMA", "THEN", "NAGASAKI", "AGAIN"],
-                    focal_asset_path=secondary_asset,
-                    accent_color=(255, 255, 255), # Stark White
-                    composition_mode="minimalist_focus",
-                    text_placement="upper_third"
-                ))
+                head_c = (["INSIDE", "THE"] + head_a[:2])[:4]
 
-        elif archetype == StoryArchetype.SCIENTIFIC_PHENOMENON:
             candidates.append(ThumbnailCandidate(
-                id="cand_01_science_core",
-                concept_name="Central Mystery Sphere",
+                id="cand_01_topic_focal",
+                concept_name="Topic Focal Headline",
                 archetype=archetype,
-                headline_words=["THE", "DEMON", "CORE"],
+                headline_words=head_a,
                 focal_asset_path=primary_asset,
+                accent_color=(254, 224, 4),
+                composition_mode="dramatic_center",
+                text_placement="upper_third",
+            ))
+            candidates.append(ThumbnailCandidate(
+                id="cand_02_topic_twist",
+                concept_name="Topic Core Revelation",
+                archetype=archetype,
+                headline_words=head_b,
+                focal_asset_path=secondary_asset,
                 accent_color=(77, 166, 255),
-                composition_mode="dramatic_center",
-                text_placement="upper_third"
-            ))
-            candidates.append(ThumbnailCandidate(
-                id="cand_02_science_fatal",
-                concept_name="Fatal Discovery Event",
-                archetype=archetype,
-                headline_words=["ONE", "FATAL", "SLIP"],
-                focal_asset_path=secondary_asset,
-                accent_color=(255, 77, 77),
-                composition_mode="epic_lower_third",
-                text_placement="lower_third"
-            ))
-            candidates.append(ThumbnailCandidate(
-                id="cand_03_science_radiation",
-                concept_name="Invisible Peril Revelation",
-                archetype=archetype,
-                headline_words=["LETHAL", "BLUE", "FLASH"],
-                focal_asset_path=primary_asset,
-                accent_color=(254, 224, 4),
                 composition_mode="split_contrast",
-                text_placement="lower_third"
+                text_placement="lower_third",
             ))
-
-        elif archetype == StoryArchetype.CORPORATE_DISASTER:
             candidates.append(ThumbnailCandidate(
-                id="cand_01_corp_absurd",
-                concept_name="Corporate Absurdity",
+                id="cand_03_topic_fact",
+                concept_name="Quantified Topic Fact",
                 archetype=archetype,
-                headline_words=["BOUGHT", "A", "BANK"],
+                headline_words=head_c,
                 focal_asset_path=primary_asset,
                 accent_color=(32, 201, 151),
-                composition_mode="dramatic_center",
-                text_placement="lower_third"
-            ))
-            candidates.append(ThumbnailCandidate(
-                id="cand_02_corp_one_dollar",
-                concept_name="Dollar Metaphor",
-                archetype=archetype,
-                headline_words=["FOR", "ONE", "DOLLAR"],
-                focal_asset_path=secondary_asset,
-                accent_color=(254, 224, 4),
                 composition_mode="epic_lower_third",
-                text_placement="upper_third"
-            ))
-            candidates.append(ThumbnailCandidate(
-                id="cand_03_corp_heist",
-                concept_name="Audacious Acquisition",
-                archetype=archetype,
-                headline_words=["LEGAL", "BANK", "HEIST"],
-                focal_asset_path=primary_asset,
-                accent_color=(255, 77, 77),
-                composition_mode="split_contrast",
-                text_placement="lower_third"
-            ))
-
-        else: # Strange event / general achievement
-            candidates.append(ThumbnailCandidate(
-                id="cand_01_strange_event",
-                concept_name="Dramatic Historical Incident",
-                archetype=archetype,
-                headline_words=["THE", "DEADLY", "WAVE"],
-                focal_asset_path=primary_asset,
-                accent_color=(254, 224, 4),
-                composition_mode="dramatic_center",
-                text_placement="lower_third"
-            ))
-            candidates.append(ThumbnailCandidate(
-                id="cand_02_strange_disaster",
-                concept_name="Bizarre Calamity",
-                archetype=archetype,
-                headline_words=["STRANGEST", "DISASTER", "EVER"],
-                focal_asset_path=secondary_asset,
-                accent_color=(255, 77, 77),
-                composition_mode="epic_lower_third",
-                text_placement="upper_third"
-            ))
-            candidates.append(ThumbnailCandidate(
-                id="cand_03_strange_tsunami",
-                concept_name="Direct Scale Impact",
-                archetype=archetype,
-                headline_words=["25-FOOT", "TSUNAMI"],
-                focal_asset_path=primary_asset,
-                accent_color=(32, 201, 151),
-                composition_mode="split_contrast",
-                text_placement="lower_third"
+                text_placement="upper_third",
             ))
 
         return candidates

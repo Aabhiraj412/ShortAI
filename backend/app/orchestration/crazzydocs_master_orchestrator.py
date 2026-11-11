@@ -19,6 +19,7 @@ Executes the unified 14-stage autonomous production lifecycle:
 14. YouTube Upload Queue (Decoupled queueing with strict safety gate)
 """
 
+import asyncio
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
@@ -45,6 +46,14 @@ from backend.app.content.topic_ledger import (
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
 from backend.app.orchestration.production_workspace import ProductionWorkspace
 from backend.app.services.expressive_tts_engine import ExpressiveTTSEngine, NarrationSegment
+from backend.app.services.qc_service import QualityControlEngine
+from backend.app.rendering.engine import HybridVisualEngine
+from backend.app.rendering.documentary_storyboard_builder import (
+    acquire_isolated_topic_assets,
+    build_20_beat_storyboard,
+    compose_structured_script,
+    synthesize_and_probe_narration,
+)
 from backend.app.rendering.engines.creative_thumbnail_engine import CreativeThumbnailEngine
 from backend.app.rendering.engines.vesna_fast_renderer import VisualBeatConfig
 from backend.app.services.notification_service import NotificationManager, notification_service
@@ -209,47 +218,64 @@ class CrazzyDocsMasterOrchestrator:
         job_id: Optional[str] = None,
         force_topic_id: Optional[str] = None,
         execution_context: Optional[ExecutionContext] = None,
+        use_live_pipeline: Optional[bool] = None,
     ) -> Dict:
         """
-        Executes Stages 1 through 13: Generates video, thumbnail, QC, database, and alerts.
-        Enqueues finished short for publication without executing immediate public upload.
-        Supports deterministic stage checkpoint resumption.
-        Enforces strict execution context isolation (PRODUCTION vs TEST/DEV/MAINTENANCE).
+        Executes Stages 1 through 14: Discovers topic, acquires isolated assets, synthesizes
+        expressive TTS narration, renders multi-beat 1080x1920 video + branded outro, generates
+        thumbnail, enforces 15-point QC and Content Integrity Gate, and strictly isolates non-PRODUCTION runs.
         """
         if execution_context is None:
             execution_context = get_current_execution_context()
         elif isinstance(execution_context, str):
             execution_context = ExecutionContext.from_string(execution_context)
 
-        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        job_id = job_id or f"job_{now_str}"
-        t_start = time.perf_counter()
-        logger.info("=== STARTING AUTONOMOUS PRODUCTION RUN: %s (Context: %s) ===", job_id, execution_context.value)
+        # PRODUCTION and VALIDATION run the full real live pipeline unless explicitly overridden.
+        # TEST context keeps lightweight unit-test defaults unless use_live_pipeline=True is passed.
+        is_full_live = (
+            use_live_pipeline
+            if use_live_pipeline is not None
+            else execution_context in (ExecutionContext.PRODUCTION, ExecutionContext.VALIDATION)
+        )
+        persist_to_db = execution_context != ExecutionContext.VALIDATION
 
-        # Inspect existing checkpoint if resuming
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_id = job_id or (
+            f"val_3_21i_{now_str}" if execution_context == ExecutionContext.VALIDATION else f"job_{now_str}"
+        )
+        t_start = time.perf_counter()
+        logger.info(
+            "=== STARTING AUTONOMOUS PRODUCTION RUN: %s (Context: %s, LivePipeline: %s) ===",
+            job_id,
+            execution_context.value,
+            is_full_live,
+        )
+
+        # Inspect existing checkpoint if resuming (skip studio.db mutations in VALIDATION context)
         existing_cp = {}
-        with SessionLocal() as db_session:
-            job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-            if not job:
-                job = JobModel(
-                    id=job_id,
-                    date_str=datetime.now().strftime("%Y-%m-%d"),
-                    status="RUNNING",
-                    current_stage="TOPIC_DISCOVERY",
-                    progress_pct=5.0,
-                    actual_start_at=datetime.utcnow(),
-                )
-                db_session.add(job)
-                db_session.commit()
-            else:
-                if job.checkpoint_data_json:
-                    try:
-                        existing_cp = json.loads(job.checkpoint_data_json)
-                    except Exception:
-                        pass
-                job.status = "RUNNING"
-                job.heartbeat_at = datetime.utcnow()
-                db_session.commit()
+        if persist_to_db:
+            with SessionLocal() as db_session:
+                job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                if not job:
+                    job = JobModel(
+                        id=job_id,
+                        date_str=datetime.now().strftime("%Y-%m-%d"),
+                        status="RUNNING",
+                        current_stage="TOPIC_DISCOVERY",
+                        progress_pct=5.0,
+                        actual_start_at=datetime.utcnow(),
+                    )
+                    db_session.add(job)
+                    db_session.commit()
+                else:
+                    if job.checkpoint_data_json:
+                        try:
+                            existing_cp = json.loads(job.checkpoint_data_json)
+                        except Exception:
+                            pass
+                    job.status = "RUNNING"
+                    job.heartbeat_at = datetime.utcnow()
+                    db_session.commit()
 
         try:
             # -------------------------------------------------------------
@@ -287,17 +313,35 @@ class CrazzyDocsMasterOrchestrator:
                 )
             else:
                 logger.info("[STAGE 1-3] Discovering, researching & scoring topic...")
-                filter_dups = (force_topic_id is None)
-                ranked = self.topic_engine.discover_and_rank_topics(filter_duplicates=filter_dups)
+                # Duplicate & cooldown gates are NEVER bypassed in PRODUCTION or VALIDATION
+                if execution_context in (ExecutionContext.PRODUCTION, ExecutionContext.VALIDATION):
+                    filter_dups = True
+                else:
+                    filter_dups = (force_topic_id is None)
+
+                if is_full_live:
+                    ranked = self.topic_engine.discover_and_rank_live_topics(filter_duplicates=filter_dups)
+                else:
+                    ranked = self.topic_engine.discover_and_rank_topics(filter_duplicates=filter_dups)
+
                 if not ranked:
                     raise RuntimeError("No eligible candidate topics found passing duplicate and factual gates.")
 
-                selected_topic: ScoredTopic = ranked[0]
+                selected_topic: Optional[ScoredTopic] = None
                 if force_topic_id:
                     for cand in ranked:
                         if cand.id == force_topic_id:
                             selected_topic = cand
                             break
+                    if selected_topic is None:
+                        if execution_context in (ExecutionContext.PRODUCTION, ExecutionContext.VALIDATION):
+                            raise RuntimeError(
+                                f"Forced topic '{force_topic_id}' failed duplicate/cooldown or availability checks; "
+                                "duplicate bypass is strictly prohibited."
+                            )
+                        selected_topic = ranked[0]
+                else:
+                    selected_topic = ranked[0]
 
                 logger.info("Selected topic: '%s' (Composite Score: %.2f)", selected_topic.title, selected_topic.composite_score)
 
@@ -309,13 +353,14 @@ class CrazzyDocsMasterOrchestrator:
                 best_hook = max(hooks, key=lambda h: h.composite_score)
                 logger.info("Winning hook (%s): '%s'", best_hook.approach, best_hook.hook_text)
 
-                self._update_checkpoint(job_id, "STORY_DEVELOPMENT", 30.0, {
-                    "topic_title": selected_topic.title,
-                    "topic_summary": selected_topic.summary,
-                    "hook_text": best_hook.hook_text,
-                    "category": selected_topic.category,
-                    "key_entities": selected_topic.key_entities,
-                })
+                if persist_to_db:
+                    self._update_checkpoint(job_id, "STORY_DEVELOPMENT", 30.0, {
+                        "topic_title": selected_topic.title,
+                        "topic_summary": selected_topic.summary,
+                        "hook_text": best_hook.hook_text,
+                        "category": selected_topic.category,
+                        "key_entities": selected_topic.key_entities,
+                    })
 
             # -------------------------------------------------------------
             # Stage 5 & 6 & 7: Creative Direction, Media & Storyboard
@@ -333,25 +378,93 @@ class CrazzyDocsMasterOrchestrator:
                 selected_topic.category, selected_topic.title, selected_topic.summary
             )
 
-            # Topic-aware dynamic script and storyboard generation
-            narration_text = self._synthesize_topic_script(selected_topic, best_hook.hook_text)
-            dur = max(50.5, min(58.5, round(len(narration_text.split()) / 2.3, 2)))
-            script_fp = compute_script_fingerprint(narration_text)
+            thumb_assets: List[str] = []
+            manifest_assets: List[Dict] = []
+            visual_beats: List[VisualBeatConfig] = []
+            plan = None
+            script_data: Optional[Dict] = None
+            section_timings: List[Dict] = []
+            rendered_engine_name = "CleanSlateRenderer"
+            attrib_manifest = None
 
-            visual_beats = self._build_topic_visual_beats(selected_topic, best_hook.hook_text, dur)
+            if is_full_live:
+                # Save research dossier into workspace
+                research_dossier_path = os.path.join(prod_ws.research_dir, f"research_{job_id}.json")
+                with open(research_dossier_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "topic_id": selected_topic.id,
+                        "title": selected_topic.title,
+                        "category": selected_topic.category,
+                        "discovery_source": getattr(selected_topic, "discovery_source", "live"),
+                        "summary": selected_topic.summary,
+                        "extended_extract": getattr(selected_topic, "extended_extract", ""),
+                        "factual_bullets": getattr(selected_topic, "factual_bullets", []),
+                        "sources": selected_topic.sources,
+                        "key_entities": selected_topic.key_entities,
+                        "composite_score": selected_topic.composite_score,
+                        "winning_hook": best_hook.hook_text,
+                    }, f, indent=2)
+                prod_ws.register_artifact("STAGE_02_RESEARCH", "research", research_dossier_path, copy_into_workspace=False)
+
+                # Structured 5-stage factual script
+                script_data = compose_structured_script(selected_topic, best_hook.hook_text)
+                narration_text = script_data["full_script"]
+                script_path = os.path.join(prod_ws.scripts_dir, f"script_{job_id}.json")
+                with open(script_path, "w", encoding="utf-8") as f:
+                    json.dump(script_data, f, indent=2)
+                prod_ws.register_artifact("STAGE_04_SCRIPT", "script", script_path, copy_into_workspace=False)
+
+                # Real Edge-TTS voiceover synthesis + ffprobe timing
+                voice_path, section_timings, voice_dur = synthesize_and_probe_narration(
+                    self.tts_engine, script_data["sections"], prod_ws
+                )
+                dur = round(voice_dur + 2.0, 2)  # Main narrative + 2.0s branded outro
+
+                # Acquire isolated openly licensed assets into workspace
+                acquired_assets, attrib_manifest, manifest_assets = acquire_isolated_topic_assets(
+                    selected_topic, prod_ws, execution_context, max_assets=6
+                )
+                thumb_assets = [
+                    a.local_path for a in acquired_assets if a.local_path and os.path.isfile(a.local_path)
+                ]
+                for ma in manifest_assets:
+                    if ma.get("path") and os.path.isfile(ma["path"]):
+                        prod_ws.register_artifact("STAGE_06_MEDIA", "asset", ma["path"], copy_into_workspace=False)
+
+                if attrib_manifest:
+                    attrib_json_path = os.path.join(prod_ws.metadata_dir, f"attribution_manifest_{job_id}.json")
+                    with open(attrib_json_path, "w", encoding="utf-8") as f:
+                        json.dump(asdict(attrib_manifest), f, indent=2)
+                    prod_ws.register_artifact("STAGE_06_ATTRIBUTION", "metadata", attrib_json_path, copy_into_workspace=False)
+
+                # Build 20-beat multi-layout visual storyboard + synchronized ASS subtitles
+                plan, visual_beats, ass_path = build_20_beat_storyboard(
+                    topic=selected_topic,
+                    timings=section_timings,
+                    total_voice_dur=voice_dur,
+                    voiceover_path=voice_path,
+                    acquired_assets=acquired_assets,
+                    prod_ws=prod_ws,
+                )
+                timeline_json_path = os.path.join(prod_ws.visual_timeline_dir, f"storyboard_{job_id}.json")
+                if os.path.isfile(timeline_json_path):
+                    prod_ws.register_artifact("STAGE_07_STORYBOARD", "visual_timeline", timeline_json_path, copy_into_workspace=False)
+                rendered_engine_name = "HybridVisualEngine"
+            else:
+                narration_text = self._synthesize_topic_script(selected_topic, best_hook.hook_text)
+                dur = max(50.5, min(58.5, round(len(narration_text.split()) / 2.3, 2)))
+                visual_beats = self._build_topic_visual_beats(selected_topic, best_hook.hook_text, dur)
+                voice_path = os.path.join(prod_ws.narration_dir, f"voiceover_{job_id}.mp3")
+                if not os.path.exists(voice_path):
+                    subprocess.run([
+                        FFMPEG_EXE, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", str(dur),
+                        "-c:a", "libmp3lame", "-b:a", "192k", voice_path
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+            script_fp = compute_script_fingerprint(narration_text)
             storyboard_fp = compute_storyboard_fingerprint(visual_beats)
             prod_ws.script_fingerprint = script_fp
             prod_ws.storyboard_fingerprint = storyboard_fp
-
-            voice_path = os.path.join(prod_ws.narration_dir, f"voiceover_{job_id}.mp3")
-            if not os.path.exists(voice_path):
-                subprocess.run([
-                    FFMPEG_EXE, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", str(dur),
-                    "-c:a", "libmp3lame", "-b:a", "192k", voice_path
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-            thumb_assets = []
-            manifest_assets = []
 
             # -------------------------------------------------------------
             # Stage 8: Expressive Narration Synthesis
@@ -359,7 +472,8 @@ class CrazzyDocsMasterOrchestrator:
             logger.info("[STAGE 8] Calibrating expressive narration...")
             if not os.path.exists(voice_path):
                 raise FileNotFoundError(f"Calibrated voice narration track missing: {voice_path}")
-            self._update_checkpoint(job_id, "VOICEOVER", 55.0, {"audio_path": voice_path})
+            if persist_to_db:
+                self._update_checkpoint(job_id, "VOICEOVER", 55.0, {"audio_path": voice_path})
             prod_ws.register_artifact("STAGE_08_VOICEOVER", "narration", voice_path, copy_into_workspace=False)
 
             # -------------------------------------------------------------
@@ -371,6 +485,26 @@ class CrazzyDocsMasterOrchestrator:
             elif existing_cp.get("video_path") and os.path.isfile(existing_cp["video_path"]) and os.path.getsize(existing_cp["video_path"]) > 1024:
                 final_video_path = existing_cp["video_path"]
                 logger.info("[CHECKPOINT RECOVERY] Reusing verified video render: %s", final_video_path)
+            elif is_full_live and plan is not None:
+                logger.info("[STAGE 9] Rendering %d-beat 1080x1920 @ 30 FPS documentary Short via HybridVisualEngine...", len(plan.scenes))
+                hybrid_engine = HybridVisualEngine(workspace_root=WORKSPACE)
+                render_work_dir = os.path.join(prod_ws.prod_dir, "render_work")
+                render_telemetry = asyncio.run(
+                    hybrid_engine.render_storyboard(
+                        plan=plan,
+                        output_final_mp4=final_video_path,
+                        work_dir=render_work_dir,
+                    )
+                )
+                from backend.app.services.animation_service import probe_video
+                probed = probe_video(final_video_path)
+                dur = round(float(probed.get("duration", dur)), 2)
+                render_meta_path = os.path.join(prod_ws.reports_dir, f"render_telemetry_{job_id}.json")
+                with open(render_meta_path, "w", encoding="utf-8") as f:
+                    json.dump({"render_telemetry": render_telemetry, "probed_video": probed}, f, indent=2)
+                prod_ws.register_artifact("STAGE_09_RENDERING_TELEMETRY", "report", render_meta_path, copy_into_workspace=False)
+                if persist_to_db:
+                    self._update_checkpoint(job_id, "RENDERING", 75.0, {"video_path": final_video_path})
             else:
                 logger.info("[STAGE 9] Rendering fresh 1080x1920 video with dynamic slate and typography...")
                 subprocess.run([
@@ -378,7 +512,8 @@ class CrazzyDocsMasterOrchestrator:
                     "-i", voice_path, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest",
                     final_video_path
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                self._update_checkpoint(job_id, "RENDERING", 75.0, {"video_path": final_video_path})
+                if persist_to_db:
+                    self._update_checkpoint(job_id, "RENDERING", 75.0, {"video_path": final_video_path})
             prod_ws.register_artifact("STAGE_09_RENDERING", "video", final_video_path, copy_into_workspace=False)
 
             # -------------------------------------------------------------
@@ -407,23 +542,17 @@ class CrazzyDocsMasterOrchestrator:
                     candidate_dir=variants_dir,
                 )
                 winning_headline = winning_thumb.headline_text
-                self._update_checkpoint(job_id, "THUMBNAIL", 85.0, {
-                    "thumbnail_path": thumb_path,
-                    "winning_thumbnail": winning_headline,
-                })
+                if persist_to_db:
+                    self._update_checkpoint(job_id, "THUMBNAIL", 85.0, {
+                        "thumbnail_path": thumb_path,
+                        "winning_thumbnail": winning_headline,
+                    })
             prod_ws.register_artifact("STAGE_10_THUMBNAIL", "thumbnail", thumb_path, copy_into_workspace=False)
 
             # -------------------------------------------------------------
-            # Stage 11: Quality Control Verification
+            # Stage 11: Quality Control & Mandatory Content Integrity Gate
             # -------------------------------------------------------------
-            logger.info("[STAGE 11] Running 11-point quality control gate...")
-            if dur >= 60.0 or dur < 50.0:
-                raise ValueError(f"QC Failure: Duration {dur:.2f}s is outside Shorts 50-58s window.")
-
-            # -------------------------------------------------------------
-            # Mandatory Content Integrity Gate (A through I)
-            # -------------------------------------------------------------
-            logger.info("[CONTENT INTEGRITY GATE] Generating metadata and verifying editorial integrity...")
+            logger.info("[CONTENT INTEGRITY GATE] Generating metadata and running 15-point QC...")
             meta = MetadataGenerator.generate_shorts_metadata(
                 topic_title=selected_topic.title,
                 opening_hook=best_hook.hook_text,
@@ -433,6 +562,36 @@ class CrazzyDocsMasterOrchestrator:
                 sources=getattr(selected_topic, "sources", None),
                 attributions=manifest_assets,
             )
+            meta_json_path = os.path.join(prod_ws.metadata_dir, f"youtube_metadata_{job_id}.json")
+            with open(meta_json_path, "w", encoding="utf-8") as f:
+                json.dump(asdict(meta), f, indent=2)
+            prod_ws.register_artifact("STAGE_11_METADATA", "metadata", meta_json_path, copy_into_workspace=False)
+
+            logger.info("[STAGE 11] Running quality control gate...")
+            if dur >= 60.0 or dur < 50.0:
+                raise ValueError(f"QC Failure: Duration {dur:.2f}s is outside Shorts 50-58s window.")
+
+            qc_checks_report: Dict = {}
+            if is_full_live:
+                qc_engine = QualityControlEngine()
+                qc_passed, qc_errors, qc_checks_report = qc_engine.run_qc_checks(
+                    video_path=final_video_path,
+                    thumbnail_path=thumb_path,
+                    metadata={
+                        "youtube_title": meta.title,
+                        "description": meta.description,
+                        "tags": meta.tags,
+                        "category_id": meta.category_id,
+                    },
+                    target_fps=30.0,
+                    allow_custom_duration=False,
+                )
+                qc_report_path = os.path.join(prod_ws.reports_dir, f"qc_report_{job_id}.json")
+                with open(qc_report_path, "w", encoding="utf-8") as f:
+                    json.dump({"passed": qc_passed, "errors": qc_errors, "checks": qc_checks_report}, f, indent=2)
+                prod_ws.register_artifact("STAGE_11_QC", "report", qc_report_path, copy_into_workspace=False)
+                if not qc_passed:
+                    raise ValueError(f"QC Failure: {'; '.join(qc_errors)}")
 
             integrity_report = self.integrity_gate.validate_production(
                 topic_title=selected_topic.title,
@@ -447,7 +606,7 @@ class CrazzyDocsMasterOrchestrator:
                 metadata_tags=meta.tags,
                 attribution_text=meta.attribution_text,
                 manifest_assets=manifest_assets,
-                rendering_engine="CleanSlateRenderer",
+                rendering_engine=rendered_engine_name,
             )
 
             integrity_audit_path = os.path.join(prod_ws.prod_dir, "audit", f"integrity_report_{job_id}.json")
@@ -471,40 +630,56 @@ class CrazzyDocsMasterOrchestrator:
 
             if not integrity_report.is_valid:
                 logger.critical("[CONTENT INTEGRITY GATE] FAILED! Production rejected:\n%s", "\n".join(integrity_report.rejection_reasons))
-                with SessionLocal() as db_session:
-                    job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-                    if job:
-                        job.status = "BLOCKED_QC"
-                        job.current_stage = "BLOCKED_QC"
-                        job.error_details = "; ".join(integrity_report.rejection_reasons)
-                        db_session.commit()
+                if persist_to_db:
+                    with SessionLocal() as db_session:
+                        job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                        if job:
+                            job.status = "BLOCKED_QC"
+                            job.current_stage = "BLOCKED_QC"
+                            job.error_details = "; ".join(integrity_report.rejection_reasons)
+                            db_session.commit()
                 raise ValueError(f"BLOCKED_QC: {integrity_report.rejection_reasons}")
 
-            logger.info("[CONTENT INTEGRITY GATE] PASSED! 9/9 checks verified for topic '%s'.", selected_topic.title)
+            logger.info("[CONTENT INTEGRITY GATE] PASSED! %d checks verified for topic '%s'.", len(integrity_report.checks), selected_topic.title)
 
             # -------------------------------------------------------------
             # Stage 12: Production Database Persistence
             # -------------------------------------------------------------
-            logger.info("[STAGE 12] Recording publication state in database...")
-            with SessionLocal() as db_session:
-                job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-                if job:
-                    job.status = "COMPLETED"
-                    job.current_stage = "COMPLETED"
-                    job.topic_title = selected_topic.title
-                    job.progress_pct = 100.0
-                    job.checkpoint_data_json = json.dumps({
+            if persist_to_db:
+                logger.info("[STAGE 12] Recording publication state in database...")
+                with SessionLocal() as db_session:
+                    job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                    if job:
+                        job.status = "COMPLETED"
+                        job.current_stage = "COMPLETED"
+                        job.topic_title = selected_topic.title
+                        job.progress_pct = 100.0
+                        job.checkpoint_data_json = json.dumps({
+                            "video_path": final_video_path,
+                            "thumbnail_path": thumb_path,
+                            "duration_sec": dur,
+                            "topic": selected_topic.title,
+                            "hook": best_hook.hook_text,
+                            "winning_thumbnail": winning_headline,
+                        })
+                        job.completed_at = datetime.utcnow()
+                        db_session.commit()
+            else:
+                logger.info("[STAGE 12] VALIDATION context: skipping studio.db JobModel mutation; checkpoint saved in workspace reports.")
+                val_cp_path = os.path.join(prod_ws.reports_dir, f"validation_job_summary_{job_id}.json")
+                with open(val_cp_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "job_id": job_id,
+                        "execution_context": execution_context.value,
+                        "status": "COMPLETED",
+                        "topic": selected_topic.title,
+                        "duration_sec": dur,
                         "video_path": final_video_path,
                         "thumbnail_path": thumb_path,
-                        "duration_sec": dur,
-                        "topic": selected_topic.title,
-                        "hook": best_hook.hook_text,
-                        "winning_thumbnail": winning_headline,
-                    })
-                    job.completed_at = datetime.utcnow()
-                    db_session.commit()
+                    }, f, indent=2)
+                prod_ws.register_artifact("STAGE_12_VALIDATION_SUMMARY", "report", val_cp_path, copy_into_workspace=False)
 
-            # Record in TopicLedger to prevent duplicate topic generation
+            # Record in TopicLedger to prevent duplicate topic generation (strictly skipped outside PRODUCTION)
             rec = ContentRecord(
                 topic_id=f"topic_{job_id}",
                 topic_title=selected_topic.title,
@@ -517,7 +692,7 @@ class CrazzyDocsMasterOrchestrator:
                 created_at=datetime.utcnow().isoformat() + "Z",
                 publication_status="produced",
             )
-            self.ledger.record_content(rec, allow_override=False, execution_context=str(execution_context))
+            self.ledger.record_content(rec, allow_override=False, execution_context=execution_context.value)
 
             # -------------------------------------------------------------
             # Stage 13: Notification Dispatch
@@ -559,7 +734,11 @@ class CrazzyDocsMasterOrchestrator:
                 )
                 self.publishing_engine.db.record_publication(pub_record, execution_context=execution_context)
             else:
-                publishing_status = "suppressed_test_execution"
+                publishing_status = (
+                    "suppressed_validation_execution"
+                    if execution_context == ExecutionContext.VALIDATION
+                    else "suppressed_test_execution"
+                )
                 logger.info(
                     "[STAGE 14] Execution context is %s (job_id=%s). Suppressing YouTube publishing queue insertion.",
                     execution_context.value,
@@ -572,24 +751,29 @@ class CrazzyDocsMasterOrchestrator:
                 "job_id": job_id,
                 "production_id": prod_ws.production_id,
                 "production_dir": prod_ws.prod_dir,
+                "manifest_path": prod_ws.manifest_path,
                 "status": "COMPLETED",
                 "topic": selected_topic.title,
                 "video_path": final_video_path,
                 "thumbnail_path": thumb_path,
                 "duration_sec": dur,
+                "beat_count": len(visual_beats),
                 "elapsed_sec": round(elapsed, 1),
+                "qc_checks": qc_checks_report,
+                "integrity_report": integrity_audit_path,
                 "notifications": notif_res,
                 "publishing_status": publishing_status,
             }
 
         except Exception as e:
             logger.error("Master pipeline failed: %s", e)
-            with SessionLocal() as db_session:
-                job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-                if job:
-                    job.status = "FAILED"
-                    job.error_details = str(e)
-                    db_session.commit()
+            if persist_to_db:
+                with SessionLocal() as db_session:
+                    job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                    if job:
+                        job.status = "FAILED"
+                        job.error_details = str(e)
+                        db_session.commit()
 
             # Dispatch failure alert
             self.notifier.send_failure(

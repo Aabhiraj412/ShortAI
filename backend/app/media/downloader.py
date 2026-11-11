@@ -90,7 +90,7 @@ class AssetDownloader:
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AIYouTubeShortsStudio/1.0"
+                "User-Agent": "CrazzyDocsStudio/1.0 (https://github.com/CrazzyDocs; research@crazzydocs.local)"
             }
         )
 

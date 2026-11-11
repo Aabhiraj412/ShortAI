@@ -35,92 +35,133 @@ class WikimediaProvider(BaseMediaProvider):
         super().__init__(provider_name="Wikimedia Commons", timeout_sec=timeout_sec)
         self.verifier = license_verifier or LicenseVerifier()
 
+    def _parse_commons_pages(self, pages: dict, query: str) -> List[MediaAsset]:
+        assets: List[MediaAsset] = []
+        allowed_mimes = {"image/jpeg", "image/png", "image/webp"}
+        for page_id, page in pages.items():
+            imageinfo_list = page.get("imageinfo", [])
+            if not imageinfo_list:
+                continue
+
+            info = imageinfo_list[0]
+            mime = (info.get("mime") or "").lower()
+            if mime not in allowed_mimes:
+                continue
+
+            orig_url = info.get("url", "")
+            thumb_url = info.get("thumburl", "")
+            orig_w = int(info.get("width") or 0)
+            # Prefer 1280px Wikimedia thumb when original is large or available to reduce 429 rate-limits
+            download_url = thumb_url if (thumb_url and (orig_w > 1400 or not orig_url)) else orig_url
+            if not download_url:
+                continue
+
+            source_url = info.get("descriptionurl", download_url)
+            ext = info.get("extmetadata", {})
+
+            raw_title = page.get("title", "").replace("File:", "")
+            clean_title = ext.get("ObjectName", {}).get("value") or raw_title
+
+            raw_creator = ext.get("Artist", {}).get("value") or ext.get("Credit", {}).get("value") or "Wikimedia Commons Contributor"
+            creator = strip_html(raw_creator)
+
+            license_name = ext.get("LicenseShortName", {}).get("value") or ext.get("UsageTerms", {}).get("value") or ""
+            license_url = ext.get("LicenseUrl", {}).get("value")
+            notes = strip_html(ext.get("Restrictions", {}).get("value", ""))
+
+            status, lic_type, norm_lic_name, reason = self.verifier.verify_asset_license(
+                raw_license=license_name,
+                source_url=source_url,
+                repository=self.provider_name,
+                creator=creator,
+                metadata_notes=notes
+            )
+
+            attr_text = f"\"{clean_title}\" by {creator} via Wikimedia Commons, licensed under {norm_lic_name}"
+            if license_url:
+                attr_text += f" ({license_url})"
+
+            asset = MediaAsset(
+                asset_id=f"wiki_{page_id}",
+                title=clean_title,
+                creator=creator,
+                source_repository=self.provider_name,
+                source_url=source_url,
+                download_url=download_url,
+                thumbnail_url=thumb_url or orig_url,
+                license_type=lic_type,
+                license_version="",
+                license_url=license_url,
+                attribution_text=attr_text,
+                width=int(info.get("thumbwidth") or orig_w),
+                height=int(info.get("thumbheight") or int(info.get("height") or 0)),
+                file_size_bytes=int(info.get("size") or 0),
+                mime_type=mime or "image/jpeg",
+                verification_status=status,
+                rejection_reason=reason,
+                search_query=query
+            )
+            assets.append(asset)
+        return assets
+
+    def fetch_files_by_titles(self, file_titles: List[str], topic_title: str = "") -> List[MediaAsset]:
+        """Fetches verified image metadata from Wikimedia Commons for explicit File:... titles."""
+        if not file_titles:
+            return []
+        normalized = [t if t.startswith("File:") else f"File:{t}" for t in file_titles[:12]]
+        params = {
+            "action": "query",
+            "titles": "|".join(normalized),
+            "prop": "imageinfo",
+            "iiprop": "url|size|extmetadata|mime",
+            "iiurlwidth": "1280",
+            "format": "json",
+        }
+        url = f"{WIKIMEDIA_API_URL}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "CrazzyDocsStudio/1.0 (https://github.com/CrazzyDocs; research@crazzydocs.local)"
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            pages = data.get("query", {}).get("pages", {})
+            return self._parse_commons_pages(pages, query=topic_title or normalized[0])
+        except Exception as e:
+            logger.info("Wikimedia batch file lookup failed: %s", e)
+            return []
+
     def _sync_fetch(self, query: str, limit: int) -> List[MediaAsset]:
         params = {
             "action": "query",
             "generator": "search",
-            "gsrsearch": query,
+            "gsrsearch": f"{query} filetype:bitmap",
             "gsrnamespace": "6",  # File namespace
             "gsrlimit": min(20, max(1, limit)),
             "prop": "imageinfo",
             "iiprop": "url|size|extmetadata|mime",
+            "iiurlwidth": "1280",
             "format": "json"
         }
         url = f"{WIKIMEDIA_API_URL}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "AIYouTubeShortsStudio/1.0 (OpenlyLicensedMediaEngine; contact@localstudio.dev)"
+                "User-Agent": "CrazzyDocsStudio/1.0 (https://github.com/CrazzyDocs; research@crazzydocs.local)"
             }
         )
 
-        assets: List[MediaAsset] = []
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
             pages = data.get("query", {}).get("pages", {})
-            for page_id, page in pages.items():
-                imageinfo_list = page.get("imageinfo", [])
-                if not imageinfo_list:
-                    continue
-
-                info = imageinfo_list[0]
-                download_url = info.get("url", "")
-                if not download_url:
-                    continue
-
-                source_url = info.get("descriptionurl", download_url)
-                ext = info.get("extmetadata", {})
-
-                raw_title = page.get("title", "").replace("File:", "")
-                clean_title = ext.get("ObjectName", {}).get("value") or raw_title
-
-                raw_creator = ext.get("Artist", {}).get("value") or ext.get("Credit", {}).get("value") or "Wikimedia Commons Contributor"
-                creator = strip_html(raw_creator)
-
-                license_name = ext.get("LicenseShortName", {}).get("value") or ext.get("UsageTerms", {}).get("value") or ""
-                license_url = ext.get("LicenseUrl", {}).get("value")
-                notes = strip_html(ext.get("Restrictions", {}).get("value", ""))
-
-                # Strict license verification
-                status, lic_type, norm_lic_name, reason = self.verifier.verify_asset_license(
-                    raw_license=license_name,
-                    source_url=source_url,
-                    repository=self.provider_name,
-                    creator=creator,
-                    metadata_notes=notes
-                )
-
-                attr_text = f"\"{clean_title}\" by {creator} via Wikimedia Commons, licensed under {norm_lic_name}"
-                if license_url:
-                    attr_text += f" ({license_url})"
-
-                asset = MediaAsset(
-                    asset_id=f"wiki_{page_id}",
-                    title=clean_title,
-                    creator=creator,
-                    source_repository=self.provider_name,
-                    source_url=source_url,
-                    download_url=download_url,
-                    thumbnail_url=info.get("thumburl", download_url),
-                    license_type=lic_type,
-                    license_version="",
-                    license_url=license_url,
-                    attribution_text=attr_text,
-                    width=int(info.get("width") or 0),
-                    height=int(info.get("height") or 0),
-                    file_size_bytes=int(info.get("size") or 0),
-                    mime_type=info.get("mime", "image/jpeg"),
-                    verification_status=status,
-                    rejection_reason=reason,
-                    search_query=query
-                )
-                assets.append(asset)
+            return self._parse_commons_pages(pages, query=query)
         except Exception as e:
             logger.info("Wikimedia search query '%s' failed or timed out: %s", query, e)
-
-        return assets
+            return []
 
     async def search_media(self, query: str, limit: int = 10) -> List[MediaAsset]:
         """Dispatches search to Wikimedia Commons without blocking event loop."""

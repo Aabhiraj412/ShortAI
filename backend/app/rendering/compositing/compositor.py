@@ -117,51 +117,48 @@ class UniversalCompositor:
         audio_mix_inputs = []
 
         if vo_idx is not None and music_idx is not None:
-            # Duck music under voiceover using sidechain compression or volume ducking
+            # Normalize channels/rates so sidechaincompress never fails on mono TTS vs stereo music
             filter_complex.append(
-                f"[{music_idx}:a]volume=0.22,aloop=loop=-1:size=2e+09[bgm];"
-                f"[{vo_idx}:a]volume=1.0[vo];"
-                f"[bgm][vo]sidechaincompress=threshold=0.08:ratio=4:attack=15:release=250[ducked_bgm];"
+                f"[{music_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.22,aloop=loop=-1:size=2e+09[bgm];"
+                f"[{vo_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=1.0[vo];"
+                f"[{vo_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo[vo_sc];"
+                f"[bgm][vo_sc]sidechaincompress=threshold=0.08:ratio=4:attack=15:release=250[ducked_bgm];"
             )
             audio_mix_inputs.append("[ducked_bgm]")
             audio_mix_inputs.append("[vo]")
         elif vo_idx is not None:
-            filter_complex.append(f"[{vo_idx}:a]volume=1.0[vo];")
+            filter_complex.append(f"[{vo_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=1.0[vo];")
             audio_mix_inputs.append("[vo]")
         elif music_idx is not None:
-            filter_complex.append(f"[{music_idx}:a]volume=0.35[bgm];")
+            filter_complex.append(f"[{music_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.35[bgm];")
             audio_mix_inputs.append("[bgm]")
 
         # Mix SFX
         for i, s_idx in enumerate(sfx_indices):
             label = f"[sfx_{i}]"
-            filter_complex.append(f"[{s_idx}:a]volume=0.85{label};")
+            filter_complex.append(f"[{s_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.65{label};")
             audio_mix_inputs.append(label)
 
         if audio_mix_inputs:
             mix_str = "".join(audio_mix_inputs)
-            filter_complex.append(f"{mix_str}amix=inputs={len(audio_mix_inputs)}:duration=first:dropout_transition=2[aout]")
-            audio_map = ["[aout]"]
+            filter_complex.append(f"{mix_str}amix=inputs={len(audio_mix_inputs)}:duration=first:dropout_transition=2:normalize=0[aout]")
         else:
             # Silence fallback
-            filter_complex.append("aevalsrc=0:d=1[aout]")
-            audio_map = ["[aout]"]
+            filter_complex.append("aevalsrc=0:d=1:s=48000:c=stereo[aout]")
 
-        # Video filters (e.g. subtitles)
-        video_filters = []
+        # Video filters (must live inside filter_complex when filter_complex is active)
+        v_map = "0:v"
         if subtitles_ass_path and os.path.exists(subtitles_ass_path):
             norm_sub = os.path.abspath(subtitles_ass_path).replace("\\", "/").replace(":", "\\:")
-            video_filters.append(f"ass='{norm_sub}'")
+            filter_complex.append(f";[0:v]ass='{norm_sub}'[vout]")
+            v_map = "[vout]"
 
         cmd = [self.ffmpeg_path, "-y"]
         cmd.extend(inputs)
 
         filter_str = "".join(filter_complex)
-        if video_filters:
-            cmd.extend(["-vf", ",".join(video_filters)])
-
         if filter_str:
-            cmd.extend(["-filter_complex", filter_str, "-map", "0:v", "-map", "[aout]"])
+            cmd.extend(["-filter_complex", filter_str, "-map", v_map, "-map", "[aout]"])
         else:
             cmd.extend(["-map", "0:v"])
 

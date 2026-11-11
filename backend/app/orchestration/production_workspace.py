@@ -238,7 +238,10 @@ class ProductionWorkspace:
 
         size_b = os.path.getsize(final_path)
         sha256 = compute_file_sha256(final_path)
-        rel_p = os.path.relpath(final_path, self.workspace_root).replace("\\", "/")
+        try:
+            rel_p = os.path.relpath(final_path, self.workspace_root).replace("\\", "/")
+        except ValueError:
+            rel_p = os.path.abspath(final_path).replace("\\", "/")
 
         artifact = ProductionArtifact(
             stage=stage,
@@ -255,6 +258,11 @@ class ProductionWorkspace:
 
     def _save_manifest(self):
         """Persists production manifest linking all assets to topic and production ID."""
+        try:
+            ws_rel = os.path.relpath(self.prod_dir, self.workspace_root).replace("\\", "/")
+        except ValueError:
+            ws_rel = os.path.abspath(self.prod_dir).replace("\\", "/")
+
         manifest_data = {
             "production_id": self.production_id,
             "topic_id": self.topic_id,
@@ -262,7 +270,7 @@ class ProductionWorkspace:
             "category": self.category,
             "script_fingerprint": self.script_fingerprint,
             "storyboard_fingerprint": self.storyboard_fingerprint,
-            "workspace_dir": os.path.relpath(self.prod_dir, self.workspace_root).replace("\\", "/"),
+            "workspace_dir": ws_rel,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "artifacts_count": len(self.artifacts),
             "artifacts": [asdict(a) for a in self.artifacts],

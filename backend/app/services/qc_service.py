@@ -5,7 +5,10 @@ Validates video, audio, subtitles, thumbnail, and metadata before permitting pub
 import os
 import subprocess
 from typing import Dict, List, Tuple
-from app.services.animation_service import probe_video
+try:
+    from backend.app.services.animation_service import probe_video
+except ImportError:
+    from app.services.animation_service import probe_video
 
 class QualityControlEngine:
     def __init__(self):

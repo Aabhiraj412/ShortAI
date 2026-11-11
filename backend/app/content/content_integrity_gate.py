@@ -180,13 +180,32 @@ class ContentIntegrityGate:
         if not os.path.isfile(thumbnail_path):
             report.add_result("CHECK_D_THUMBNAIL", False, f"Thumbnail file not found at: {thumbnail_path}")
         else:
-            # Check headline
+            # Check headline against unrelated nuclear AND stale showcase headlines
             headline_upper = thumbnail_headline.upper()
+            stale_headline_phrases = {
+                "DEMON CORE": ("demon core", "louis slotin", "plutonium"),
+                "SURVIVED BOTH BOMBS": ("yamaguchi", "hiroshima", "nagasaki"),
+                "FELL 33,000 FEET": ("vesna", "vulovic", "33,000", "parachute"),
+                "THE DEADLY WAVE": ("molasses", "tsunami", "wave"),
+                "BOUGHT A BANK": ("bank", "dollar"),
+            }
+            mismatched_phrase = None
+            for phrase, req_terms in stale_headline_phrases.items():
+                if phrase in headline_upper and not any(t in title_lower for t in req_terms):
+                    mismatched_phrase = phrase
+                    break
+
             if not is_nuclear_topic and any(k in headline_upper for k in ("BOMB", "NUCLEAR", "HIROSHIMA", "NAGASAKI")):
                 report.add_result(
                     "CHECK_D_THUMBNAIL",
                     False,
                     f"Thumbnail headline '{headline_upper}' contains nuclear words for non-nuclear story."
+                )
+            elif mismatched_phrase:
+                report.add_result(
+                    "CHECK_D_THUMBNAIL",
+                    False,
+                    f"Thumbnail headline '{headline_upper}' contains mismatched legacy phrase '{mismatched_phrase}' unrelated to topic."
                 )
             else:
                 report.add_result("CHECK_D_THUMBNAIL", True, f"Thumbnail verified with headline: '{headline_upper}'")

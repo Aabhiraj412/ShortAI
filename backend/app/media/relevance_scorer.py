@@ -89,12 +89,14 @@ class RelevanceScorer:
         if asset.verification_status == LicenseStatus.REJECTED:
             return 0.0
 
-        # 1. Semantic match
+        # 1. Semantic match against ACTUAL asset title/source_url (never inflate via search_query)
         target_tokens = clean_words(target_concept)
-        asset_text = f"{asset.title} {asset.search_query or ''}"
+        asset_text = f"{asset.title} {asset.source_url or ''}"
         asset_tokens = clean_words(asset_text)
 
         overlap = len(target_tokens.intersection(asset_tokens))
+        if overlap == 0:
+            return 0.05
         semantic_score = min(1.0, overlap / max(1, len(target_tokens)))
 
         # 2. Resolution quality
