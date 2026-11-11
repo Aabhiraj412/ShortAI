@@ -1,0 +1,112 @@
+{
+  "stage": "3.21M",
+  "title": "Permanent Creative Intelligence & Visual Acquisition Policy",
+  "status": "PASSED",
+  "base_commit": "89d08c0026c1169d2dff0ce9f1713f6f5bc802d4",
+  "implementation_commit": "fa91709db5a5e1fb84344c9ad3071392c913c4b5",
+  "execution_mode": "VALIDATION",
+  "publishing_enabled": false,
+  "scheduler_state": "Disabled",
+  "policy": {
+    "policy_version": "3.21M",
+    "config_path": "D:\\Agents\\CrazzyDocs\\backend\\data\\creative_policy_config.json",
+    "supported_categories_count": 20,
+    "shared_across_contexts": [
+      "ExecutionContext.VALIDATION",
+      "ExecutionContext.PRODUCTION"
+    ],
+    "scoring_dimensions": [
+      "curiosity",
+      "novelty",
+      "storytelling",
+      "factual_reliability",
+      "visual_availability",
+      "audience_relevance",
+      "short_form_suitability",
+      "freshness"
+    ],
+    "visual_priority_order": [
+      "A_AUTHENTIC_EXISTING",
+      "B_OPEN_SOURCE_ANIMATION",
+      "C_ANIMATED_AUTHENTIC",
+      "D_SELECTIVE_AI_GENERATION"
+    ],
+    "max_source_photo_reuse": 2
+  },
+  "pytest_verification": {
+    "command": "python -m pytest tests/test_stage_3_21m_creative_policy_and_acquisition.py tests/test_stage_3_21h_content_freshness.py tests/test_stage_3_21i_validation_pipeline.py tests/test_stage_3_21j_visual_diversity_persistence_observability.py tests/test_stage_3_21k_reconciliation_freshness_storage.py tests/test_creative_identity_policy.py tests/test_media_acquisition.py tests/test_stage_3_13a_content_integrity.py -v",
+    "passed": 86,
+    "failed": 0,
+    "skipped": 0,
+    "duration_sec": 157.90
+  },
+  "multicategory_validation": {
+    "results_file": "D:\\Agents\\CrazzyDocs\\docs\\STAGE_3_21M_VALIDATION_RESULTS.json",
+    "distinct_actual_categories": [
+      "Nature and Wildlife",
+      "Psychology",
+      "Science",
+      "Technology"
+    ],
+    "full_renders": [
+      {
+        "category": "Science",
+        "topic_title": "Breakthrough Prize in Fundamental Physics",
+        "production_id": "val_3_21m_science_20261111_152005_1",
+        "duration_sec": 53.07,
+        "beat_count": 20,
+        "distinct_assets": 18,
+        "max_source_photo_reuse": 2,
+        "publishing_status": "suppressed_validation_execution"
+      },
+      {
+        "category": "Technology",
+        "topic_title": "History of communication",
+        "production_id": "val_3_21m_technology_20261111_152005_2",
+        "duration_sec": 50.84,
+        "beat_count": 20,
+        "distinct_assets": 18,
+        "max_source_photo_reuse": 2,
+        "publishing_status": "suppressed_validation_execution"
+      }
+    ],
+    "upstream_runs": [
+      {
+        "category": "Psychology",
+        "topic_title": "Naïve realism (psychology)",
+        "production_id": "val_3_21m_psychology_20261111_152005_3",
+        "word_count": 108,
+        "beat_count": 20,
+        "distinct_assets": 19,
+        "max_source_photo_reuse": 2
+      },
+      {
+        "category": "Nature and Wildlife",
+        "topic_title": "Pakistan",
+        "production_id": "val_3_21m_nature_20261111_152005_4",
+        "word_count": 128,
+        "beat_count": 20,
+        "distinct_assets": 18,
+        "max_source_photo_reuse": 2
+      }
+    ]
+  },
+  "database_isolation": {
+    "db_path": "D:\\Agents\\CrazzyDocs\\backend\\studio.db",
+    "counts_before": {
+      "content_ledger": 9,
+      "publishing_ledger": 0,
+      "publishing_ledger_archive": 253,
+      "persistent_jobs": 4,
+      "media_assets": 2
+    },
+    "counts_after": {
+      "content_ledger": 9,
+      "publishing_ledger": 0,
+      "publishing_ledger_archive": 253,
+      "persistent_jobs": 4,
+      "media_assets": 2
+    },
+    "isolated": true
+  }
+}
