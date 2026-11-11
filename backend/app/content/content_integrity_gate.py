@@ -27,6 +27,11 @@ import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.app.content.creative_identity_policy import CreativeIdentityPolicy
+from backend.app.content.visual_diversity_policy import (
+    MAX_IMAGE_REUSE,
+    MIN_DISTINCT_ASSETS_FULL_SHORT,
+    VisualDiversityValidator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +114,8 @@ class ContentIntegrityGate:
         attribution_text: str,
         manifest_assets: Optional[List[Dict]] = None,
         rendering_engine: Optional[str] = None,
+        storyboard_beats: Optional[List[Dict]] = None,
+        production_workspace_dir: Optional[str] = None,
     ) -> ContentIntegrityReport:
         """
         Executes complete 11-point Content Integrity Audit (A through K).
@@ -411,5 +418,32 @@ class ContentIntegrityGate:
                 True,
                 "All visual assets verified to belong exclusively to current production workspace or approved branding."
             )
+
+        # -------------------------------------------------------------
+        # CHECK N: Stage 3.21J Visual Diversity & Repetition Policy
+        # -------------------------------------------------------------
+        if storyboard_beats:
+            div_res = VisualDiversityValidator.validate_storyboard(
+                storyboard_beats,
+                topic_title=topic_title,
+                max_image_reuse=MAX_IMAGE_REUSE,
+                check_files_on_disk=True,
+                min_distinct_assets=(
+                    MIN_DISTINCT_ASSETS_FULL_SHORT if len(storyboard_beats) >= 18 else None
+                ),
+                workspace_root=production_workspace_dir,
+            )
+            if not div_res.is_valid:
+                report.add_result(
+                    "CHECK_N_VISUAL_DIVERSITY",
+                    False,
+                    "Visual diversity policy violation: " + " | ".join(div_res.violations),
+                )
+            else:
+                report.add_result(
+                    "CHECK_N_VISUAL_DIVERSITY",
+                    True,
+                    f"Visual diversity verified: {div_res.distinct_assets} distinct assets across {div_res.total_beats} beats (max_reuse={div_res.max_reuse_observed}).",
+                )
 
         return report

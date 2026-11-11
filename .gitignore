@@ -153,4 +153,5 @@ media/email_previews/
 media/thumbnails/
 media/images/
 media/source/
+backend/data/*.json
 tools/

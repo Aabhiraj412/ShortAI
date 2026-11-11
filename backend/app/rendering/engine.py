@@ -9,8 +9,9 @@ procedural sound synthesis, and final FFmpeg composition.
 import asyncio
 import logging
 import os
+import subprocess
 import time
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from backend.app.rendering.compositing.compositor import UniversalCompositor
 from backend.app.rendering.engines.browser_canvas.runner import BrowserCanvasRunner
@@ -70,6 +71,51 @@ class HybridVisualEngine:
         sfx_wav = os.path.join(output_dir, f"beat_{beat_idx:02d}_{beat.id}_sfx.wav")
 
         logger.info("Executing Beat %02d [%s] via %s (%0.1fs)...", beat_idx, beat.id, beat.engine.value, beat.duration)
+
+        anim_path = beat.params.get("animation_path")
+        if anim_path:
+            if not os.path.isfile(anim_path):
+                raise FileNotFoundError(f"Canonical animation asset missing for beat {beat.id}: {anim_path}")
+            t_seg = time.time()
+            os.makedirs(os.path.dirname(seg_mp4), exist_ok=True)
+            cmd = [
+                self.compositor.ffmpeg_path,
+                "-y",
+                "-i", anim_path,
+                "-t", f"{beat.duration:.3f}",
+                "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p",
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-movflags", "+faststart",
+                seg_mp4,
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0 or not os.path.isfile(seg_mp4):
+                return SegmentResult(
+                    scene_id=beat.id,
+                    video_path=seg_mp4,
+                    duration=beat.duration,
+                    fps=30.0,
+                    success=False,
+                    error_message=f"Failed normalizing animation segment: {res.stderr[-300:]}",
+                )
+            elapsed = max(0.01, time.time() - t_seg)
+            frames = int(round(beat.duration * 30.0))
+            return SegmentResult(
+                scene_id=beat.id,
+                video_path=seg_mp4,
+                duration=beat.duration,
+                fps=30.0,
+                telemetry=RenderTelemetry(
+                    frames_rendered=frames,
+                    total_duration_sec=beat.duration,
+                    elapsed_time_sec=elapsed,
+                    fps=round(frames / elapsed, 2),
+                    engine=f"Explainer Animation ({beat.params.get('visual_type', 'motion')})",
+                ),
+                success=True,
+            )
 
         if beat.engine == EngineType.BROWSER_CANVAS:
             adapter_url = self._get_adapter_url(beat.modality)
@@ -133,6 +179,7 @@ class HybridVisualEngine:
         plan: StoryboardPlan,
         output_final_mp4: str,
         work_dir: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int, str, str, str], None]] = None,
     ) -> Dict[str, any]:
         """Executes an entire multi-beat storyboard plan and produces the finished Short."""
         t_global_start = time.time()
@@ -146,9 +193,12 @@ class HybridVisualEngine:
         video_paths: List[str] = []
         sfx_paths: List[str] = []
         total_frames = 0
+        total_scenes = len(plan.scenes)
 
         try:
             for i, beat in enumerate(plan.scenes):
+                if progress_callback:
+                    progress_callback(i, total_scenes, beat.id, f"Rendering scene {i + 1}/{total_scenes} ({beat.id})", "ENCODING_BEAT")
                 res = await self.render_scene_beat(i + 1, beat, work_dir)
                 if not res.success:
                     raise RuntimeError(f"Beat {i+1} ({beat.id}) failed: {res.error_message}")
@@ -159,12 +209,18 @@ class HybridVisualEngine:
                     sfx_paths.append(res.sfx_audio_path)
                 if res.telemetry:
                     total_frames += res.telemetry.frames_rendered
+                if progress_callback:
+                    progress_callback(i + 1, total_scenes, beat.id, f"Rendered scene {i + 1}/{total_scenes} ({beat.id})", "ENCODING_BEAT")
 
             # Concatenate video segments
+            if progress_callback:
+                progress_callback(total_scenes, total_scenes, "concat", "Concatenating rendered scene segments via FFmpeg", "COMPOSITING")
             stitched_video = os.path.join(work_dir, "stitched_raw.mp4")
             self.compositor.concatenate_segments(video_paths, stitched_video)
 
             # Final audio mix & export
+            if progress_callback:
+                progress_callback(total_scenes, total_scenes, "audio_mix", "Mixing voiceover, ducked music bed & ASS subtitles", "COMPOSITING")
             narrative_mp4 = os.path.join(work_dir, "narrative_short.mp4") if plan.include_crazzydocs_outro else output_final_mp4
             final_path = self.compositor.mix_and_finalize_short(
                 video_path=stitched_video,
@@ -178,6 +234,8 @@ class HybridVisualEngine:
 
             # Append CrazzyDocs Branded Outro if requested
             if plan.include_crazzydocs_outro:
+                if progress_callback:
+                    progress_callback(total_scenes, total_scenes, "outro", "Appending 2.0s branded CrazzyDocs outro via FFmpeg", "FINALIZING_ENCODE")
                 assets_outro = os.path.join(self.workspace_root, "assets", "branding", "crazzydocs", "crazzydocs_outro_1080x1920.mp4")
                 media_outro = os.path.join(self.workspace_root, "media", "source", "branding", "crazzydocs_outro_1080x1920.mp4")
                 default_outro = media_outro if os.path.exists(media_outro) else assets_outro

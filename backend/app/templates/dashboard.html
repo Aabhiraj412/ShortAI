@@ -173,6 +173,74 @@
       padding: 20px;
       margin-bottom: 24px;
     }
+    .obs-progress-track {
+      width: 100%;
+      height: 10px;
+      background: #090e18;
+      border: 1px solid #1e283b;
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 10px 0 8px 0;
+    }
+    .obs-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, var(--accent));
+      border-radius: 999px;
+      transition: width 0.35s ease;
+    }
+    .obs-stage-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .obs-stage-card {
+      background: #0a0f1a;
+      border: 1px solid #1c2639;
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .obs-stage-card.running {
+      border-color: var(--accent);
+      background: rgba(254, 224, 4, 0.06);
+    }
+    .obs-stage-card.completed {
+      border-color: rgba(16, 185, 129, 0.45);
+      background: rgba(16, 185, 129, 0.05);
+    }
+    .obs-stage-card.failed {
+      border-color: rgba(239, 68, 68, 0.65);
+      background: rgba(239, 68, 68, 0.08);
+    }
+    .obs-triad {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .obs-box {
+      background: #0d131f;
+      border: 1px solid #1e283b;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .obs-kv {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      padding: 4px 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+    }
+    .obs-kv:last-child { border-bottom: none; }
+    .obs-error-banner {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-top: 12px;
+      color: #fca5a5;
+      font-size: 13px;
+    }
     .section-header {
       display: flex;
       justify-content: space-between;
@@ -387,6 +455,98 @@
       <div class="card-label">Pipeline Stage</div>
       <div class="card-value text-accent" id="pipelineStageVal" style="font-size: 18px;">IDLE</div>
       <div class="card-subtext" id="pipelineProgressVal">Awaiting scheduled trigger</div>
+    </div>
+  </div>
+
+  <!-- Live Production Observability (Stage 3.21J) -->
+  <div class="pipeline-section" id="liveObservabilityPanel">
+    <div class="section-header">
+      <div class="section-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Live Production Observability (12-Stage Telemetry)
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span class="badge badge-info" id="obsContextBadge">NONE</span>
+        <span class="badge badge-info" id="obsStatusBadge">IDLE</span>
+        <span class="mono" style="font-size:12px; color:var(--text-muted);" id="obsRefreshRateBadge">Poll: 10s</span>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; align-items:center;">
+      <div>
+        <div style="font-size:16px; font-weight:700;" id="obsTopicTitle">No active production running</div>
+        <div class="mono" style="font-size:12px; color:var(--text-muted); margin-top:2px;" id="obsProdMeta">ID: -- | Stage: -- | ETA: --</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="mono" style="font-size:22px; font-weight:800; color:var(--accent);" id="obsOverallPct">0%</div>
+        <div style="font-size:12px; color:var(--text-muted);" id="obsCurrentOperation">Waiting for next scheduled or validation run</div>
+      </div>
+    </div>
+
+    <div class="obs-progress-track">
+      <div class="obs-progress-fill" id="obsOverallBar" style="width: 0%;"></div>
+    </div>
+
+    <div class="obs-error-banner" id="obsErrorBanner" style="display:none;"></div>
+
+    <div class="obs-stage-grid" id="obsStageGrid"></div>
+
+    <div class="obs-triad">
+      <div class="obs-box">
+        <div class="card-label" style="margin-bottom:8px;">Visual Assets & Reuse Control</div>
+        <div class="obs-kv"><span>Unique Acquired Images</span><strong class="mono" id="obsUniqueImages">0</strong></div>
+        <div class="obs-kv"><span>Generated Illustrations</span><strong class="mono" id="obsGeneratedImages">0</strong></div>
+        <div class="obs-kv"><span>Explanatory Animations (30 FPS)</span><strong class="mono" id="obsAnimationsCount">0</strong></div>
+        <div class="obs-kv"><span>Reused Photo Slots</span><strong class="mono" id="obsReusedImages">0 (max 2/img)</strong></div>
+        <div class="obs-kv"><span>Failed Acquisitions</span><strong class="mono" id="obsFailedAcq">0</strong></div>
+      </div>
+
+      <div class="obs-box">
+        <div class="card-label" style="margin-bottom:8px;">Video Rendering Progress</div>
+        <div class="obs-kv"><span>FFmpeg Status</span><strong class="mono" id="obsFfmpegStatus">IDLE</strong></div>
+        <div class="obs-kv"><span>Scenes Rendered</span><strong class="mono" id="obsScenesCount">0 / 0</strong></div>
+        <div class="obs-kv"><span>Current Beat</span><strong class="mono" id="obsCurrentBeat">--</strong></div>
+        <div class="obs-kv"><span>Render Progress</span><strong class="mono" id="obsRenderPct">0%</strong></div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;" id="obsRenderOp">Awaiting storyboard</div>
+      </div>
+
+      <div class="obs-box">
+        <div class="card-label" style="margin-bottom:8px;">Thumbnail Sub-Stages & Preview</div>
+        <div style="display:flex; gap:12px; align-items:flex-start;">
+          <div style="flex:1;">
+            <div class="obs-kv"><span>Background Image</span><strong class="mono" id="obsThumbImg">PENDING</strong></div>
+            <div class="obs-kv"><span>Candidate Composition</span><strong class="mono" id="obsThumbComp">PENDING</strong></div>
+            <div class="obs-kv"><span>Safe-Zone Text Layout</span><strong class="mono" id="obsThumbText">PENDING</strong></div>
+            <div class="obs-kv"><span>Final Validation</span><strong class="mono" id="obsThumbVal">PENDING</strong></div>
+          </div>
+          <div style="width:66px; height:116px; background:#090e18; border:1px solid #1e283b; border-radius:6px; overflow:hidden; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+            <img id="obsThumbPreview" src="" alt="Preview" style="width:100%; height:100%; object-fit:cover; display:none;" />
+            <span id="obsThumbPlaceholder" style="font-size:10px; color:var(--text-muted); text-align:center; padding:4px;">No Preview</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="card-label" style="margin-bottom:8px;">Recent Production Observability Runs</div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Production ID</th>
+              <th>Topic</th>
+              <th>Context</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Assets (Img/Gen/Anim)</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody id="obsHistoryBody">
+            <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -676,16 +836,158 @@
     setInterval(updateClock, 1000);
     updateClock();
 
+    let pollTimer = null;
+    let currentPollMs = 10000;
+
+    function _obsBadgeClass(st) {
+      if (st === 'completed' || st === 'COMPLETED') return 'badge-success';
+      if (st === 'running' || st === 'RUNNING') return 'badge-warning';
+      if (st === 'failed' || st === 'FAILED') return 'badge-danger';
+      return 'badge-info';
+    }
+
+    function renderLiveObservability(progressRes) {
+      if (!progressRes) return;
+      const prod = progressRes.active_production || progressRes.displayed_production;
+      const schema = progressRes.stages_schema || [];
+      const hasActive = Boolean(progressRes.has_active);
+
+      currentPollMs = hasActive ? 2500 : 10000;
+      const rateBadge = document.getElementById('obsRefreshRateBadge');
+      if (rateBadge) rateBadge.textContent = 'Poll: ' + (hasActive ? '2.5s (LIVE)' : '10s');
+
+      const ctxEl = document.getElementById('obsContextBadge');
+      const stEl = document.getElementById('obsStatusBadge');
+      const topicEl = document.getElementById('obsTopicTitle');
+      const metaEl = document.getElementById('obsProdMeta');
+      const pctEl = document.getElementById('obsOverallPct');
+      const opEl = document.getElementById('obsCurrentOperation');
+      const barEl = document.getElementById('obsOverallBar');
+      const errBanner = document.getElementById('obsErrorBanner');
+      const gridEl = document.getElementById('obsStageGrid');
+
+      if (!prod) {
+        if (ctxEl) ctxEl.textContent = 'NONE';
+        if (stEl) { stEl.textContent = 'IDLE'; stEl.className = 'badge badge-info'; }
+        if (gridEl && schema.length) {
+          gridEl.innerHTML = schema.map(s => `
+            <div class="obs-stage-card">
+              <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:700;">
+                <span>${s.label}</span><span class="mono">0%</span>
+              </div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">pending</div>
+            </div>
+          `).join('');
+        }
+      } else {
+        const overallStatus = (prod.overall_status || 'idle').toUpperCase();
+        const overallPct = Number(prod.overall_progress || 0);
+        const etaTxt = prod.estimated_remaining_sec !== null && prod.estimated_remaining_sec !== undefined
+          ? (prod.estimated_remaining_sec + 's')
+          : '--';
+
+        if (ctxEl) ctxEl.textContent = prod.execution_context || 'PRODUCTION';
+        if (stEl) { stEl.textContent = overallStatus; stEl.className = 'badge ' + _obsBadgeClass(overallStatus); }
+        if (topicEl) topicEl.textContent = prod.topic || prod.production_id;
+        if (metaEl) metaEl.textContent = `ID: ${prod.production_id} | Stage: ${prod.current_stage || '--'} | ETA: ${etaTxt}`;
+        if (pctEl) pctEl.textContent = overallPct.toFixed(0) + '%';
+        if (opEl) opEl.textContent = prod.current_operation || '--';
+        if (barEl) barEl.style.width = Math.min(100, Math.max(0, overallPct)) + '%';
+
+        if (errBanner) {
+          if (prod.error && prod.overall_status === 'failed') {
+            errBanner.style.display = 'block';
+            errBanner.innerHTML = `<strong>PIPELINE FAILURE AT ${(prod.error.stage || 'UNKNOWN').toUpperCase()}:</strong> ${prod.error.summary || 'Unknown error'} <span class="mono">(Retryable: ${prod.error.retry_possible ? 'YES' : 'NO'}, Safe to Resume: ${prod.error.safe_to_resume ? 'YES' : 'NO'})</span>`;
+          } else {
+            errBanner.style.display = 'none';
+          }
+        }
+
+        const stagesMap = prod.stages || {};
+        if (gridEl) {
+          gridEl.innerHTML = schema.map(s => {
+            const st = stagesMap[s.key] || { status: 'pending', progress: 0, operation: '' };
+            const statusLower = (st.status || 'pending').toLowerCase();
+            return `
+              <div class="obs-stage-card ${statusLower}">
+                <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:700;">
+                  <span>${s.label}</span>
+                  <span class="mono">${Number(st.progress || 0).toFixed(0)}%</span>
+                </div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${st.operation || statusLower}">
+                  ${statusLower.toUpperCase()}${st.operation ? ': ' + st.operation : ''}
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        const a = prod.assets || {};
+        document.getElementById('obsUniqueImages').textContent = a.unique_images ?? 0;
+        document.getElementById('obsGeneratedImages').textContent = a.generated_images ?? 0;
+        document.getElementById('obsAnimationsCount').textContent = a.animations ?? 0;
+        document.getElementById('obsReusedImages').textContent = `${a.reused_images ?? 0} (max ${a.max_allowed_reuse ?? 2}/img)`;
+        document.getElementById('obsFailedAcq').textContent = a.failed_acquisitions ?? 0;
+
+        const r = prod.rendering || {};
+        document.getElementById('obsFfmpegStatus').textContent = r.ffmpeg_status || 'IDLE';
+        document.getElementById('obsScenesCount').textContent = `${r.completed_scenes ?? 0} / ${r.total_scenes ?? 0}`;
+        document.getElementById('obsCurrentBeat').textContent = r.current_beat_id ? `#${r.current_beat_index || 0} (${r.current_beat_id})` : '--';
+        document.getElementById('obsRenderPct').textContent = `${Number(r.progress_pct || 0).toFixed(1)}%`;
+        document.getElementById('obsRenderOp').textContent = r.current_operation || '--';
+
+        const th = prod.thumbnail || {};
+        document.getElementById('obsThumbImg').textContent = (th.image_generation_status || 'PENDING').toUpperCase();
+        document.getElementById('obsThumbComp').textContent = (th.composition_status || 'PENDING').toUpperCase();
+        document.getElementById('obsThumbText').textContent = (th.text_layout_status || 'PENDING').toUpperCase();
+        document.getElementById('obsThumbVal').textContent = (th.validation_status || 'PENDING').toUpperCase();
+        const prevImg = document.getElementById('obsThumbPreview');
+        const prevPlaceholder = document.getElementById('obsThumbPlaceholder');
+        if (prevImg && prevPlaceholder) {
+          if (th.preview_url) {
+            prevImg.src = th.preview_url;
+            prevImg.style.display = 'block';
+            prevPlaceholder.style.display = 'none';
+          } else {
+            prevImg.style.display = 'none';
+            prevPlaceholder.style.display = 'block';
+          }
+        }
+      }
+
+      const histBody = document.getElementById('obsHistoryBody');
+      const hist = progressRes.history || [];
+      if (histBody) {
+        if (hist.length > 0) {
+          histBody.innerHTML = hist.map(h => `
+            <tr>
+              <td class="mono" style="font-size:11px;">${h.production_id}</td>
+              <td style="font-weight:600;">${h.topic}</td>
+              <td><span class="badge badge-info">${h.execution_context || 'PRODUCTION'}</span></td>
+              <td><span class="badge ${_obsBadgeClass(h.overall_status)}">${(h.overall_status || 'unknown').toUpperCase()}</span></td>
+              <td class="mono">${Number(h.overall_progress || 0).toFixed(0)}%</td>
+              <td class="mono" style="font-size:11px;">${(h.assets?.unique_images ?? 0)} / ${(h.assets?.generated_images ?? 0)} / ${(h.assets?.animations ?? 0)}</td>
+              <td class="mono" style="font-size:11px;">${(h.last_updated || '').replace('T', ' ').slice(0, 19)}</td>
+            </tr>
+          `).join('');
+        } else {
+          histBody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>';
+        }
+      }
+    }
+
     async function fetchDashboardData() {
       try {
-        const [overviewRes, statsRes, healthRes, historyRes, recoveryRes, activityRes] = await Promise.all([
+        const [overviewRes, statsRes, healthRes, historyRes, recoveryRes, activityRes, progressRes] = await Promise.all([
           fetch('/api/dashboard/overview').then(r => r.json()),
           fetch('/api/dashboard/stats?filter=' + currentFilter).then(r => r.json()),
           fetch('/api/dashboard/health').then(r => r.json()),
           fetch('/api/dashboard/history').then(r => r.json()),
           fetch('/api/dashboard/recovery').then(r => r.json()),
-          fetch('/api/dashboard/activity').then(r => r.json())
+          fetch('/api/dashboard/activity').then(r => r.json()),
+          fetch('/api/dashboard/progress').then(r => r.json()).catch(() => null)
         ]);
+        renderLiveObservability(progressRes);
 
         // Overview
         document.getElementById('currentCycleVal').textContent = overviewRes.current_cycle || 'None';
@@ -912,9 +1214,13 @@
       fetchDashboardData();
     }
 
-    // Auto-refresh every 10 seconds
-    fetchDashboardData();
-    setInterval(fetchDashboardData, 10000);
+    // Adaptive polling: 2.5s while active production is running, 10s when idle
+    async function scheduleNextRefresh() {
+      await fetchDashboardData();
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = setTimeout(scheduleNextRefresh, currentPollMs);
+    }
+    scheduleNextRefresh();
   </script>
 </body>
 </html>

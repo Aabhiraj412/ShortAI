@@ -117,13 +117,23 @@ class MediaAcquisitionEngine:
 
         # 3. Download and process top candidates
         acquired_assets: List[MediaAsset] = []
+        failed_downloads: int = 0
+        seen_hashes = set()
         video_id = job_id or f"short_{int(asyncio.get_event_loop().time() * 1000)}"
 
         for asset in top_candidates:
-            # Check if hash already exists in registry
+            # Skip tiny icons / banners (< 180px wide if dimensions reported)
+            if asset.width and asset.width < 180:
+                continue
+
             ok, local_path, sha_hash, err = self.downloader.download_asset(asset)
             if not ok or not local_path or not os.path.exists(local_path):
+                failed_downloads += 1
                 logger.info("Asset download skipped or failed: %s (%s)", asset.title, err)
+                continue
+
+            # Deduplicate identical image bytes cleanly
+            if sha_hash and sha_hash in seen_hashes:
                 continue
 
             # Adapt image to 1080x1920 portrait
@@ -134,12 +144,22 @@ class MediaAcquisitionEngine:
                 )
                 asset.portrait_path = portrait_path
             except Exception as e:
+                failed_downloads += 1
                 logger.error("Failed to adapt image to portrait: %s", e)
                 continue
 
-            # Register in SQLite database
+            if sha_hash:
+                seen_hashes.add(sha_hash)
+            # Register in SQLite database (or isolated no-op registry)
             self.registry.register_asset(asset, job_id=video_id)
             acquired_assets.append(asset)
+
+        self.last_acquisition_stats = {
+            "candidate_pool": len(candidate_pool),
+            "top_candidates": len(top_candidates),
+            "acquired": len(acquired_assets),
+            "failed": failed_downloads,
+        }
 
         # 4. Generate and save legal AttributionManifest
         manifest = self.attribution_gen.generate_manifest(
@@ -149,7 +169,7 @@ class MediaAcquisitionEngine:
         self.attribution_gen.save_manifest(manifest)
 
         logger.info(
-            "Media acquisition complete for '%s': %d/%d assets acquired and verified.",
-            topic_title, len(acquired_assets), max_assets
+            "Media acquisition complete for '%s': %d/%d assets acquired (%d failed).",
+            topic_title, len(acquired_assets), max_assets, failed_downloads
         )
         return acquired_assets, manifest

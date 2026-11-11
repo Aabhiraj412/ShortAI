@@ -44,8 +44,10 @@ from backend.app.content.topic_ledger import (
     compute_storyboard_fingerprint,
 )
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
-from backend.app.orchestration.production_workspace import ProductionWorkspace
+from backend.app.content.visual_diversity_policy import compute_asset_sha256
+from backend.app.orchestration.production_workspace import ProductionWorkspace, compute_file_sha256
 from backend.app.services.expressive_tts_engine import ExpressiveTTSEngine, NarrationSegment
+from backend.app.services.production_observability import production_observability
 from backend.app.services.qc_service import QualityControlEngine
 from backend.app.rendering.engine import HybridVisualEngine
 from backend.app.rendering.documentary_storyboard_builder import (
@@ -241,7 +243,7 @@ class CrazzyDocsMasterOrchestrator:
 
         now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         job_id = job_id or (
-            f"val_3_21i_{now_str}" if execution_context == ExecutionContext.VALIDATION else f"job_{now_str}"
+            f"val_3_21j_{now_str}" if execution_context == ExecutionContext.VALIDATION else f"job_{now_str}"
         )
         t_start = time.perf_counter()
         logger.info(
@@ -250,6 +252,14 @@ class CrazzyDocsMasterOrchestrator:
             execution_context.value,
             is_full_live,
         )
+
+        obs_stage = "topic_discovery"
+        production_observability.start_production(
+            job_id,
+            topic="Discovering topic...",
+            execution_context=execution_context.value,
+        )
+        production_observability.start_stage(job_id, "topic_discovery", "Discovering high-curiosity topic...", progress=15.0)
 
         # Inspect existing checkpoint if resuming (skip studio.db mutations in VALIDATION context)
         existing_cp = {}
@@ -365,6 +375,11 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 5 & 6 & 7: Creative Direction, Media & Storyboard
             # -------------------------------------------------------------
+            production_observability.update_topic(job_id, selected_topic.title)
+            production_observability.complete_stage(job_id, "topic_discovery", f"Selected '{selected_topic.title}'")
+            obs_stage = "research"
+            production_observability.start_stage(job_id, "research", f"Verifying factual dossier for '{selected_topic.title}'...", progress=25.0)
+
             logger.info("[STAGE 5-7] Setting creative direction and media choreography...")
             prod_ws = ProductionWorkspace(
                 production_id=job_id,
@@ -373,6 +388,9 @@ class CrazzyDocsMasterOrchestrator:
                 category=selected_topic.category,
             )
             prod_ws.initialize_workspace()
+            production_observability.bind_event_log_path(
+                job_id, os.path.join(prod_ws.reports_dir, f"progress_events_{job_id}.jsonl")
+            )
 
             archetype = self.thumb_engine.detect_archetype(
                 selected_topic.category, selected_topic.title, selected_topic.summary
@@ -381,11 +399,13 @@ class CrazzyDocsMasterOrchestrator:
             thumb_assets: List[str] = []
             manifest_assets: List[Dict] = []
             visual_beats: List[VisualBeatConfig] = []
+            storyboard_beats: List[Dict] = []
             plan = None
             script_data: Optional[Dict] = None
             section_timings: List[Dict] = []
             rendered_engine_name = "CleanSlateRenderer"
             attrib_manifest = None
+            acq_stats: Dict = {"unique_images": 0, "failed": 0, "duplicates_skipped": 0}
 
             if is_full_live:
                 # Save research dossier into workspace
@@ -399,37 +419,60 @@ class CrazzyDocsMasterOrchestrator:
                         "summary": selected_topic.summary,
                         "extended_extract": getattr(selected_topic, "extended_extract", ""),
                         "factual_bullets": getattr(selected_topic, "factual_bullets", []),
+                        "coordinates": getattr(selected_topic, "coordinates", None),
                         "sources": selected_topic.sources,
                         "key_entities": selected_topic.key_entities,
                         "composite_score": selected_topic.composite_score,
                         "winning_hook": best_hook.hook_text,
                     }, f, indent=2)
                 prod_ws.register_artifact("STAGE_02_RESEARCH", "research", research_dossier_path, copy_into_workspace=False)
+                production_observability.complete_stage(job_id, "research", "Factual research dossier persisted")
 
                 # Structured 5-stage factual script
+                obs_stage = "script_generation"
+                production_observability.start_stage(job_id, "script_generation", "Drafting 5-stage documentary script...", progress=30.0)
                 script_data = compose_structured_script(selected_topic, best_hook.hook_text)
                 narration_text = script_data["full_script"]
                 script_path = os.path.join(prod_ws.scripts_dir, f"script_{job_id}.json")
                 with open(script_path, "w", encoding="utf-8") as f:
                     json.dump(script_data, f, indent=2)
                 prod_ws.register_artifact("STAGE_04_SCRIPT", "script", script_path, copy_into_workspace=False)
+                production_observability.complete_stage(job_id, "script_generation", f"Script finalized ({script_data.get('word_count', len(narration_text.split()))} words)")
 
                 # Real Edge-TTS voiceover synthesis + ffprobe timing
+                obs_stage = "narration_generation"
+                production_observability.start_stage(job_id, "narration_generation", "Synthesizing expressive Neural TTS voiceover...", progress=25.0)
                 voice_path, section_timings, voice_dur = synthesize_and_probe_narration(
                     self.tts_engine, script_data["sections"], prod_ws
                 )
                 dur = round(voice_dur + 2.0, 2)  # Main narrative + 2.0s branded outro
+                production_observability.complete_stage(job_id, "narration_generation", f"Narration synthesized ({voice_dur:.2f}s)")
 
                 # Acquire isolated openly licensed assets into workspace
+                obs_stage = "asset_acquisition"
+                production_observability.start_stage(job_id, "asset_acquisition", "Fetching verified Wikimedia/Openverse images...", progress=20.0)
                 acquired_assets, attrib_manifest, manifest_assets = acquire_isolated_topic_assets(
-                    selected_topic, prod_ws, execution_context, max_assets=6
+                    selected_topic, prod_ws, execution_context, max_assets=10, stats_out=acq_stats
                 )
                 thumb_assets = [
                     a.local_path for a in acquired_assets if a.local_path and os.path.isfile(a.local_path)
                 ]
                 for ma in manifest_assets:
                     if ma.get("path") and os.path.isfile(ma["path"]):
-                        prod_ws.register_artifact("STAGE_06_MEDIA", "asset", ma["path"], copy_into_workspace=False)
+                        prod_ws.register_artifact(
+                            "STAGE_06_MEDIA",
+                            "acquired_asset",
+                            ma["path"],
+                            copy_into_workspace=False,
+                            asset_id=ma.get("asset_id"),
+                            source_url=ma.get("source_url"),
+                            creator=ma.get("creator"),
+                            license=ma.get("license"),
+                            license_url=ma.get("license_url"),
+                            width=ma.get("width"),
+                            height=ma.get("height"),
+                            format=ma.get("format"),
+                        )
 
                 if attrib_manifest:
                     attrib_json_path = os.path.join(prod_ws.metadata_dir, f"attribution_manifest_{job_id}.json")
@@ -437,7 +480,52 @@ class CrazzyDocsMasterOrchestrator:
                         json.dump(asdict(attrib_manifest), f, indent=2)
                     prod_ws.register_artifact("STAGE_06_ATTRIBUTION", "metadata", attrib_json_path, copy_into_workspace=False)
 
-                # Build 20-beat multi-layout visual storyboard + synchronized ASS subtitles
+                unique_img_count = len({ma.get("sha256") for ma in manifest_assets if ma.get("sha256")}) or len(thumb_assets)
+                production_observability.update_assets(
+                    job_id,
+                    unique_images=unique_img_count,
+                    failed_acquisitions=int(acq_stats.get("failed", 0)),
+                    status="ACQUIRED",
+                )
+                production_observability.complete_stage(
+                    job_id,
+                    "asset_acquisition",
+                    f"Acquired {unique_img_count} unique images ({acq_stats.get('failed', 0)} failed)",
+                )
+
+                # Build 20-beat multi-modal storyboard + generated images + 30 FPS explainer animations
+                obs_stage = "storyboard_generation"
+                production_observability.start_stage(job_id, "storyboard_generation", "Allocating multi-modal 20-beat visual storyboard...", progress=15.0)
+                production_observability.start_stage(job_id, "image_generation", "Generating bespoke analytical illustrations...", progress=10.0)
+                production_observability.start_stage(job_id, "animation_generation", "Rendering script-grounded 30 FPS explainer animations...", progress=10.0)
+
+                def _sb_progress_cb(ev: Dict) -> None:
+                    phase = ev.get("phase")
+                    beat_i = int(ev.get("beat_index", 0))
+                    tot_b = max(1, int(ev.get("total_beats", 20)))
+                    pct = round((beat_i / tot_b) * 100.0, 1)
+                    if phase == "image_generation":
+                        gen_c = int(ev.get("generated_images", 0))
+                        production_observability.update_stage(
+                            job_id,
+                            "image_generation",
+                            status="running",
+                            progress=pct,
+                            operation=f"Generated illustration #{gen_c} (beat {beat_i}/{tot_b})",
+                        )
+                        production_observability.update_assets(job_id, generated_images=gen_c, status="GENERATING")
+                    elif phase == "animation_generation":
+                        anim_c = int(ev.get("animations_generated", 0))
+                        vtype = ev.get("visual_type", "animation")
+                        production_observability.update_stage(
+                            job_id,
+                            "animation_generation",
+                            status="running",
+                            progress=pct,
+                            operation=f"Rendered {vtype} #{anim_c} @ 30 FPS (beat {beat_i}/{tot_b})",
+                        )
+                        production_observability.update_assets(job_id, animations=anim_c, status="ANIMATING")
+
                 plan, visual_beats, ass_path = build_20_beat_storyboard(
                     topic=selected_topic,
                     timings=section_timings,
@@ -445,21 +533,62 @@ class CrazzyDocsMasterOrchestrator:
                     voiceover_path=voice_path,
                     acquired_assets=acquired_assets,
                     prod_ws=prod_ws,
+                    script_full_text=narration_text,
+                    progress_cb=_sb_progress_cb,
                 )
+                storyboard_beats = list((plan.metadata or {}).get("storyboard_beats", []))
+                sb_meta = plan.metadata or {}
+                total_reused_slots = max(0, len([b for b in storyboard_beats if b.get("visual_type") in ("historical_photo", "documentary_image")]) - len({b.get("asset_hash") for b in storyboard_beats if b.get("visual_type") in ("historical_photo", "documentary_image")}))
+                production_observability.update_assets(
+                    job_id,
+                    unique_images=int(sb_meta.get("unique_images", unique_img_count)),
+                    generated_images=len([b for b in storyboard_beats if b.get("visual_type") == "generated_image"]),
+                    animations=int(sb_meta.get("unique_animations", 0)),
+                    reused_images=total_reused_slots,
+                    status="COMPLETE",
+                )
+                production_observability.complete_stage(job_id, "image_generation", "Analytical illustrations saved in assets/generated/")
+                production_observability.complete_stage(job_id, "animation_generation", f"Rendered {sb_meta.get('unique_animations', 0)} 30 FPS explainer animations")
+                production_observability.complete_stage(job_id, "storyboard_generation", f"20-beat storyboard verified ({sb_meta.get('distinct_visual_assets', 0)} distinct visual assets)")
+
                 timeline_json_path = os.path.join(prod_ws.visual_timeline_dir, f"storyboard_{job_id}.json")
                 if os.path.isfile(timeline_json_path):
                     prod_ws.register_artifact("STAGE_07_STORYBOARD", "visual_timeline", timeline_json_path, copy_into_workspace=False)
+
+                # Persist audit/asset_inventory_<id>.json
+                asset_inv_path = os.path.join(prod_ws.audit_dir, f"asset_inventory_{job_id}.json")
+                with open(asset_inv_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "production_id": job_id,
+                        "topic": selected_topic.title,
+                        "summary": prod_ws.load_manifest().get("asset_summary", {}),
+                        "storyboard_diversity": {
+                            "beat_count": len(storyboard_beats),
+                            "distinct_visual_assets": sb_meta.get("distinct_visual_assets", 0),
+                            "max_image_reuse_observed": sb_meta.get("max_image_reuse_observed", 0),
+                        },
+                        "acquired_assets": manifest_assets,
+                        "beats": storyboard_beats,
+                    }, f, indent=2)
+                prod_ws.register_artifact("STAGE_07_ASSET_INVENTORY", "audit", asset_inv_path, copy_into_workspace=False)
                 rendered_engine_name = "HybridVisualEngine"
             else:
                 narration_text = self._synthesize_topic_script(selected_topic, best_hook.hook_text)
                 dur = max(50.5, min(58.5, round(len(narration_text.split()) / 2.3, 2)))
                 visual_beats = self._build_topic_visual_beats(selected_topic, best_hook.hook_text, dur)
-                voice_path = os.path.join(prod_ws.narration_dir, f"voiceover_{job_id}.mp3")
+                voice_path = os.path.join(prod_ws.audio_dir, f"voiceover_{job_id}.mp3")
                 if not os.path.exists(voice_path):
                     subprocess.run([
                         FFMPEG_EXE, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", str(dur),
                         "-c:a", "libmp3lame", "-b:a", "192k", voice_path
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                production_observability.complete_stage(job_id, "research", "Unit-test factual dossier validated")
+                production_observability.complete_stage(job_id, "script_generation", "Unit-test script prepared")
+                production_observability.complete_stage(job_id, "asset_acquisition", "Unit-test asset preparation skipped")
+                production_observability.complete_stage(job_id, "image_generation", "Unit-test image step skipped")
+                production_observability.complete_stage(job_id, "animation_generation", "Unit-test animation step skipped")
+                production_observability.complete_stage(job_id, "storyboard_generation", f"{len(visual_beats)}-beat test timeline prepared")
+                production_observability.complete_stage(job_id, "narration_generation", "Unit-test audio track ready")
 
             script_fp = compute_script_fingerprint(narration_text)
             storyboard_fp = compute_storyboard_fingerprint(visual_beats)
@@ -479,21 +608,51 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 9: Video Rendering & Composition (Canonical Workspace Only)
             # -------------------------------------------------------------
+            obs_stage = "video_rendering"
+            production_observability.start_stage(job_id, "video_rendering", "Preparing FFmpeg video rendering pipeline...", progress=2.0)
             final_video_path = prod_ws.get_canonical_video_path()
             if prod_ws.has_verified_deliverable():
                 logger.info("[PRODUCTION WORKSPACE IDEMPOTENCY] Reusing canonical deliverable: %s", final_video_path)
+                production_observability.complete_stage(job_id, "video_rendering", "Reused verified canonical video deliverable")
             elif existing_cp.get("video_path") and os.path.isfile(existing_cp["video_path"]) and os.path.getsize(existing_cp["video_path"]) > 1024:
                 final_video_path = existing_cp["video_path"]
                 logger.info("[CHECKPOINT RECOVERY] Reusing verified video render: %s", final_video_path)
+                production_observability.complete_stage(job_id, "video_rendering", "Resumed verified video render")
             elif is_full_live and plan is not None:
                 logger.info("[STAGE 9] Rendering %d-beat 1080x1920 @ 30 FPS documentary Short via HybridVisualEngine...", len(plan.scenes))
                 hybrid_engine = HybridVisualEngine(workspace_root=WORKSPACE)
                 render_work_dir = os.path.join(prod_ws.prod_dir, "render_work")
+
+                def _render_progress_cb(
+                    completed_scenes: int,
+                    total_scenes: int,
+                    beat_id: str,
+                    operation: str,
+                    ffmpeg_status: str,
+                ) -> None:
+                    tot = max(1, int(total_scenes or len(plan.scenes)))
+                    pct = round((min(completed_scenes, tot) / tot) * 90.0, 1)
+                    if ffmpeg_status == "COMPOSITING":
+                        pct = 93.0
+                    elif ffmpeg_status == "FINALIZING_ENCODE":
+                        pct = 97.0
+                    production_observability.update_rendering(
+                        job_id,
+                        current_operation=str(operation),
+                        current_beat_index=min(tot, int(completed_scenes) + (1 if completed_scenes < tot else 0)),
+                        current_beat_id=str(beat_id),
+                        completed_scenes=int(completed_scenes),
+                        total_scenes=tot,
+                        progress_pct=pct,
+                        ffmpeg_status=str(ffmpeg_status),
+                    )
+
                 render_telemetry = asyncio.run(
                     hybrid_engine.render_storyboard(
                         plan=plan,
                         output_final_mp4=final_video_path,
                         work_dir=render_work_dir,
+                        progress_callback=_render_progress_cb,
                     )
                 )
                 from backend.app.services.animation_service import probe_video
@@ -503,22 +662,49 @@ class CrazzyDocsMasterOrchestrator:
                 with open(render_meta_path, "w", encoding="utf-8") as f:
                     json.dump({"render_telemetry": render_telemetry, "probed_video": probed}, f, indent=2)
                 prod_ws.register_artifact("STAGE_09_RENDERING_TELEMETRY", "report", render_meta_path, copy_into_workspace=False)
+                production_observability.update_rendering(
+                    job_id,
+                    current_operation="Master MP4 rendered and muxed",
+                    progress_pct=100.0,
+                    ffmpeg_status="COMPLETED",
+                    output_path=final_video_path,
+                )
+                production_observability.complete_stage(job_id, "video_rendering", f"Rendered 1080x1920 @ 30 FPS master MP4 ({dur:.2f}s)")
                 if persist_to_db:
                     self._update_checkpoint(job_id, "RENDERING", 75.0, {"video_path": final_video_path})
             else:
                 logger.info("[STAGE 9] Rendering fresh 1080x1920 video with dynamic slate and typography...")
+                production_observability.update_rendering(
+                    job_id,
+                    current_operation="Rendering compact test video slate...",
+                    total_scenes=len(visual_beats),
+                    completed_scenes=0,
+                    progress_pct=25.0,
+                    ffmpeg_status="ENCODING",
+                )
                 subprocess.run([
                     FFMPEG_EXE, "-y", "-f", "lavfi", "-i", f"color=c=0x111622:s=1080x1920:d={dur}",
                     "-i", voice_path, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest",
                     final_video_path
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                production_observability.update_rendering(
+                    job_id,
+                    current_operation="Compact video slate complete",
+                    completed_scenes=len(visual_beats),
+                    progress_pct=100.0,
+                    ffmpeg_status="COMPLETED",
+                    output_path=final_video_path,
+                )
+                production_observability.complete_stage(job_id, "video_rendering", "Video render complete")
                 if persist_to_db:
                     self._update_checkpoint(job_id, "RENDERING", 75.0, {"video_path": final_video_path})
-            prod_ws.register_artifact("STAGE_09_RENDERING", "video", final_video_path, copy_into_workspace=False)
+            prod_ws.register_artifact("STAGE_09_RENDERING", "video", final_video_path, copy_into_workspace=False, format="mp4")
 
             # -------------------------------------------------------------
             # Stage 10: Professional Thumbnail Generation (Canonical Workspace Only)
             # -------------------------------------------------------------
+            obs_stage = "thumbnail_generation"
+            production_observability.start_stage(job_id, "thumbnail_generation", "Initializing multi-candidate thumbnail generator...", progress=10.0)
             thumb_path = prod_ws.get_canonical_thumbnail_path()
             thumb_report_path = os.path.join(prod_ws.reports_dir, f"thumb_report_{job_id}.json")
             variants_dir = os.path.join(prod_ws.thumbnails_dir, "variants")
@@ -526,12 +712,55 @@ class CrazzyDocsMasterOrchestrator:
             if prod_ws.has_verified_deliverable():
                 logger.info("[PRODUCTION WORKSPACE IDEMPOTENCY] Reusing canonical thumbnail: %s", thumb_path)
                 winning_headline = existing_cp.get("winning_thumbnail", selected_topic.title[:25].upper())
+                production_observability.update_thumbnail(
+                    job_id,
+                    status="completed",
+                    image_generation_status="completed",
+                    composition_status="completed",
+                    text_layout_status="completed",
+                    validation_status="completed",
+                    output_path=thumb_path,
+                    preview_url=f"/api/dashboard/productions/{job_id}/thumbnail?t={int(time.time())}",
+                    headline=winning_headline,
+                    stage_progress=100.0,
+                )
+                production_observability.complete_stage(job_id, "thumbnail_generation", f"Reused verified thumbnail '{winning_headline}'")
             elif existing_cp.get("thumbnail_path") and os.path.isfile(existing_cp["thumbnail_path"]) and os.path.getsize(existing_cp["thumbnail_path"]) > 1024:
                 thumb_path = existing_cp["thumbnail_path"]
                 logger.info("[CHECKPOINT RECOVERY] Reusing verified thumbnail: %s", thumb_path)
                 winning_headline = existing_cp.get("winning_thumbnail", selected_topic.title[:25].upper())
+                production_observability.update_thumbnail(
+                    job_id,
+                    status="completed",
+                    image_generation_status="completed",
+                    composition_status="completed",
+                    text_layout_status="completed",
+                    validation_status="completed",
+                    output_path=thumb_path,
+                    preview_url=f"/api/dashboard/productions/{job_id}/thumbnail?t={int(time.time())}",
+                    headline=winning_headline,
+                    stage_progress=100.0,
+                )
+                production_observability.complete_stage(job_id, "thumbnail_generation", f"Resumed verified thumbnail '{winning_headline}'")
             else:
                 logger.info("[STAGE 10] Generating multi-candidate thumbnails in production workspace...")
+
+                def _thumb_progress_cb(ev: Dict[str, str]) -> None:
+                    st = ev.get("status", "running")
+                    pct = 100.0 if st == "completed" else (85.0 if ev.get("validation_status") == "validating" else 55.0)
+                    production_observability.update_thumbnail(
+                        job_id,
+                        status=ev.get("status"),
+                        image_generation_status=ev.get("image_generation_status"),
+                        composition_status=ev.get("composition_status"),
+                        text_layout_status=ev.get("text_layout_status"),
+                        validation_status=ev.get("validation_status"),
+                        output_path=ev.get("preview_image_path") or thumb_path,
+                        preview_url=f"/api/dashboard/productions/{job_id}/thumbnail?t={int(time.time())}" if st == "completed" else None,
+                        headline=ev.get("winner_headline"),
+                        stage_progress=pct,
+                    )
+
                 winning_thumb, thumb_rep = self.thumb_engine.select_and_render_best_thumbnail(
                     topic_title=selected_topic.title,
                     topic_summary=selected_topic.summary,
@@ -540,18 +769,22 @@ class CrazzyDocsMasterOrchestrator:
                     final_output_path=thumb_path,
                     report_output_path=thumb_report_path,
                     candidate_dir=variants_dir,
+                    progress_callback=_thumb_progress_cb,
                 )
                 winning_headline = winning_thumb.headline_text
+                production_observability.complete_stage(job_id, "thumbnail_generation", f"Selected winning thumbnail '{winning_headline}' (Score {winning_thumb.score.composite_score:.1f})")
                 if persist_to_db:
                     self._update_checkpoint(job_id, "THUMBNAIL", 85.0, {
                         "thumbnail_path": thumb_path,
                         "winning_thumbnail": winning_headline,
                     })
-            prod_ws.register_artifact("STAGE_10_THUMBNAIL", "thumbnail", thumb_path, copy_into_workspace=False)
+            prod_ws.register_artifact("STAGE_10_THUMBNAIL", "thumbnail", thumb_path, copy_into_workspace=False, format="png")
 
             # -------------------------------------------------------------
             # Stage 11: Quality Control & Mandatory Content Integrity Gate
             # -------------------------------------------------------------
+            obs_stage = "quality_control"
+            production_observability.start_stage(job_id, "quality_control", "Running QC & Content Integrity Gate...", progress=20.0)
             logger.info("[CONTENT INTEGRITY GATE] Generating metadata and running 15-point QC...")
             meta = MetadataGenerator.generate_shorts_metadata(
                 topic_title=selected_topic.title,
@@ -578,6 +811,7 @@ class CrazzyDocsMasterOrchestrator:
                     video_path=final_video_path,
                     thumbnail_path=thumb_path,
                     metadata={
+                        "title": selected_topic.title,
                         "youtube_title": meta.title,
                         "description": meta.description,
                         "tags": meta.tags,
@@ -585,6 +819,9 @@ class CrazzyDocsMasterOrchestrator:
                     },
                     target_fps=30.0,
                     allow_custom_duration=False,
+                    storyboard_beats=storyboard_beats,
+                    workspace_dir=prod_ws.prod_dir,
+                    topic_title=selected_topic.title,
                 )
                 qc_report_path = os.path.join(prod_ws.reports_dir, f"qc_report_{job_id}.json")
                 with open(qc_report_path, "w", encoding="utf-8") as f:
@@ -607,6 +844,8 @@ class CrazzyDocsMasterOrchestrator:
                 attribution_text=meta.attribution_text,
                 manifest_assets=manifest_assets,
                 rendering_engine=rendered_engine_name,
+                storyboard_beats=storyboard_beats,
+                production_workspace_dir=prod_ws.prod_dir,
             )
 
             integrity_audit_path = os.path.join(prod_ws.prod_dir, "audit", f"integrity_report_{job_id}.json")
@@ -640,6 +879,9 @@ class CrazzyDocsMasterOrchestrator:
                             db_session.commit()
                 raise ValueError(f"BLOCKED_QC: {integrity_report.rejection_reasons}")
 
+            production_observability.complete_stage(job_id, "quality_control", f"QC and {len(integrity_report.checks)}-point Integrity Gate PASSED")
+            obs_stage = "finalization"
+            production_observability.start_stage(job_id, "finalization", "Finalizing canonical workspace, manifest & notifications...", progress=30.0)
             logger.info("[CONTENT INTEGRITY GATE] PASSED! %d checks verified for topic '%s'.", len(integrity_report.checks), selected_topic.title)
 
             # -------------------------------------------------------------
@@ -746,6 +988,10 @@ class CrazzyDocsMasterOrchestrator:
                 )
 
             elapsed = time.perf_counter() - t_start
+            production_observability.complete_production(
+                job_id,
+                f"Completed '{selected_topic.title}' in {elapsed:.1f}s ({len(visual_beats)} beats)",
+            )
             logger.info("=== MASTER PIPELINE COMPLETED IN %.1fs ===", elapsed)
             return {
                 "job_id": job_id,
@@ -766,7 +1012,14 @@ class CrazzyDocsMasterOrchestrator:
             }
 
         except Exception as e:
-            logger.error("Master pipeline failed: %s", e)
+            logger.error("Master pipeline failed at %s: %s", locals().get("obs_stage", "orchestration_pipeline"), e)
+            production_observability.fail_production(
+                job_id,
+                stage=str(locals().get("obs_stage", "orchestration_pipeline")),
+                error_summary=str(e),
+                retry_possible=True,
+                safe_to_resume=True,
+            )
             if persist_to_db:
                 with SessionLocal() as db_session:
                     job = db_session.query(JobModel).filter(JobModel.id == job_id).first()

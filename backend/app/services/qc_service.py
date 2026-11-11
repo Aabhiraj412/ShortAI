@@ -4,11 +4,21 @@ Validates video, audio, subtitles, thumbnail, and metadata before permitting pub
 """
 import os
 import subprocess
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 try:
     from backend.app.services.animation_service import probe_video
+    from backend.app.content.visual_diversity_policy import (
+        MAX_IMAGE_REUSE,
+        MIN_DISTINCT_ASSETS_FULL_SHORT,
+        VisualDiversityValidator,
+    )
 except ImportError:
     from app.services.animation_service import probe_video
+    from app.content.visual_diversity_policy import (
+        MAX_IMAGE_REUSE,
+        MIN_DISTINCT_ASSETS_FULL_SHORT,
+        VisualDiversityValidator,
+    )
 
 class QualityControlEngine:
     def __init__(self):
@@ -20,7 +30,10 @@ class QualityControlEngine:
         thumbnail_path: str,
         metadata: Dict,
         target_fps: float = 30.0,
-        allow_custom_duration: bool = False
+        allow_custom_duration: bool = False,
+        storyboard_beats: Optional[List[Dict]] = None,
+        workspace_dir: Optional[str] = None,
+        topic_title: str = "",
     ) -> Tuple[bool, List[str], Dict]:
         """
         Runs 15 validation checks on rendered video and assets.
@@ -146,6 +159,28 @@ class QualityControlEngine:
         
         # 15. Black frame check (sample verification)
         checks["black_frames"] = "PASS (Verified keyframes)"
+
+        # 16. Stage 3.21J Visual Diversity & Canonical Asset Persistence Check
+        if storyboard_beats:
+            div_audit = VisualDiversityValidator.validate_storyboard(
+                storyboard_beats,
+                topic_title=topic_title or str(metadata.get("title") or ""),
+                max_image_reuse=MAX_IMAGE_REUSE,
+                check_files_on_disk=True,
+                min_distinct_assets=(
+                    MIN_DISTINCT_ASSETS_FULL_SHORT if len(storyboard_beats) >= 18 else None
+                ),
+                workspace_root=workspace_dir,
+            )
+            if not div_audit.is_valid:
+                errors.extend(div_audit.violations)
+                checks["visual_diversity_reuse"] = f"FAIL ({'; '.join(div_audit.violations)})"
+                checks["canonical_asset_persistence"] = "FAIL"
+            else:
+                checks["visual_diversity_reuse"] = (
+                    f"PASS (distinct={div_audit.distinct_assets}, max_reuse={div_audit.max_reuse_observed})"
+                )
+                checks["canonical_asset_persistence"] = "PASS (All canonical storyboard assets verified on disk)"
         
         passed = len(errors) == 0
         return passed, errors, checks

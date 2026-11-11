@@ -289,6 +289,7 @@ class ScoredTopic:
     factual_bullets: List[str] = field(default_factory=list)
     image_urls: List[str] = field(default_factory=list)
     discovery_source: str = "curated"
+    coordinates: Optional[Dict[str, float]] = None
 
 
 class CuriosityTopicEngine:
@@ -350,6 +351,7 @@ class CuriosityTopicEngine:
             factual_bullets=cand.get("factual_bullets", []),
             image_urls=cand.get("image_urls", []),
             discovery_source=cand.get("discovery_source", "curated"),
+            coordinates=cand.get("coordinates"),
         )
 
     @staticmethod
@@ -450,6 +452,12 @@ class CuriosityTopicEngine:
 
             canon_title = summary_json.get("title") or wiki_title
             short_extract = self._clean_text(summary_json.get("extract", ""))
+            coords_raw = summary_json.get("coordinates")
+            coordinates = (
+                {"lat": float(coords_raw["lat"]), "lon": float(coords_raw["lon"])}
+                if isinstance(coords_raw, dict) and "lat" in coords_raw and "lon" in coords_raw
+                else None
+            )
             page_url = (
                 summary_json.get("content_urls", {})
                 .get("desktop", {})
@@ -469,9 +477,9 @@ class CuriosityTopicEngine:
                     t = item.get("title", "")
                     if item.get("type") == "image" and t.startswith("File:"):
                         low_t = t.lower()
-                        if low_t.endswith((".jpg", ".jpeg", ".png")) and "flag_" not in low_t and "locator" not in low_t and "commons-logo" not in low_t:
+                        if low_t.endswith((".jpg", ".jpeg", ".png")) and "flag_" not in low_t and "commons-logo" not in low_t and "icon" not in low_t:
                             commons_file_titles.append(t)
-                    if len(commons_file_titles) >= 8:
+                    if len(commons_file_titles) >= 14:
                         break
             except Exception:
                 pass
@@ -545,6 +553,7 @@ class CuriosityTopicEngine:
                 "key_entities": entities,
                 "image_urls": image_urls + commons_file_titles,
                 "discovery_source": discovery_origin,
+                "coordinates": coordinates,
             }
         except Exception as e:
             logger.debug("Wikipedia enrichment failed for '%s': %s", wiki_title, e)

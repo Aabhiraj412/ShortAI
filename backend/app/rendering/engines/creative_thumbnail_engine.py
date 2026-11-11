@@ -17,7 +17,7 @@ import logging
 import math
 import os
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 logger = logging.getLogger(__name__)
@@ -417,6 +417,7 @@ class CreativeThumbnailEngine:
         final_output_path: str = os.path.join(THUMBNAIL_DIR, "production_thumbnail.png"),
         report_output_path: str = os.path.join(AUDIT_DIR, "thumbnail_evaluation_report.json"),
         candidate_dir: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, str]], None]] = None,
     ) -> Tuple[ThumbnailCandidate, Dict]:
         """
         Executes end-to-end intelligent thumbnail generation:
@@ -426,8 +427,25 @@ class CreativeThumbnailEngine:
         4. Copies winning candidate to final_output_path.
         5. Saves evaluation audit report to report_output_path.
         """
+        def _emit(payload: Dict[str, str]) -> None:
+            if progress_callback:
+                try:
+                    progress_callback(payload)
+                except Exception:
+                    pass
+
         target_cand_dir = candidate_dir or CANDIDATE_DIR
         os.makedirs(target_cand_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
+        os.makedirs(os.path.dirname(report_output_path), exist_ok=True)
+
+        _emit({
+            "status": "running",
+            "image_generation_status": "generating",
+            "composition_status": "pending",
+            "text_layout_status": "pending",
+            "validation_status": "pending",
+        })
 
         candidates = self.create_candidate_proposals(
             topic_title=topic_title,
@@ -436,8 +454,16 @@ class CreativeThumbnailEngine:
             available_assets=available_assets
         )
 
+        _emit({
+            "status": "running",
+            "image_generation_status": "completed",
+            "composition_status": "rendering",
+            "text_layout_status": "laying_out",
+            "validation_status": "pending",
+        })
+
         evaluation_data = []
-        for cand in candidates:
+        for idx, cand in enumerate(candidates):
             cand_path = os.path.join(target_cand_dir, f"{cand.id}.png")
             self.render_candidate(cand, cand_path)
             self.evaluate_candidate(cand, topic_title, topic_summary)
@@ -449,10 +475,21 @@ class CreativeThumbnailEngine:
                 "scores": asdict(cand.score),
                 "preview_path": cand.output_path
             })
+            if idx == 0 and cand.output_path and os.path.isfile(cand.output_path):
+                _emit({
+                    "composition_status": f"rendering ({idx + 1}/{len(candidates)})",
+                    "preview_image_path": cand.output_path,
+                })
 
         # Rank candidates by composite score descending
         candidates.sort(key=lambda c: c.score.composite_score, reverse=True)
         winner = candidates[0]
+
+        _emit({
+            "composition_status": "completed",
+            "text_layout_status": "completed",
+            "validation_status": "validating",
+        })
 
         # Copy winning image to final output path
         if winner.output_path and os.path.exists(winner.output_path):
@@ -483,6 +520,18 @@ class CreativeThumbnailEngine:
 
         with open(report_output_path, "w", encoding="utf-8") as f_rep:
             json.dump(report, f_rep, indent=2)
+
+        final_valid = os.path.isfile(final_output_path) and os.path.getsize(final_output_path) > 1024
+        _emit({
+            "status": "completed" if final_valid else "failed",
+            "image_generation_status": "completed",
+            "composition_status": "completed",
+            "text_layout_status": "completed",
+            "validation_status": "completed" if final_valid else "failed",
+            "preview_image_path": final_output_path if final_valid else (winner.output_path or ""),
+            "winner_headline": winner.headline_text,
+            "winner_score": str(round(winner.score.composite_score, 2)),
+        })
 
         logger.info(
             "Selected winning thumbnail: %s ('%s', Score: %.2f) -> %s",

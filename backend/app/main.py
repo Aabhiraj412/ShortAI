@@ -322,6 +322,56 @@ async def get_dashboard_activity(limit: int = 25):
     return production_health_dashboard.get_recent_activity(limit=limit)
 
 
+@app.get("/api/dashboard/progress")
+async def get_dashboard_progress(include_tests: bool = False):
+    from backend.app.services.production_observability import production_observability
+    return production_observability.get_dashboard_payload(include_tests=include_tests)
+
+
+@app.get("/api/dashboard/progress/active")
+async def get_dashboard_active_progress(include_tests: bool = False):
+    from backend.app.services.production_observability import production_observability
+    active = production_observability.get_active_production(include_tests=include_tests)
+    return {"has_active": active is not None, "active_production": active}
+
+
+@app.get("/api/dashboard/progress/history")
+async def get_dashboard_progress_history(limit: int = 15, include_tests: bool = False):
+    from backend.app.services.production_observability import production_observability
+    return {"productions": production_observability.get_history(limit=limit, include_tests=include_tests)}
+
+
+@app.get("/api/dashboard/progress/{production_id}")
+async def get_dashboard_production_progress(production_id: str, include_tests: bool = True):
+    from backend.app.services.production_observability import production_observability
+    rec = production_observability.get_production(production_id, include_tests=include_tests)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"Production progress record '{production_id}' not found")
+    return rec
+
+
+@app.get("/api/dashboard/productions/{production_id}/thumbnail")
+async def get_production_thumbnail(production_id: str):
+    import re
+    from backend.app.core.paths import PROJECT_ROOT_STR
+    if not re.match(r"^[A-Za-z0-9_.\-]+$", production_id):
+        raise HTTPException(status_code=400, detail="Invalid production ID")
+    base_dir = os.path.abspath(os.path.join(PROJECT_ROOT_STR, "media", "productions", production_id, "thumbnails"))
+    cand_paths = [
+        os.path.join(base_dir, f"thumb_{production_id}.png"),
+        os.path.join(base_dir, "variants", "cand_3_mystery.png"),
+        os.path.join(base_dir, "variants", "cand_1_shock.png"),
+    ]
+    if os.path.isdir(base_dir):
+        for fn in sorted(os.listdir(base_dir)):
+            if fn.lower().endswith((".png", ".jpg", ".jpeg")):
+                cand_paths.append(os.path.join(base_dir, fn))
+    for p in cand_paths:
+        if os.path.isfile(p) and os.path.abspath(p).startswith(base_dir):
+            return FileResponse(p, media_type="image/png")
+    raise HTTPException(status_code=404, detail="Thumbnail preview not yet generated")
+
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     """Redirects root browser access directly to the Production Health Dashboard."""
