@@ -418,6 +418,7 @@ class CreativeThumbnailEngine:
         report_output_path: str = os.path.join(AUDIT_DIR, "thumbnail_evaluation_report.json"),
         candidate_dir: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, str]], None]] = None,
+        excluded_headlines: Optional[List[str]] = None,
     ) -> Tuple[ThumbnailCandidate, Dict]:
         """
         Executes end-to-end intelligent thumbnail generation:
@@ -462,17 +463,35 @@ class CreativeThumbnailEngine:
             "validation_status": "pending",
         })
 
+        # Collect recently used headlines to guarantee headline non-repetition
+        from backend.app.content.validation_topic_history import ValidationTopicHistory, normalize_text
+        blocked_headlines = set()
+        if excluded_headlines is None:
+            try:
+                blocked_headlines = {
+                    normalize_text(h)
+                    for h in ValidationTopicHistory().get_recent_thumbnail_headlines()
+                    if normalize_text(h)
+                }
+            except Exception:
+                blocked_headlines = set()
+        else:
+            blocked_headlines = {normalize_text(h) for h in excluded_headlines if normalize_text(h)}
+
         evaluation_data = []
         for idx, cand in enumerate(candidates):
             cand_path = os.path.join(target_cand_dir, f"{cand.id}.png")
             self.render_candidate(cand, cand_path)
             self.evaluate_candidate(cand, topic_title, topic_summary)
+            if normalize_text(cand.headline_text) in blocked_headlines and cand.score is not None:
+                cand.score.composite_score = round(max(0.0, cand.score.composite_score - 3.5), 2)
             evaluation_data.append({
                 "candidate_id": cand.id,
                 "concept_name": cand.concept_name,
                 "headline_text": cand.headline_text,
                 "word_count": cand.word_count,
                 "scores": asdict(cand.score),
+                "excluded_headline_penalty": normalize_text(cand.headline_text) in blocked_headlines,
                 "preview_path": cand.output_path
             })
             if idx == 0 and cand.output_path and os.path.isfile(cand.output_path):

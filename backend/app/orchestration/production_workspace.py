@@ -353,8 +353,38 @@ class ProductionWorkspace:
             a.sha256 for a in (acquired + generated + animations) if a.sha256
         })
 
+        def _deliverable_entry(art_type: str, fallback_path: str) -> Dict[str, Any]:
+            matched = [a for a in self.artifacts if a.artifact_type == art_type]
+            target_path = matched[-1].file_path if matched else fallback_path
+            exists = os.path.isfile(target_path)
+            size_b = os.path.getsize(target_path) if exists else 0
+            sha = (matched[-1].sha256 if matched and matched[-1].sha256 else (compute_file_sha256(target_path) if exists else ""))
+            try:
+                rel_p = os.path.relpath(target_path, self.workspace_root).replace("\\", "/")
+            except ValueError:
+                rel_p = os.path.abspath(target_path).replace("\\", "/")
+            return {
+                "path": os.path.abspath(target_path) if target_path else "",
+                "relative_path": rel_p,
+                "exists": exists,
+                "size_bytes": size_b,
+                "sha256": sha,
+            }
+
+        canon_video = _deliverable_entry("video", self.get_canonical_video_path())
+        canon_thumb = _deliverable_entry("thumbnail", self.get_canonical_thumbnail_path())
+        deliverables = {
+            "final_video": canon_video,
+            "thumbnail": canon_thumb,
+            "voiceover": _deliverable_entry("narration", os.path.join(self.audio_dir, f"voiceover_{self.production_id}.mp3")),
+            "storyboard": _deliverable_entry("storyboard", os.path.join(self.storyboards_dir, f"storyboard_{self.production_id}.json")),
+            "qc_report": _deliverable_entry("report", os.path.join(self.reports_dir, f"qc_report_{self.production_id}.json")),
+            "integrity_report": _deliverable_entry("report", os.path.join(self.audit_dir, f"integrity_report_{self.production_id}.json")),
+        }
+
         manifest_data = {
             "manifest_version": "3.21J",
+            "schema_revision": "3.21K",
             "production_id": self.production_id,
             "topic_id": self.topic_id,
             "topic_title": self.topic_title,
@@ -362,6 +392,10 @@ class ProductionWorkspace:
             "script_fingerprint": self.script_fingerprint,
             "storyboard_fingerprint": self.storyboard_fingerprint,
             "workspace_dir": ws_rel,
+            "workspace_abs_dir": os.path.abspath(self.prod_dir),
+            "canonical_video_path": canon_video["path"],
+            "canonical_thumbnail_path": canon_thumb["path"],
+            "deliverables": deliverables,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "asset_summary": {
                 "acquired_images": len(acquired),

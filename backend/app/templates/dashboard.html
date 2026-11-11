@@ -452,9 +452,15 @@
       <div class="card-subtext" id="targetPubSub">Mode: Automatic Public</div>
     </div>
     <div class="card">
-      <div class="card-label">Pipeline Stage</div>
-      <div class="card-value text-accent" id="pipelineStageVal" style="font-size: 18px;">IDLE</div>
-      <div class="card-subtext" id="pipelineProgressVal">Awaiting scheduled trigger</div>
+      <div class="card-label">Pipeline &amp; Worker State</div>
+      <div class="card-value text-accent" id="pipelineStageVal" style="font-size: 16px;">IDLE</div>
+      <div class="card-subtext" id="pipelineProgressVal">Overall: IDLE</div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:10px;">
+        <span class="badge badge-warning" id="schedulerStateBadge" title="Windows Task & Scheduler Daemon">Sched: DISABLED</span>
+        <span class="badge badge-info" id="prodWorkerStateBadge" title="Production Pipeline Worker">Prod: IDLE</span>
+        <span class="badge badge-info" id="valWorkerStateBadge" title="Validation Pipeline Worker">Val: IDLE</span>
+        <span class="badge badge-info" id="overallOpStateBadge" title="Overall Reconciled State">Op: IDLE</span>
+      </div>
     </div>
   </div>
 
@@ -476,6 +482,8 @@
       <div>
         <div style="font-size:16px; font-weight:700;" id="obsTopicTitle">No active production running</div>
         <div class="mono" style="font-size:12px; color:var(--text-muted); margin-top:2px;" id="obsProdMeta">ID: -- | Stage: -- | ETA: --</div>
+        <div class="mono" style="font-size:11px; color:#94a3b8; margin-top:4px; word-break:break-all;" id="obsStorageDir">Workspace: --</div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;" id="obsDeliverableLinks"></div>
       </div>
       <div style="text-align:right;">
         <div class="mono" style="font-size:22px; font-weight:800; color:var(--accent);" id="obsOverallPct">0%</div>
@@ -539,11 +547,12 @@
               <th>Status</th>
               <th>Progress</th>
               <th>Assets (Img/Gen/Anim)</th>
+              <th>Deliverables</th>
               <th>Updated</th>
             </tr>
           </thead>
           <tbody id="obsHistoryBody">
-            <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>
+            <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>
           </tbody>
         </table>
       </div>
@@ -837,13 +846,24 @@
     updateClock();
 
     let pollTimer = null;
-    let currentPollMs = 10000;
+    let currentPollMs = 20000;
+    let lastHeavyFetchAt = 0;
+    let isFetchingDashboard = false;
+    const ACTIVE_POLL_MS = 5000;
+    const IDLE_POLL_MS = 20000;
+    const HEAVY_POLL_MS = 60000;
 
     function _obsBadgeClass(st) {
-      if (st === 'completed' || st === 'COMPLETED') return 'badge-success';
-      if (st === 'running' || st === 'RUNNING') return 'badge-warning';
-      if (st === 'failed' || st === 'FAILED') return 'badge-danger';
+      if (st === 'completed' || st === 'COMPLETED' || st === 'RUNNING') return st === 'RUNNING' ? 'badge-warning' : 'badge-success';
+      if (st === 'running' || st === 'STARTING' || st === 'VALIDATION ACTIVE' || st === 'PRODUCTION ACTIVE' || st === 'RECOVERY ACTIVE') return 'badge-warning';
+      if (st === 'failed' || st === 'FAILED' || st === 'ERROR') return 'badge-danger';
+      if (st === 'DISABLED' || st === 'STOPPED' || st === 'DEGRADED') return 'badge-warning';
       return 'badge-info';
+    }
+
+    function _formatBytesMB(bytes) {
+      if (!bytes || bytes <= 0) return '0 MB';
+      return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
     }
 
     function renderLiveObservability(progressRes) {
@@ -852,9 +872,13 @@
       const schema = progressRes.stages_schema || [];
       const hasActive = Boolean(progressRes.has_active);
 
-      currentPollMs = hasActive ? 2500 : 10000;
+      currentPollMs = hasActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
       const rateBadge = document.getElementById('obsRefreshRateBadge');
-      if (rateBadge) rateBadge.textContent = 'Poll: ' + (hasActive ? '2.5s (LIVE)' : '10s');
+      if (rateBadge) {
+        rateBadge.textContent = document.hidden
+          ? 'Poll: PAUSED (Tab Hidden)'
+          : ('Poll: ' + (hasActive ? '5s (LIVE)' : '20s (Idle)'));
+      }
 
       const ctxEl = document.getElementById('obsContextBadge');
       const stEl = document.getElementById('obsStatusBadge');
@@ -869,6 +893,10 @@
       if (!prod) {
         if (ctxEl) ctxEl.textContent = 'NONE';
         if (stEl) { stEl.textContent = 'IDLE'; stEl.className = 'badge badge-info'; }
+        const stDirEl = document.getElementById('obsStorageDir');
+        const dlEl = document.getElementById('obsDeliverableLinks');
+        if (stDirEl) stDirEl.textContent = 'Workspace: --';
+        if (dlEl) dlEl.innerHTML = '';
         if (gridEl && schema.length) {
           gridEl.innerHTML = schema.map(s => `
             <div class="obs-stage-card">
@@ -893,6 +921,31 @@
         if (pctEl) pctEl.textContent = overallPct.toFixed(0) + '%';
         if (opEl) opEl.textContent = prod.current_operation || '--';
         if (barEl) barEl.style.width = Math.min(100, Math.max(0, overallPct)) + '%';
+
+        const storage = prod.storage || {};
+        const stDirEl = document.getElementById('obsStorageDir');
+        if (stDirEl) {
+          stDirEl.textContent = storage.workspace_abs_dir
+            ? ('Workspace: ' + storage.workspace_abs_dir)
+            : 'Workspace: --';
+        }
+        const dlEl = document.getElementById('obsDeliverableLinks');
+        if (dlEl) {
+          const pills = [];
+          if (storage.video_url) {
+            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.video_url}" target="_blank">Open Video (${_formatBytesMB(storage.video_size_bytes)})</a>`);
+          }
+          if (storage.thumbnail_url) {
+            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.thumbnail_url}" target="_blank">Open Thumbnail (${_formatBytesMB(storage.thumbnail_size_bytes)})</a>`);
+          }
+          if (storage.manifest_url) {
+            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.manifest_url}" target="_blank">Manifest JSON</a>`);
+          }
+          if (storage.artifacts_url) {
+            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.artifacts_url}" target="_blank">Artifact Paths</a>`);
+          }
+          dlEl.innerHTML = pills.join('');
+        }
 
         if (errBanner) {
           if (prod.error && prod.overall_status === 'failed') {
@@ -959,47 +1012,101 @@
       const hist = progressRes.history || [];
       if (histBody) {
         if (hist.length > 0) {
-          histBody.innerHTML = hist.map(h => `
+          histBody.innerHTML = hist.map(h => {
+            const stg = h.storage || {};
+            const links = [];
+            if (stg.video_url) links.push(`<a href="${stg.video_url}" target="_blank" style="color:#60a5fa;">Video</a>`);
+            if (stg.thumbnail_url) links.push(`<a href="${stg.thumbnail_url}" target="_blank" style="color:#34d399;">Thumb</a>`);
+            if (stg.manifest_url) links.push(`<a href="${stg.manifest_url}" target="_blank" style="color:#c084fc;">Manifest</a>`);
+            return `
             <tr>
-              <td class="mono" style="font-size:11px;">${h.production_id}</td>
+              <td class="mono" style="font-size:11px;" title="${stg.workspace_abs_dir || ''}">${h.production_id}</td>
               <td style="font-weight:600;">${h.topic}</td>
               <td><span class="badge badge-info">${h.execution_context || 'PRODUCTION'}</span></td>
               <td><span class="badge ${_obsBadgeClass(h.overall_status)}">${(h.overall_status || 'unknown').toUpperCase()}</span></td>
               <td class="mono">${Number(h.overall_progress || 0).toFixed(0)}%</td>
               <td class="mono" style="font-size:11px;">${(h.assets?.unique_images ?? 0)} / ${(h.assets?.generated_images ?? 0)} / ${(h.assets?.animations ?? 0)}</td>
+              <td style="font-size:11px; white-space:nowrap;">${links.length ? links.join(' • ') : '<span style="color:var(--text-muted);">--</span>'}</td>
               <td class="mono" style="font-size:11px;">${(h.last_updated || '').replace('T', ' ').slice(0, 19)}</td>
             </tr>
-          `).join('');
+          `;
+          }).join('');
         } else {
-          histBody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>';
+          histBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>';
         }
       }
     }
 
-    async function fetchDashboardData() {
+    async function fetchDashboardData(forceHeavy = true) {
+      if (isFetchingDashboard) return;
+      isFetchingDashboard = true;
       try {
-        const [overviewRes, statsRes, healthRes, historyRes, recoveryRes, activityRes, progressRes] = await Promise.all([
+        const nowMs = Date.now();
+        const shouldFetchHeavy = forceHeavy || (lastHeavyFetchAt === 0) || ((nowMs - lastHeavyFetchAt) >= HEAVY_POLL_MS);
+
+        const [overviewRes, progressRes] = await Promise.all([
           fetch('/api/dashboard/overview').then(r => r.json()),
-          fetch('/api/dashboard/stats?filter=' + currentFilter).then(r => r.json()),
-          fetch('/api/dashboard/health').then(r => r.json()),
-          fetch('/api/dashboard/history').then(r => r.json()),
-          fetch('/api/dashboard/recovery').then(r => r.json()),
-          fetch('/api/dashboard/activity').then(r => r.json()),
-          fetch('/api/dashboard/progress').then(r => r.json()).catch(() => null)
+          fetch('/api/dashboard/progress').then(r => r.json()).catch(() => null),
         ]);
+
+        let statsRes = null, healthRes = null, historyRes = null, recoveryRes = null, activityRes = null;
+        if (shouldFetchHeavy) {
+          lastHeavyFetchAt = nowMs;
+          [statsRes, healthRes, historyRes, recoveryRes, activityRes] = await Promise.all([
+            fetch('/api/dashboard/stats?filter=' + currentFilter).then(r => r.json()),
+            fetch('/api/dashboard/health').then(r => r.json()),
+            fetch('/api/dashboard/history').then(r => r.json()),
+            fetch('/api/dashboard/recovery').then(r => r.json()),
+            fetch('/api/dashboard/activity').then(r => r.json()),
+          ]);
+        }
+
         renderLiveObservability(progressRes);
 
-        // Overview
+        // Overview + 4-State Reconciliation Badges
         document.getElementById('currentCycleVal').textContent = overviewRes.current_cycle || 'None';
         document.getElementById('nextProdVal').textContent = overviewRes.next_production_ist || 'Not scheduled';
         document.getElementById('targetPubVal').textContent = overviewRes.target_publishing_ist || 'Calculating...';
         document.getElementById('pipelineStageVal').textContent = overviewRes.pipeline_stage || 'IDLE';
         document.getElementById('activeProfileBadge').textContent = overviewRes.active_profile || 'FOUR_CYCLES_DAILY';
 
+        const opState = overviewRes.overall_operational_state || 'IDLE';
+        const schedState = overviewRes.scheduler_state || 'DISABLED';
+        const prodState = overviewRes.production_worker_state || 'IDLE';
+        const valState = overviewRes.validation_worker_state || 'IDLE';
+
+        const ppVal = document.getElementById('pipelineProgressVal');
+        if (ppVal) ppVal.textContent = `Overall: ${opState}`;
+
+        const sbEl = document.getElementById('schedulerStateBadge');
+        if (sbEl) {
+          sbEl.textContent = 'Sched: ' + schedState;
+          sbEl.className = 'badge ' + _obsBadgeClass(schedState);
+        }
+        const pbEl = document.getElementById('prodWorkerStateBadge');
+        if (pbEl) {
+          pbEl.textContent = 'Prod: ' + prodState;
+          pbEl.className = 'badge ' + _obsBadgeClass(prodState);
+        }
+        const vbEl = document.getElementById('valWorkerStateBadge');
+        if (vbEl) {
+          vbEl.textContent = 'Val: ' + valState;
+          vbEl.className = 'badge ' + _obsBadgeClass(valState);
+        }
+        const obEl = document.getElementById('overallOpStateBadge');
+        if (obEl) {
+          obEl.textContent = 'Op: ' + opState;
+          obEl.className = 'badge ' + _obsBadgeClass(opState);
+        }
+
         // Overall Health Pill
         const healthBadge = document.getElementById('overallHealthBadge');
         healthBadge.textContent = 'SYSTEM ' + (overviewRes.overall_health || 'HEALTHY');
         healthBadge.className = 'badge ' + (overviewRes.overall_health === 'HEALTHY' ? 'badge-success' : (overviewRes.overall_health === 'DEGRADED' ? 'badge-warning' : 'badge-danger'));
+
+        if (!shouldFetchHeavy) {
+          return;
+        }
 
         // Stats
         if (document.getElementById('statAttempted')) {
@@ -1167,6 +1274,8 @@
 
       } catch (err) {
         console.error('Failed to update dashboard:', err);
+      } finally {
+        isFetchingDashboard = false;
       }
     }
 
@@ -1211,16 +1320,33 @@
       currentFilter = filter;
       document.querySelectorAll('.filter-bar .btn').forEach(b => b.classList.remove('btn-active'));
       el.classList.add('btn-active');
-      fetchDashboardData();
+      fetchDashboardData(true);
     }
 
-    // Adaptive polling: 2.5s while active production is running, 10s when idle
+    // Adaptive split polling with visibility throttling & single-instance guard
     async function scheduleNextRefresh() {
-      await fetchDashboardData();
-      if (pollTimer) clearTimeout(pollTimer);
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+      if (!document.hidden) {
+        await fetchDashboardData(lastHeavyFetchAt === 0);
+      } else {
+        const rateBadge = document.getElementById('obsRefreshRateBadge');
+        if (rateBadge) rateBadge.textContent = 'Poll: PAUSED (Tab Hidden)';
+      }
       pollTimer = setTimeout(scheduleNextRefresh, currentPollMs);
     }
-    scheduleNextRefresh();
+
+    if (!window.__crazzydocsPollInitialized) {
+      window.__crazzydocsPollInitialized = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          scheduleNextRefresh();
+        }
+      });
+      scheduleNextRefresh();
+    }
   </script>
 </body>
 </html>

@@ -238,6 +238,7 @@ async def get_dashboard_overview():
     from datetime import datetime, timedelta
     
     m = production_health_dashboard.get_health_metrics()
+    states = production_health_dashboard.get_reconciled_operational_states(metrics=m)
     profile = get_active_profile()
     now_ist = datetime.now(IST_TZ)
     
@@ -260,6 +261,12 @@ async def get_dashboard_overview():
         "pipeline_stage": m.pipeline_stage,
         "active_profile": profile.name,
         "overall_health": m.overall_health,
+        "scheduler_state": states["scheduler_state"],
+        "production_worker_state": states["production_worker_state"],
+        "production_worker": states["production_worker"],
+        "validation_worker_state": states["validation_worker_state"],
+        "validation_worker": states["validation_worker"],
+        "overall_operational_state": states["overall_operational_state"],
         "timestamp_ist": m.timestamp_ist,
     }
 
@@ -276,8 +283,12 @@ async def get_dashboard_health():
     m = production_health_dashboard.get_health_metrics()
     services = production_health_dashboard.get_services_status()
     tasks = production_health_dashboard.get_windows_task_status()
+    states = production_health_dashboard.get_reconciled_operational_states(
+        metrics=m, services=services, windows_tasks=tasks
+    )
     return {
         "overall_health": m.overall_health,
+        "operational_states": states,
         "recovery_status": m.recovery_status,
         "network_status": m.network_status,
         "scheduler_heartbeat": m.scheduler_heartbeat,
@@ -322,23 +333,104 @@ async def get_dashboard_activity(limit: int = 25):
     return production_health_dashboard.get_recent_activity(limit=limit)
 
 
+def _validate_production_id(production_id: str) -> str:
+    import re
+    if not re.match(r"^[A-Za-z0-9_.\-]+$", production_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid production ID")
+    return production_id
+
+
+def _resolve_production_deliverables(production_id: str) -> dict:
+    from backend.app.core.paths import PROJECT_ROOT_STR
+    _validate_production_id(production_id)
+    prod_dir = os.path.abspath(os.path.join(PROJECT_ROOT_STR, "media", "productions", production_id))
+    video_dir = os.path.join(prod_dir, "video")
+    thumb_dir = os.path.join(prod_dir, "thumbnails")
+    manifest_path = os.path.join(prod_dir, "production_manifest.json")
+
+    video_path = None
+    for cand in (
+        os.path.join(video_dir, f"showcase_{production_id}.mp4"),
+        os.path.join(video_dir, f"final_{production_id}.mp4"),
+    ):
+        if os.path.isfile(cand):
+            video_path = cand
+            break
+    if not video_path and os.path.isdir(video_dir):
+        for fn in sorted(os.listdir(video_dir)):
+            if fn.lower().endswith(".mp4"):
+                video_path = os.path.join(video_dir, fn)
+                break
+
+    thumb_path = None
+    for cand in (
+        os.path.join(thumb_dir, f"thumb_{production_id}.png"),
+        os.path.join(thumb_dir, "variants", "cand_01_topic_focal.png"),
+        os.path.join(thumb_dir, "variants", "cand_3_mystery.png"),
+    ):
+        if os.path.isfile(cand):
+            thumb_path = cand
+            break
+    if not thumb_path and os.path.isdir(thumb_dir):
+        for fn in sorted(os.listdir(thumb_dir)):
+            if fn.lower().endswith((".png", ".jpg", ".jpeg")):
+                thumb_path = os.path.join(thumb_dir, fn)
+                break
+
+    manifest_exists = os.path.isfile(manifest_path)
+    return {
+        "production_id": production_id,
+        "workspace_abs_dir": prod_dir,
+        "workspace_exists": os.path.isdir(prod_dir),
+        "video_path": video_path,
+        "video_exists": bool(video_path and os.path.isfile(video_path)),
+        "video_size_bytes": os.path.getsize(video_path) if (video_path and os.path.isfile(video_path)) else 0,
+        "video_url": f"/api/dashboard/productions/{production_id}/video" if (video_path and os.path.isfile(video_path)) else None,
+        "thumbnail_path": thumb_path,
+        "thumbnail_exists": bool(thumb_path and os.path.isfile(thumb_path)),
+        "thumbnail_size_bytes": os.path.getsize(thumb_path) if (thumb_path and os.path.isfile(thumb_path)) else 0,
+        "thumbnail_url": f"/api/dashboard/productions/{production_id}/thumbnail" if (thumb_path and os.path.isfile(thumb_path)) else None,
+        "manifest_path": manifest_path if manifest_exists else None,
+        "manifest_exists": manifest_exists,
+        "manifest_url": f"/api/dashboard/productions/{production_id}/manifest" if manifest_exists else None,
+        "artifacts_url": f"/api/dashboard/productions/{production_id}/artifacts",
+    }
+
+
+def _enrich_progress_record(rec: Optional[dict]) -> Optional[dict]:
+    if not rec or not isinstance(rec, dict):
+        return rec
+    pid = rec.get("production_id")
+    if pid:
+        rec = dict(rec)
+        rec["storage"] = _resolve_production_deliverables(pid)
+    return rec
+
+
 @app.get("/api/dashboard/progress")
 async def get_dashboard_progress(include_tests: bool = False):
     from backend.app.services.production_observability import production_observability
-    return production_observability.get_dashboard_payload(include_tests=include_tests)
+    payload = production_observability.get_dashboard_payload(include_tests=include_tests)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["active_production"] = _enrich_progress_record(payload.get("active_production"))
+        payload["displayed_production"] = _enrich_progress_record(payload.get("displayed_production"))
+        payload["history"] = [_enrich_progress_record(h) for h in (payload.get("history") or [])]
+    return payload
 
 
 @app.get("/api/dashboard/progress/active")
 async def get_dashboard_active_progress(include_tests: bool = False):
     from backend.app.services.production_observability import production_observability
-    active = production_observability.get_active_production(include_tests=include_tests)
+    active = _enrich_progress_record(production_observability.get_active_production(include_tests=include_tests))
     return {"has_active": active is not None, "active_production": active}
 
 
 @app.get("/api/dashboard/progress/history")
 async def get_dashboard_progress_history(limit: int = 15, include_tests: bool = False):
     from backend.app.services.production_observability import production_observability
-    return {"productions": production_observability.get_history(limit=limit, include_tests=include_tests)}
+    items = [_enrich_progress_record(h) for h in production_observability.get_history(limit=limit, include_tests=include_tests)]
+    return {"productions": items}
 
 
 @app.get("/api/dashboard/progress/{production_id}")
@@ -347,29 +439,72 @@ async def get_dashboard_production_progress(production_id: str, include_tests: b
     rec = production_observability.get_production(production_id, include_tests=include_tests)
     if not rec:
         raise HTTPException(status_code=404, detail=f"Production progress record '{production_id}' not found")
-    return rec
+    return _enrich_progress_record(rec)
 
 
 @app.get("/api/dashboard/productions/{production_id}/thumbnail")
 async def get_production_thumbnail(production_id: str):
-    import re
-    from backend.app.core.paths import PROJECT_ROOT_STR
-    if not re.match(r"^[A-Za-z0-9_.\-]+$", production_id):
-        raise HTTPException(status_code=400, detail="Invalid production ID")
-    base_dir = os.path.abspath(os.path.join(PROJECT_ROOT_STR, "media", "productions", production_id, "thumbnails"))
-    cand_paths = [
-        os.path.join(base_dir, f"thumb_{production_id}.png"),
-        os.path.join(base_dir, "variants", "cand_3_mystery.png"),
-        os.path.join(base_dir, "variants", "cand_1_shock.png"),
-    ]
-    if os.path.isdir(base_dir):
-        for fn in sorted(os.listdir(base_dir)):
-            if fn.lower().endswith((".png", ".jpg", ".jpeg")):
-                cand_paths.append(os.path.join(base_dir, fn))
-    for p in cand_paths:
-        if os.path.isfile(p) and os.path.abspath(p).startswith(base_dir):
-            return FileResponse(p, media_type="image/png")
+    info = _resolve_production_deliverables(production_id)
+    thumb_p = info.get("thumbnail_path")
+    base_dir = os.path.abspath(os.path.join(info["workspace_abs_dir"], "thumbnails"))
+    if thumb_p and os.path.isfile(thumb_p) and os.path.abspath(thumb_p).startswith(base_dir):
+        media_t = "image/jpeg" if thumb_p.lower().endswith((".jpg", ".jpeg")) else "image/png"
+        return FileResponse(thumb_p, media_type=media_t)
     raise HTTPException(status_code=404, detail="Thumbnail preview not yet generated")
+
+
+@app.get("/api/dashboard/productions/{production_id}/video")
+async def get_production_video(production_id: str):
+    info = _resolve_production_deliverables(production_id)
+    vid_p = info.get("video_path")
+    base_dir = os.path.abspath(os.path.join(info["workspace_abs_dir"], "video"))
+    if vid_p and os.path.isfile(vid_p) and os.path.abspath(vid_p).startswith(base_dir):
+        return FileResponse(vid_p, media_type="video/mp4", filename=os.path.basename(vid_p))
+    raise HTTPException(status_code=404, detail="Final video file not yet generated")
+
+
+@app.get("/api/dashboard/productions/{production_id}/manifest")
+async def get_production_manifest(production_id: str):
+    import json
+    from backend.app.orchestration.production_workspace import compute_file_sha256
+    info = _resolve_production_deliverables(production_id)
+    m_path = info.get("manifest_path")
+    if not m_path or not os.path.isfile(m_path):
+        raise HTTPException(status_code=404, detail=f"Manifest not found for production '{production_id}'")
+    with open(m_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    verified_artifacts = []
+    missing_count = 0
+    mismatch_count = 0
+    for art in manifest.get("artifacts", []):
+        fp = art.get("file_path") or ""
+        exists = bool(fp and os.path.isfile(fp))
+        disk_size = os.path.getsize(fp) if exists else 0
+        sha_ok = True
+        if exists and art.get("sha256"):
+            sha_ok = (compute_file_sha256(fp) == art.get("sha256"))
+        if not exists:
+            missing_count += 1
+        elif not sha_ok:
+            mismatch_count += 1
+        verified_artifacts.append({**art, "disk_exists": exists, "disk_size_bytes": disk_size, "sha256_verified": sha_ok})
+    manifest["storage_verification"] = {
+        "total_artifacts": len(verified_artifacts),
+        "missing_count": missing_count,
+        "sha256_mismatch_count": mismatch_count,
+        "all_verified": (missing_count == 0 and mismatch_count == 0),
+    }
+    manifest["resolved_storage"] = info
+    manifest["artifacts"] = verified_artifacts
+    return manifest
+
+
+@app.get("/api/dashboard/productions/{production_id}/artifacts")
+async def get_production_artifacts(production_id: str):
+    info = _resolve_production_deliverables(production_id)
+    if not info["workspace_exists"]:
+        raise HTTPException(status_code=404, detail=f"Production workspace '{production_id}' not found")
+    return info
 
 
 @app.get("/", include_in_schema=False)

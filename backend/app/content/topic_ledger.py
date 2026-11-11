@@ -16,6 +16,12 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from backend.app.content.validation_topic_history import (
+    ValidationTopicHistory,
+    compute_semantic_similarity,
+    compute_topic_fingerprint,
+)
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = r"D:\Agents\CrazzyDocs\backend\studio.db"
@@ -93,10 +99,28 @@ def parse_iso_datetime(dt_str: str) -> Optional[datetime]:
 class TopicLedger:
     """Manages persistent history and multi-dimensional duplicate detection."""
 
-    def __init__(self, db_path: str = DB_PATH, json_path: str = HISTORY_JSON_PATH):
+    def __init__(
+        self,
+        db_path: str = DB_PATH,
+        json_path: str = HISTORY_JSON_PATH,
+        validation_history: Optional[ValidationTopicHistory] = None,
+        include_validation_history: Optional[bool] = None,
+    ):
         self.db_path = db_path
         self.json_path = json_path
         self._init_storage()
+        if validation_history is not None:
+            self.validation_history = validation_history
+        else:
+            use_val = (
+                include_validation_history
+                if include_validation_history is not None
+                else (
+                    os.path.abspath(db_path) == os.path.abspath(DB_PATH)
+                    and os.path.abspath(json_path) == os.path.abspath(HISTORY_JSON_PATH)
+                )
+            )
+            self.validation_history = ValidationTopicHistory() if use_val else None
 
     def _init_storage(self):
         """Initializes SQLite table and JSON mirror."""
@@ -170,101 +194,135 @@ class TopicLedger:
         candidate_script: Optional[str] = None,
         similarity_threshold: float = 0.45,
         cooldown_days: int = 30,
+        topic_fingerprint: str = "",
+        research_fingerprint: str = "",
+        storyboard_fingerprint: str = "",
+        include_validation_history: bool = True,
     ) -> Tuple[bool, float, str]:
         """
-        Evaluates a candidate topic against historical records across multiple dimensions:
-        1. Exact script fingerprint match.
-        2. Production cooldown window (cooldown_days).
-        3. Key entity set overlap (Jaccard index).
-        4. Title normalized word-level semantic similarity.
+        Evaluates a candidate topic against historical production records AND isolated
+        validation history across multiple dimensions:
+        1. Exact script / topic / research / storyboard fingerprint match.
+        2. Production & validation cooldown window (cooldown_days).
+        3. Key entity set overlap (Jaccard index + stemmed matching).
+        4. Title normalized + semantic/headline-swap similarity.
         5. Hook semantic similarity.
-        
+
         Returns: (is_duplicate: bool, highest_score: float, reason: str)
         """
         records = self.load_all_records()
-        if not records:
-            return False, 0.0, "No previous records; clean topic."
-
         candidate_fp = compute_script_fingerprint(candidate_script) if candidate_script else None
-        cand_ent_set = {e.lower().strip() for e in candidate_entities if e.strip()}
-        cand_norm_title = normalize_topic_title(candidate_title)
-        cand_title_words = set(cand_norm_title.split())
-        cand_hook_words = set(normalize_topic_title(candidate_hook).split())
 
-        stopwords = {
-            "why", "what", "how", "the", "a", "an", "of", "in", "for", "to",
-            "and", "is", "was", "who", "with", "without", "that", "this", "from"
-        }
-        w1_title = cand_title_words - stopwords
-        h1_hook = cand_hook_words - stopwords
+        if records:
+            cand_ent_set = {e.lower().strip() for e in candidate_entities if e.strip()}
+            cand_norm_title = normalize_topic_title(candidate_title)
+            cand_title_words = set(cand_norm_title.split())
+            cand_hook_words = set(normalize_topic_title(candidate_hook).split())
 
-        now = datetime.utcnow()
+            stopwords = {
+                "why", "what", "how", "the", "a", "an", "of", "in", "for", "to",
+                "and", "is", "was", "who", "with", "without", "that", "this", "from"
+            }
+            w1_title = cand_title_words - stopwords
+            h1_hook = cand_hook_words - stopwords
 
-        for rec in records:
-            rec_norm_title = normalize_topic_title(rec.topic_title)
-            rec_title_words = set(rec_norm_title.split())
-            rec_ent_set = {e.lower().strip() for e in rec.key_entities if e.strip()}
+            now = datetime.utcnow()
 
-            # 1. Exact script fingerprint match
-            if candidate_fp and rec.script_fingerprint and rec.script_fingerprint == candidate_fp:
-                return True, 1.0, f"Exact script fingerprint match with existing topic '{rec.topic_title}'"
+            for rec in records:
+                rec_norm_title = normalize_topic_title(rec.topic_title)
+                rec_title_words = set(rec_norm_title.split())
+                rec_ent_set = {e.lower().strip() for e in rec.key_entities if e.strip()}
 
-            # 2. Check Cooldown Window
-            rec_dt = parse_iso_datetime(rec.created_at)
-            is_under_cooldown = False
-            age_days = -1
-            if rec_dt:
-                age_days = (now - rec_dt).days
-                if 0 <= age_days < cooldown_days:
-                    is_under_cooldown = True
+                # 1. Exact script fingerprint match
+                if candidate_fp and rec.script_fingerprint and rec.script_fingerprint == candidate_fp:
+                    return True, 1.0, f"Exact script fingerprint match with existing topic '{rec.topic_title}'"
 
-            # Calculate entity overlap
-            entity_jaccard = 0.0
-            intersect_ent = set()
-            if cand_ent_set and rec_ent_set:
-                intersect_ent = cand_ent_set & rec_ent_set
-                union_ent = cand_ent_set | rec_ent_set
-                entity_jaccard = len(intersect_ent) / len(union_ent) if union_ent else 0.0
+                # 2. Check Cooldown Window
+                rec_dt = parse_iso_datetime(rec.created_at)
+                is_under_cooldown = False
+                age_days = -1
+                if rec_dt:
+                    age_days = (now - rec_dt).days
+                    if 0 <= age_days < cooldown_days:
+                        is_under_cooldown = True
 
-            # Calculate title overlap
-            w2_title = rec_title_words - stopwords
-            title_sim = len(w1_title & w2_title) / len(w1_title | w2_title) if (w1_title | w2_title) else 0.0
+                # Calculate entity overlap
+                entity_jaccard = 0.0
+                intersect_ent = set()
+                if cand_ent_set and rec_ent_set:
+                    intersect_ent = cand_ent_set & rec_ent_set
+                    union_ent = cand_ent_set | rec_ent_set
+                    entity_jaccard = len(intersect_ent) / len(union_ent) if union_ent else 0.0
 
-            # If under cooldown and substantial overlap, reject immediately
-            if is_under_cooldown:
-                if cand_norm_title == rec_norm_title or title_sim >= 0.35 or entity_jaccard >= 0.30:
+                # Calculate title overlap + semantic/headline-swap similarity
+                w2_title = rec_title_words - stopwords
+                title_sim = len(w1_title & w2_title) / len(w1_title | w2_title) if (w1_title | w2_title) else 0.0
+                sem_sim, sem_reason = compute_semantic_similarity(
+                    candidate_title,
+                    candidate_entities,
+                    candidate_hook,
+                    rec.topic_title,
+                    rec.key_entities,
+                    rec.opening_hook,
+                )
+
+                # If under cooldown and substantial overlap, reject immediately
+                if is_under_cooldown:
+                    if cand_norm_title == rec_norm_title or title_sim >= 0.35 or sem_sim >= 0.35 or entity_jaccard >= 0.30:
+                        return (
+                            True,
+                            1.0,
+                            f"Topic '{rec.topic_title}' was produced {age_days} days ago (within {cooldown_days}-day cooldown period)"
+                        )
+
+                # 3. Entity Overlap (Jaccard similarity >= 0.40)
+                if entity_jaccard >= 0.40:
                     return (
                         True,
-                        1.0,
-                        f"Topic '{rec.topic_title}' was produced {age_days} days ago (within {cooldown_days}-day cooldown period)"
+                        round(entity_jaccard, 2),
+                        f"High key-entity collision ({intersect_ent}) with topic '{rec.topic_title}'"
                     )
 
-            # 3. Entity Overlap (Jaccard similarity >= 0.40)
-            if entity_jaccard >= 0.40:
-                return (
-                    True,
-                    round(entity_jaccard, 2),
-                    f"High key-entity collision ({intersect_ent}) with topic '{rec.topic_title}'"
-                )
+                # 4. Title / Semantic headline-swap overlap
+                if sem_sim >= similarity_threshold:
+                    return (
+                        True,
+                        round(sem_sim, 2),
+                        sem_reason or f"Semantic similarity ({sem_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+                    )
+                if title_sim >= similarity_threshold:
+                    return (
+                        True,
+                        round(title_sim, 2),
+                        f"Title similarity ({title_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+                    )
 
-            # 4. Title word-level overlap
-            if title_sim >= similarity_threshold:
-                return (
-                    True,
-                    round(title_sim, 2),
-                    f"Title similarity ({title_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
-                )
+                # 5. Hook overlap
+                rec_hook_words = set(normalize_topic_title(rec.opening_hook).split())
+                h2_hook = rec_hook_words - stopwords
+                hook_sim = len(h1_hook & h2_hook) / len(h1_hook | h2_hook) if (h1_hook | h2_hook) else 0.0
+                if hook_sim >= similarity_threshold:
+                    return (
+                        True,
+                        round(hook_sim, 2),
+                        f"Opening hook similarity ({hook_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+                    )
 
-            # 5. Hook overlap
-            rec_hook_words = set(normalize_topic_title(rec.opening_hook).split())
-            h2_hook = rec_hook_words - stopwords
-            hook_sim = len(h1_hook & h2_hook) / len(h1_hook | h2_hook) if (h1_hook | h2_hook) else 0.0
-            if hook_sim >= similarity_threshold:
-                return (
-                    True,
-                    round(hook_sim, 2),
-                    f"Opening hook similarity ({hook_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
-                )
+        # 6. Isolated Validation Topic History collision & cooldown gate
+        if include_validation_history and self.validation_history is not None:
+            val_dup, val_score, val_reason = self.validation_history.check_collision(
+                candidate_title=candidate_title,
+                candidate_hook=candidate_hook,
+                candidate_entities=candidate_entities,
+                topic_fingerprint=topic_fingerprint or compute_topic_fingerprint(candidate_title, candidate_entities),
+                research_fingerprint=research_fingerprint,
+                script_fingerprint=candidate_fp or "",
+                storyboard_fingerprint=storyboard_fingerprint,
+                cooldown_days=cooldown_days,
+                similarity_threshold=similarity_threshold,
+            )
+            if val_dup:
+                return True, val_score, val_reason
 
         return False, 0.0, "Topic passed all diversity checks."
 

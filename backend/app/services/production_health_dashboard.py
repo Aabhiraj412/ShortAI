@@ -19,6 +19,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import time
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -67,6 +68,8 @@ class ProductionHealthDashboard:
     def __init__(self, workspace_root: str = WORKSPACE, db_path: str = DB_PATH):
         self.workspace = workspace_root
         self.db_path = db_path
+        self._network_cache: Dict[str, Any] = {"value": None, "ts": 0.0}
+        self._task_cache: Dict[str, Any] = {"value": None, "ts": 0.0}
 
     def _get_scheduler_heartbeat(self) -> Dict[str, Any]:
         """Inspects lockfile, heartbeat freshness, and process liveness."""
@@ -119,18 +122,31 @@ class ProductionHealthDashboard:
         except Exception as e:
             return {"state": f"ERROR: {e}", "is_running": False, "pid": None, "last_heartbeat": None, "age_seconds": None}
 
-    def _get_network_status(self) -> str:
-        """Determines connectivity status."""
+    def _get_network_status(self, use_cache: bool = True) -> str:
+        """Determines connectivity status with short TTL caching outside tests."""
+        is_pytest = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        now_m = time.monotonic()
+        if (
+            use_cache
+            and not is_pytest
+            and self._network_cache["value"] is not None
+            and (now_m - self._network_cache["ts"]) < 30.0
+        ):
+            return str(self._network_cache["value"])
+
         try:
             ready, reason, diag = network_connectivity_service.is_environment_ready_for_cycle(timeout=2.0)
             if ready:
-                return "CONNECTED"
+                status = "CONNECTED"
             elif "PROVIDER" in reason:
-                return "DEGRADED"
+                status = "DEGRADED"
             else:
-                return "DISCONNECTED"
+                status = "DISCONNECTED"
         except Exception:
-            return "UNKNOWN"
+            status = "UNKNOWN"
+
+        self._network_cache = {"value": status, "ts": now_m}
+        return status
 
     def get_health_metrics(self, test_now_ist: Optional[datetime] = None) -> ProductionHealthMetrics:
         """Gathers all 11 required operational metrics from real database and runtime state."""
@@ -194,6 +210,16 @@ class ProductionHealthDashboard:
                     recovery_status = "RECOVERING"
             else:
                 pipeline_stage = "IDLE"
+                try:
+                    from backend.app.services.production_observability import production_observability
+                    obs_active = production_observability.get_active_production(include_tests=False)
+                    if obs_active and obs_active.get("overall_status") in ("starting", "running"):
+                        ctx = str(obs_active.get("execution_context") or "VALIDATION").upper()
+                        st_lbl = str(obs_active.get("current_stage") or "running").upper()
+                        pct_val = float(obs_active.get("overall_progress") or 0.0)
+                        pipeline_stage = f"{ctx}: {st_lbl} ({pct_val:.0f}%)"
+                except Exception:
+                    pass
 
             # Last completed production
             last_completed = (
@@ -296,13 +322,185 @@ class ProductionHealthDashboard:
             overall_health=overall_health,
         )
 
-    def get_windows_task_status(self) -> Dict[str, Any]:
-        """Queries Windows scheduled task state for both CrazzyDocs tasks."""
+    def get_windows_task_status(self, use_cache: bool = True) -> Dict[str, Any]:
+        """Queries Windows scheduled task state for both CrazzyDocs tasks (60s TTL cache outside tests)."""
+        is_pytest = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        now_m = time.monotonic()
+        if (
+            use_cache
+            and not is_pytest
+            and self._task_cache["value"] is not None
+            and (now_m - self._task_cache["ts"]) < 60.0
+        ):
+            return dict(self._task_cache["value"])
+
         try:
             from backend.scripts.manage_windows_startup import get_all_tasks_status
-            return get_all_tasks_status()
+            res = get_all_tasks_status()
         except Exception as e:
-            return {"is_registered": False, "opt_in_enabled": False, "error": str(e)}
+            res = {"is_registered": False, "opt_in_enabled": False, "error": str(e)}
+
+        self._task_cache = {"value": res, "ts": now_m}
+        return res
+
+    def get_reconciled_operational_states(
+        self,
+        metrics: Optional[ProductionHealthMetrics] = None,
+        services: Optional[Dict[str, Any]] = None,
+        windows_tasks: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Explicitly separates and reconciles Scheduler, Production Worker, Validation Worker,
+        and Overall Operational State so validation runs never masquerade as IDLE.
+        """
+        m = metrics or self.get_health_metrics()
+        svc = services or self.get_services_status()
+        wt = windows_tasks or self.get_windows_task_status()
+
+        # 1. Scheduler State
+        daemon_running = bool((svc.get("scheduler_daemon") or {}).get("is_running"))
+        sched_task = wt.get("scheduler_task") or {}
+        sched_raw_state = str(sched_task.get("task_state") or sched_task.get("status") or "").strip().lower()
+        if daemon_running:
+            scheduler_state = "RUNNING"
+        elif "disabled" in sched_raw_state:
+            scheduler_state = "DISABLED"
+        elif "ready" in sched_raw_state or "enabled" in sched_raw_state:
+            scheduler_state = "STANDBY"
+        else:
+            scheduler_state = "STOPPED"
+
+        # 2. Production Worker State (strictly PRODUCTION jobs in persistent_jobs or observability store)
+        prod_worker: Dict[str, Any] = {
+            "state": "IDLE",
+            "stage": None,
+            "progress_pct": 0.0,
+            "topic": None,
+            "run_id": None,
+            "updated_at": None,
+        }
+        is_recovery_active = False
+        try:
+            with SessionLocal() as db_session:
+                prod_jobs = [
+                    j for j in db_session.query(JobModel).order_by(JobModel.updated_at.desc()).limit(25).all()
+                    if not (j.id or "").startswith(("test_", "mock_")) and (j.status != "ABORTED_PRE_RESET")
+                ]
+                running_prod = next((j for j in prod_jobs if j.status == "RUNNING"), None)
+                if running_prod:
+                    hb_stale = False
+                    if running_prod.heartbeat_at:
+                        try:
+                            hb_dt = running_prod.heartbeat_at if isinstance(running_prod.heartbeat_at, datetime) else datetime.fromisoformat(str(running_prod.heartbeat_at))
+                            hb_stale = (datetime.utcnow() - hb_dt).total_seconds() > 300
+                        except Exception:
+                            pass
+                    if not hb_stale:
+                        is_recovery_active = ("RECOVER" in (running_prod.id or "")) or (m.recovery_status == "RECOVERING")
+                        prod_worker = {
+                            "state": "STARTING" if (running_prod.progress_pct or 0.0) <= 5.0 else "RUNNING",
+                            "stage": running_prod.current_stage,
+                            "progress_pct": float(running_prod.progress_pct or 0.0),
+                            "topic": running_prod.topic_title,
+                            "run_id": running_prod.id,
+                            "updated_at": running_prod.updated_at.isoformat() if running_prod.updated_at else None,
+                        }
+                elif prod_jobs:
+                    latest_p = prod_jobs[0]
+                    mapped = "COMPLETED" if latest_p.status == "COMPLETED" else (
+                        "FAILED" if latest_p.status in ("FAILED", "BLOCKED_QC", "FAILED_QC") else "IDLE"
+                    )
+                    prod_worker = {
+                        "state": mapped,
+                        "stage": latest_p.current_stage,
+                        "progress_pct": float(latest_p.progress_pct or 0.0),
+                        "topic": latest_p.topic_title,
+                        "run_id": latest_p.id,
+                        "updated_at": latest_p.updated_at.isoformat() if latest_p.updated_at else None,
+                    }
+        except Exception:
+            pass
+
+        # 3. Validation Worker State (strictly VALIDATION records in ProductionObservabilityStore)
+        val_worker: Dict[str, Any] = {
+            "state": "IDLE",
+            "stage": None,
+            "progress_pct": 0.0,
+            "topic": None,
+            "run_id": None,
+            "updated_at": None,
+        }
+        try:
+            from backend.app.services.production_observability import production_observability
+            payload = production_observability.get_dashboard_payload(include_tests=False)
+            candidates: List[Dict[str, Any]] = []
+            if payload.get("active_production"):
+                candidates.append(payload["active_production"])
+            if payload.get("displayed_production"):
+                candidates.append(payload["displayed_production"])
+            candidates.extend(payload.get("history") or [])
+
+            prod_obs = [c for c in candidates if str(c.get("execution_context") or "").upper() == "PRODUCTION"]
+            val_obs = [c for c in candidates if str(c.get("execution_context") or "").upper() == "VALIDATION"]
+
+            # Sync active PRODUCTION observability if DB didn't show running
+            active_prod_obs = next((c for c in prod_obs if c.get("overall_status") in ("starting", "running")), None)
+            if active_prod_obs and prod_worker["state"] not in ("STARTING", "RUNNING"):
+                st_raw = str(active_prod_obs.get("overall_status") or "running").upper()
+                prod_worker = {
+                    "state": "STARTING" if st_raw == "STARTING" else "RUNNING",
+                    "stage": active_prod_obs.get("current_stage"),
+                    "progress_pct": float(active_prod_obs.get("overall_progress") or 0.0),
+                    "topic": active_prod_obs.get("topic"),
+                    "run_id": active_prod_obs.get("production_id"),
+                    "updated_at": active_prod_obs.get("last_updated"),
+                }
+
+            active_val = next((c for c in val_obs if c.get("overall_status") in ("starting", "running")), None)
+            target_val = active_val or (val_obs[0] if val_obs else None)
+            if target_val:
+                raw_st = str(target_val.get("overall_status") or "").lower()
+                if raw_st in ("starting", "running"):
+                    v_state = "RUNNING"
+                elif raw_st == "completed":
+                    v_state = "COMPLETED"
+                elif raw_st == "failed":
+                    v_state = "FAILED"
+                else:
+                    v_state = "IDLE"
+                val_worker = {
+                    "state": v_state,
+                    "stage": target_val.get("current_stage"),
+                    "progress_pct": float(target_val.get("overall_progress") or 0.0),
+                    "topic": target_val.get("topic"),
+                    "run_id": target_val.get("production_id"),
+                    "updated_at": target_val.get("last_updated"),
+                }
+        except Exception:
+            pass
+
+        # 4. Overall Operational State
+        if is_recovery_active:
+            overall_state = "RECOVERY ACTIVE"
+        elif prod_worker["state"] in ("STARTING", "RUNNING"):
+            overall_state = "PRODUCTION ACTIVE"
+        elif val_worker["state"] in ("STARTING", "RUNNING"):
+            overall_state = "VALIDATION ACTIVE"
+        elif m.overall_health == "CRITICAL" or prod_worker["state"] == "FAILED":
+            overall_state = "ERROR"
+        elif m.overall_health == "DEGRADED" or val_worker["state"] == "FAILED":
+            overall_state = "DEGRADED"
+        else:
+            overall_state = "IDLE"
+
+        return {
+            "scheduler_state": scheduler_state,
+            "production_worker_state": prod_worker["state"],
+            "production_worker": prod_worker,
+            "validation_worker_state": val_worker["state"],
+            "validation_worker": val_worker,
+            "overall_operational_state": overall_state,
+        }
 
     def get_services_status(self) -> Dict[str, Any]:
         """Reports execution state of scheduler daemon and dashboard service."""

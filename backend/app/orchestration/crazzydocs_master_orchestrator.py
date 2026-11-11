@@ -355,6 +355,24 @@ class CrazzyDocsMasterOrchestrator:
 
                 logger.info("Selected topic: '%s' (Composite Score: %.2f)", selected_topic.title, selected_topic.composite_score)
 
+                # Immediately record selection in isolated validation history when not in PRODUCTION
+                val_hist = getattr(self.ledger, "validation_history", None)
+                if execution_context != ExecutionContext.PRODUCTION and val_hist is not None:
+                    val_hist.record_selection(
+                        run_id=job_id,
+                        topic_id=getattr(selected_topic, "id", f"topic_{job_id}"),
+                        topic_title=selected_topic.title,
+                        execution_context=execution_context.value,
+                        outcome="selected",
+                        key_entities=getattr(selected_topic, "key_entities", []),
+                        research_fingerprint=getattr(selected_topic, "research_fingerprint", ""),
+                        discovery_source=getattr(selected_topic, "discovery_source", ""),
+                        metadata={
+                            "category": selected_topic.category,
+                            **(getattr(selected_topic, "discovery_metadata", {}) or {}),
+                        },
+                    )
+
                 # -------------------------------------------------------------
                 # Stage 4: Story Development & Hook Formulation
                 # -------------------------------------------------------------
@@ -362,6 +380,14 @@ class CrazzyDocsMasterOrchestrator:
                 hooks = self.topic_engine.generate_five_hooks(selected_topic)
                 best_hook = max(hooks, key=lambda h: h.composite_score)
                 logger.info("Winning hook (%s): '%s'", best_hook.approach, best_hook.hook_text)
+
+                if execution_context != ExecutionContext.PRODUCTION and val_hist is not None:
+                    val_hist.update_outcome(
+                        job_id,
+                        "in_progress",
+                        topic_title=selected_topic.title,
+                        metadata={"opening_hook": best_hook.hook_text},
+                    )
 
                 if persist_to_db:
                     self._update_checkpoint(job_id, "STORY_DEVELOPMENT", 30.0, {
@@ -936,6 +962,24 @@ class CrazzyDocsMasterOrchestrator:
             )
             self.ledger.record_content(rec, allow_override=False, execution_context=execution_context.value)
 
+            # Update isolated ValidationTopicHistory with full completion fingerprints
+            val_hist = getattr(self.ledger, "validation_history", None)
+            if execution_context != ExecutionContext.PRODUCTION and val_hist is not None:
+                val_hist.update_outcome(
+                    job_id,
+                    "completed",
+                    topic_title=selected_topic.title,
+                    research_fingerprint=getattr(selected_topic, "research_fingerprint", ""),
+                    script_fingerprint=script_fp,
+                    storyboard_fingerprint=getattr(prod_ws, "storyboard_fingerprint", ""),
+                    thumbnail_headline=winning_headline,
+                    metadata={
+                        "video_path": final_video_path,
+                        "thumbnail_path": thumb_path,
+                        "manifest_path": prod_ws.manifest_path,
+                    },
+                )
+
             # -------------------------------------------------------------
             # Stage 13: Notification Dispatch
             # -------------------------------------------------------------
@@ -1013,6 +1057,19 @@ class CrazzyDocsMasterOrchestrator:
 
         except Exception as e:
             logger.error("Master pipeline failed at %s: %s", locals().get("obs_stage", "orchestration_pipeline"), e)
+            val_hist = getattr(self.ledger, "validation_history", None)
+            if execution_context != ExecutionContext.PRODUCTION and val_hist is not None:
+                try:
+                    sel_t = locals().get("selected_topic")
+                    if sel_t is not None:
+                        val_hist.update_outcome(
+                            job_id,
+                            "rejected",
+                            topic_title=sel_t.title,
+                            rejection_reason=str(e),
+                        )
+                except Exception:
+                    pass
             production_observability.fail_production(
                 job_id,
                 stage=str(locals().get("obs_stage", "orchestration_pipeline")),
