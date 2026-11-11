@@ -8,14 +8,16 @@ import os
 import shutil
 import pytest
 
-# Enforce TEST execution context for all pytest runs
+# Enforce TEST execution context and TEST_MODE for all pytest runs
 os.environ["CRAZZYDOCS_EXECUTION_CONTEXT"] = "TEST"
+os.environ["CRAZZYDOCS_TEST_MODE"] = "1"
 
 
 @pytest.fixture(autouse=True)
 def ensure_test_context(monkeypatch):
     """Guarantees that CRAZZYDOCS_EXECUTION_CONTEXT is always TEST during every test."""
     monkeypatch.setenv("CRAZZYDOCS_EXECUTION_CONTEXT", "TEST")
+    monkeypatch.setenv("CRAZZYDOCS_TEST_MODE", "1")
     yield
 
 

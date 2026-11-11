@@ -286,8 +286,9 @@ class ScoredTopic:
 class CuriosityTopicEngine:
     """Discovers, scores, and selects high-curiosity video topics across 5 categories."""
 
-    def __init__(self, ledger: Optional[TopicLedger] = None):
+    def __init__(self, ledger: Optional[TopicLedger] = None, cooldown_days: int = 30):
         self.ledger = ledger or TopicLedger()
+        self.cooldown_days = cooldown_days
 
     def score_candidate(self, cand: Dict) -> ScoredTopic:
         """Computes 6-dimensional weighted score with factual gate enforcement."""
@@ -312,11 +313,12 @@ class CuriosityTopicEngine:
         if cand["factual_reliability"] < 7.5:
             composite = 0.0
 
-        # Collision detection via TopicLedger
+        # Collision detection via TopicLedger with cooldown enforcement
         is_dup, dup_score, reason = self.ledger.check_content_collision(
             candidate_title=cand["title"],
             candidate_hook=cand["summary"],
-            candidate_entities=cand.get("key_entities", [])
+            candidate_entities=cand.get("key_entities", []),
+            cooldown_days=self.cooldown_days,
         )
 
         return ScoredTopic(
@@ -435,8 +437,56 @@ class CuriosityTopicEngine:
                     immediate_comprehension=9.5, curiosity=9.6, surprise=9.7, credibility=9.8, visual_potential=9.2, story_connection=9.6
                 )
             ]
+        elif topic.id == "cand_04_mizuho_typo":
+            hooks = [
+                HookCandidate("Shocking Revelation", "A single misplaced keystroke destroyed 340 million dollars in less than three minutes.", 9.9, 9.8, 9.9, 10.0, 9.4, 9.9),
+                HookCandidate("Paradox / Contradiction", "He tried to sell one share for 610,000 yen, and sold 610,000 shares for one yen instead.", 9.8, 9.7, 9.8, 10.0, 9.2, 9.8),
+                HookCandidate("Unexpected Consequence", "The Tokyo Stock Exchange tried to cancel the trade, but their software froze.", 9.5, 9.6, 9.6, 9.9, 9.1, 9.6),
+                HookCandidate("Intriguing Question", "What happens when a stock trader accidentally types the price into the quantity box?", 9.6, 9.5, 9.5, 9.8, 9.0, 9.6),
+                HookCandidate("Extraordinary Human Decision", "Day traders realized the computer glitch instantly and made hundreds of millions.", 9.4, 9.6, 9.7, 9.8, 9.2, 9.5),
+            ]
+        elif topic.id == "cand_05_roy_lightning":
+            hooks = [
+                HookCandidate("Shocking Revelation", "This park ranger was struck by lightning seven times—and survived every single strike.", 9.9, 9.8, 9.9, 9.9, 9.6, 9.9),
+                HookCandidate("Paradox / Contradiction", "The odds of being struck seven times are 1 in 10 to the 28th power, yet storm clouds seemed to follow him.", 9.7, 9.7, 9.8, 9.9, 9.3, 9.8),
+                HookCandidate("Unexpected Consequence", "He began carrying a can of water in his truck because his hair kept catching fire.", 9.8, 9.8, 9.8, 9.8, 9.5, 9.8),
+                HookCandidate("Intriguing Question", "Why was one single human being targeted by lightning across four decades?", 9.5, 9.5, 9.4, 9.9, 9.1, 9.6),
+                HookCandidate("Extraordinary Human Decision", "On the seventh strike, a bear approached him while he was smoldering, and he fought it off with a branch.", 9.6, 9.7, 9.8, 9.8, 9.4, 9.7),
+            ]
+        elif topic.id == "cand_06_midgley_inventions":
+            hooks = [
+                HookCandidate("Shocking Revelation", "One single inventor poisoned the global atmosphere not once, but twice.", 9.9, 9.8, 9.9, 10.0, 9.4, 9.9),
+                HookCandidate("Paradox / Contradiction", "He was celebrated as America's greatest chemist before his inventions began killing millions.", 9.6, 9.6, 9.7, 9.9, 9.1, 9.7),
+                HookCandidate("Unexpected Consequence", "After poisoning the Earth with lead and destroying the ozone layer, his own bed invention strangled him.", 9.8, 9.9, 9.9, 10.0, 9.5, 9.9),
+                HookCandidate("Intriguing Question", "How did one man manage to invent leaded gasoline AND chlorofluorocarbons?", 9.5, 9.4, 9.5, 9.9, 9.0, 9.5),
+                HookCandidate("Extraordinary Human Decision", "To prove leaded fuel was safe, he poured it over his hands and inhaled the fumes for sixty seconds.", 9.7, 9.8, 9.8, 9.9, 9.5, 9.8),
+            ]
+        elif topic.id == "cand_08_dancing_plague":
+            hooks = [
+                HookCandidate("Shocking Revelation", "In 1518, four hundred people danced in the streets for weeks until their hearts gave out.", 9.9, 9.8, 9.9, 9.8, 9.6, 9.9),
+                HookCandidate("Paradox / Contradiction", "Doctors diagnosed hot blood and hired musicians to play, which made the epidemic spread faster.", 9.7, 9.7, 9.8, 9.8, 9.3, 9.8),
+                HookCandidate("Unexpected Consequence", "Dozens died every day from sheer exhaustion, unable to stop their own legs from moving.", 9.8, 9.8, 9.8, 9.8, 9.5, 9.8),
+                HookCandidate("Intriguing Question", "What drove an entire medieval city into an uncontrollable dancing frenzy?", 9.5, 9.5, 9.5, 9.8, 9.1, 9.6),
+                HookCandidate("Extraordinary Human Decision", "The town council built a wooden stage and hired professional dancers to accompany the dying crowd.", 9.6, 9.7, 9.7, 9.8, 9.4, 9.7),
+            ]
+        elif topic.id == "cand_09_mary_celeste":
+            hooks = [
+                HookCandidate("Shocking Revelation", "A seaworthy merchant ship was found drifting across the Atlantic without a soul on board.", 9.9, 9.8, 9.9, 9.9, 9.5, 9.9),
+                HookCandidate("Paradox / Contradiction", "Six months of food, pristine cargo, and personal belongings were intact, but everyone had vanished.", 9.8, 9.7, 9.8, 9.9, 9.3, 9.8),
+                HookCandidate("Unexpected Consequence", "The only lifeboat was missing, tied to a frayed towline trailing in the ocean waves.", 9.6, 9.7, 9.7, 9.8, 9.4, 9.7),
+                HookCandidate("Intriguing Question", "Why would an experienced captain abandon a perfectly safe ship in calm seas?", 9.6, 9.5, 9.5, 9.9, 9.2, 9.6),
+                HookCandidate("Extraordinary Human Decision", "The crew of the Dei Gratia risked their lives to sail the ghost ship into port for salvage.", 9.4, 9.5, 9.6, 9.8, 9.2, 9.5),
+            ]
+        elif topic.id == "cand_10_kola_borehole":
+            hooks = [
+                HookCandidate("Shocking Revelation", "Soviet scientists drilled 40,000 feet into the Earth until the rock turned to boiling mush.", 9.9, 9.8, 9.9, 9.9, 9.5, 9.9),
+                HookCandidate("Paradox / Contradiction", "Seven miles down, they discovered liquid water where classical geology said it was impossible.", 9.7, 9.7, 9.8, 9.9, 9.3, 9.8),
+                HookCandidate("Unexpected Consequence", "At 356 degrees Fahrenheit, the metal drill bits melted and the hole kept swallowing itself.", 9.8, 9.8, 9.8, 9.8, 9.6, 9.8),
+                HookCandidate("Intriguing Question", "What did scientists actually hear when they lowered microphones seven miles below the crust?", 9.6, 9.6, 9.6, 9.8, 9.2, 9.7),
+                HookCandidate("Extraordinary Human Decision", "Drillers kept going for twenty-four years until the collapse of the Soviet Union sealed the hole forever.", 9.5, 9.6, 9.7, 9.9, 9.3, 9.6),
+            ]
         else:
-            # General template
+            # General template using topic title
             hooks = [
                 HookCandidate("Shocking Revelation", f"The unbelievable documented story of {topic.title}.", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
                 HookCandidate("Paradox / Contradiction", f"Why the truth behind {topic.title} contradicts everything.", 9.0, 9.0, 9.0, 9.0, 9.0, 9.0),
@@ -454,10 +504,10 @@ class CuriosityTopicEngine:
         return hooks
 
     def select_best_topic(self) -> Tuple[ScoredTopic, HookCandidate]:
-        """Selects the top-ranked valid topic and its winning hook."""
+        """Selects the top-ranked valid topic and its winning hook. Fails closed on rejection."""
         ranked = self.discover_and_rank_topics()
         if not ranked:
-            raise RuntimeError("No valid topics passed curiosity scoring and collision gates!")
+            raise RuntimeError("No fresh topics available; stopping safely without old-topic fallback.")
 
         winner = ranked[0]
         hooks = self.generate_five_hooks(winner)

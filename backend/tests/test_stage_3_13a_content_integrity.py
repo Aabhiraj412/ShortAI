@@ -143,7 +143,7 @@ def test_integrity_gate_passes_verified_vesna_deliverable(integrity_gate, vesna_
     )
     assert report.is_valid, f"Gate rejected authentic deliverable: {report.rejection_reasons}"
     assert len(report.rejection_reasons) == 0
-    assert len(report.checks) == 11
+    assert len(report.checks) == 13
     assert all(c.passed for c in report.checks)
 
 

@@ -59,13 +59,26 @@ from backend.app.orchestration.crazzydocs_master_orchestrator import master_orch
 def matrix_test_env():
     """Provides clean test environment for Stage 3.18 recovery matrix."""
     test_date = "2026-11-10"
+    synth_dir = os.path.join(WORKSPACE, "media", "productions", "_test_synthetic_recovery")
     test_dirs = [
         r"D:\Agents\CrazzyDocs\media\productions\test_stage_3_18_job",
         r"D:\Agents\CrazzyDocs\media\productions\test_stage_3_18_crash",
+        synth_dir,
     ]
     for d in test_dirs:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
+
+    # Create synthetic test media deliverables for recovery testing
+    os.makedirs(os.path.join(synth_dir, "video"), exist_ok=True)
+    os.makedirs(os.path.join(synth_dir, "thumbnails"), exist_ok=True)
+    os.makedirs(os.path.join(synth_dir, "narration"), exist_ok=True)
+    with open(os.path.join(synth_dir, "video", "showcase_vesna_vulovic_verified.mp4"), "wb") as f:
+        f.write(b"\x00" * 4096)
+    with open(os.path.join(synth_dir, "thumbnails", "thumb_vesna_vulovic_verified.png"), "wb") as f:
+        f.write(b"\x00" * 4096)
+    with open(os.path.join(synth_dir, "narration", "stage_3_13_vesna_voice.mp3"), "wb") as f:
+        f.write(b"\x00" * 4096)
 
     with SessionLocal() as db_session:
         db_session.query(JobModel).filter(JobModel.date_str == test_date).delete()
@@ -130,7 +143,7 @@ def test_scenario_b_mid_production_crash_resumption(matrix_test_env, checkpoint_
     Verifies that pipeline reads checkpoint JSON, resumes deterministically, and completes.
     """
     job_id = f"test_b_crash_{checkpoint_stage.lower()}"
-    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    prod_dir = os.path.join(WORKSPACE, "media", "productions", "_test_synthetic_recovery")
     valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
     valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
     valid_audio = os.path.join(prod_dir, "narration", "stage_3_13_vesna_voice.mp3")
@@ -171,7 +184,7 @@ def test_scenario_5_shutdown_after_rendering_before_qc(matrix_test_env):
     Verifies that upon resumption, the rendered video is preserved, and QC is executed cleanly.
     """
     job_id = "test_scen_5_post_render"
-    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    prod_dir = os.path.join(WORKSPACE, "media", "productions", "_test_synthetic_recovery")
     valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
     valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
 
@@ -206,7 +219,7 @@ def test_scenario_6_shutdown_after_qc_before_publishing(matrix_test_env):
     Verifies that upon resumption, pipeline does not re-render and safely reaches publishing stage.
     """
     job_id = "test_scen_6_post_qc"
-    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
+    prod_dir = os.path.join(WORKSPACE, "media", "productions", "_test_synthetic_recovery")
     valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
     valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
 

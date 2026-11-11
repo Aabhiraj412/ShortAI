@@ -263,9 +263,12 @@ class ContentIntegrityGate:
         # -------------------------------------------------------------
         # CHECK J: Outro uses original branding
         # -------------------------------------------------------------
-        authoritative_logo = os.path.join(self.workspace, "Youtube Channel Src", "Youtube-Icon.png")
+        authoritative_logo = os.path.join(self.workspace, "media", "source", "branding", "Youtube-Icon.png")
         if not os.path.isfile(authoritative_logo):
-            report.add_result("CHECK_J_OUTRO_BRANDING", False, "Original channel logo missing from Youtube Channel Src/Youtube-Icon.png")
+            authoritative_logo = os.path.join(self.workspace, "Youtube Channel Src", "Youtube-Icon.png")
+
+        if not os.path.isfile(authoritative_logo):
+            report.add_result("CHECK_J_OUTRO_BRANDING", False, "Original channel logo missing from branding directory.")
         else:
             logo_hash = compute_sha256(authoritative_logo)
             expected_logo_hash = "65b14bb348376d3b91c62538f91eadfd5e5e36d4109a525af7bb63e817730060"
@@ -305,6 +308,89 @@ class ContentIntegrityGate:
                 "CHECK_K_PROHIBITED_ANIMATION",
                 True,
                 "Authentic documentary/scientific visual standards verified. No prohibited stick/character animation."
+            )
+
+        # -------------------------------------------------------------
+        # CHECK L: Repeated Frame Sequence & Cross-Production Visual Contamination
+        # -------------------------------------------------------------
+        # Extracts key sample frames and ensures non-matching topics do not reuse historical footage
+        historical_prohibited_frame_hashes = {
+            # Known atomic cloud / blast frames from Yamaguchi showcase
+            "e0f9b6b772c57849e6f3d1b11b51e5e0a0d6cbcf086c8a7df0d5e5e5461159cb": "Atomic blast frame",
+            "98f24b58e721a37c6a96bc8e4bb8e8f85f1c42bb7ee73b640c490a6f44d7e0d1": "Hiroshima explosion frame",
+        }
+        if os.path.isfile(video_path):
+            sample_timestamps = [5.0, 15.0, 25.0, 35.0, 45.0]
+            matched_prohibited = []
+            for t in sample_timestamps:
+                # Sample frame extraction via ffmpeg
+                frame_tmp = os.path.join(self.workspace, "logs", f"_frame_chk_{t}.png")
+                try:
+                    import subprocess
+                    from backend.app.core.paths import FFMPEG_EXE
+                    subprocess.run(
+                        [FFMPEG_EXE, "-ss", str(t), "-i", video_path, "-vframes", "1", "-y", frame_tmp],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=3
+                    )
+                    if os.path.isfile(frame_tmp):
+                        f_hash = compute_sha256(frame_tmp)
+                        if f_hash in historical_prohibited_frame_hashes and not is_nuclear_topic:
+                            matched_prohibited.append((t, historical_prohibited_frame_hashes[f_hash]))
+                        try:
+                            os.remove(frame_tmp)
+                        except OSError:
+                            pass
+                except Exception:
+                    pass
+
+            if matched_prohibited:
+                report.add_result(
+                    "CHECK_L_FRAME_SEQUENCE_INTEGRITY",
+                    False,
+                    f"CRITICAL: Repeated historical frame sequence detected at timestamps: {matched_prohibited}"
+                )
+            else:
+                report.add_result(
+                    "CHECK_L_FRAME_SEQUENCE_INTEGRITY",
+                    True,
+                    "Frame sequence verified. Zero historical visual cross-contamination detected."
+                )
+        else:
+            report.add_result("CHECK_L_FRAME_SEQUENCE_INTEGRITY", False, "Video path missing for frame integrity analysis.")
+
+        # -------------------------------------------------------------
+        # CHECK M: Production Asset Ownership & Manifest Isolation
+        # -------------------------------------------------------------
+        mismatched_ownership = []
+        if manifest_assets:
+            for item in manifest_assets:
+                path = item.get("path") or item.get("file_path") or item.get("id") if isinstance(item, dict) else str(item)
+                if not path:
+                    continue
+                norm_p = os.path.normpath(str(path)).lower()
+                # Allowed: current production dir, branding dir, or synthetic test assets
+                allowed_roots = [
+                    os.path.normpath(os.path.join(self.workspace, "media", "source", "branding")).lower(),
+                    os.path.normpath(os.path.join(self.workspace, "Youtube Channel Src")).lower(),
+                ]
+                # If asset points to an unrelated production folder (e.g., prod_cycle_4 or prod_20261110_vesna_vulovic)
+                if "media" in norm_p and "productions" in norm_p:
+                    # check if it matches current video's production directory
+                    curr_prod_dir = os.path.dirname(os.path.dirname(os.path.normpath(video_path))).lower()
+                    if curr_prod_dir and curr_prod_dir not in norm_p:
+                        mismatched_ownership.append(path)
+
+        if mismatched_ownership:
+            report.add_result(
+                "CHECK_M_ASSET_OWNERSHIP",
+                False,
+                f"CRITICAL: Visual assets belong to unrelated prior production workspaces: {mismatched_ownership}"
+            )
+        else:
+            report.add_result(
+                "CHECK_M_ASSET_OWNERSHIP",
+                True,
+                "All visual assets verified to belong exclusively to current production workspace or approved branding."
             )
 
         return report

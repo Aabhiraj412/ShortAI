@@ -36,13 +36,17 @@ from backend.app.core.execution_context import (
     get_current_execution_context,
 )
 from backend.app.content.curiosity_topic_engine import CuriosityTopicEngine, ScoredTopic
-from backend.app.content.topic_ledger import TopicLedger, ContentRecord, compute_script_fingerprint
+from backend.app.content.topic_ledger import (
+    TopicLedger,
+    ContentRecord,
+    compute_script_fingerprint,
+    compute_storyboard_fingerprint,
+)
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
 from backend.app.orchestration.production_workspace import ProductionWorkspace
 from backend.app.services.expressive_tts_engine import ExpressiveTTSEngine, NarrationSegment
 from backend.app.rendering.engines.creative_thumbnail_engine import CreativeThumbnailEngine
-from backend.app.rendering.engines.vesna_fast_renderer import VesnaFastRenderer, BEAT_CONFIGS as VESNA_BEAT_CONFIGS
-from backend.app.rendering.engines.yamaguchi_fast_renderer import BEAT_CONFIGS as YAMAGUCHI_BEAT_CONFIGS
+from backend.app.rendering.engines.vesna_fast_renderer import VisualBeatConfig
 from backend.app.services.notification_service import NotificationManager, notification_service
 from backend.app.services.youtube_publishing_engine import (
     YouTubePublishingEngine,
@@ -88,6 +92,96 @@ class CrazzyDocsMasterOrchestrator:
         self.notifier = notifier or notification_service
         self.publishing_engine = publishing_engine or youtube_publishing_engine
         self.integrity_gate = integrity_gate or ContentIntegrityGate(workspace_root=WORKSPACE)
+
+    def _synthesize_topic_script(self, topic: ScoredTopic, hook_text: str) -> str:
+        """Dynamically generates a 50-58 second factual script for the topic."""
+        s1 = hook_text.strip()
+        if not s1.endswith((".", "!", "?")):
+            s1 += "."
+
+        summary = topic.summary.strip()
+        entities = ", ".join(topic.key_entities[:4])
+        closing = "Follow CrazzyDocs for more unbelievable true stories."
+
+        words = (s1 + " " + summary + " " + closing).split()
+        if len(words) < 115:
+            context = f"Documented historical records regarding {entities} demonstrate how extraordinary circumstances unfolded."
+            script = f"{s1} {context} {summary} {closing}"
+        else:
+            script = f"{s1} {summary} {closing}"
+        return script
+
+    def _build_topic_visual_beats(self, topic: ScoredTopic, hook: str, duration: float = 54.0) -> List[VisualBeatConfig]:
+        """Dynamically builds 5 distinct visual beats corresponding to 5 narrative stages."""
+        tag = (topic.category[:15]).upper()
+        title_short = topic.title[:45]
+        summary_words = topic.summary.split()
+
+        content_dur = max(48.0, duration - 2.0)
+        t1 = round(content_dur * 0.10, 2)
+        t2 = round(content_dur * 0.30, 2)
+        t3 = round(content_dur * 0.65, 2)
+        t4 = round(content_dur * 0.88, 2)
+        t5 = round(content_dur, 2)
+
+        beats = [
+            VisualBeatConfig(
+                id=f"{topic.id}_beat_1",
+                image_filename="",
+                start_sec=0.0,
+                end_sec=t1,
+                top_tag=tag,
+                editorial_text=hook[:60],
+                accent_color=(255, 75, 75),
+                motion_type="zoom_in",
+                sub_label=title_short,
+            ),
+            VisualBeatConfig(
+                id=f"{topic.id}_beat_2",
+                image_filename="",
+                start_sec=t1,
+                end_sec=t2,
+                top_tag=tag,
+                editorial_text=" ".join(summary_words[:8]),
+                accent_color=(75, 180, 255),
+                motion_type="pan_right",
+                sub_label="HISTORICAL CONTEXT",
+            ),
+            VisualBeatConfig(
+                id=f"{topic.id}_beat_3",
+                image_filename="",
+                start_sec=t2,
+                end_sec=t3,
+                top_tag=tag,
+                editorial_text=" ".join(summary_words[8:18]) if len(summary_words) > 8 else "THE CRITICAL TURNING POINT",
+                accent_color=(255, 200, 50),
+                motion_type="zoom_out",
+                sub_label="THE EVENT",
+            ),
+            VisualBeatConfig(
+                id=f"{topic.id}_beat_4",
+                image_filename="",
+                start_sec=t3,
+                end_sec=t4,
+                top_tag=tag,
+                editorial_text=" ".join(summary_words[18:28]) if len(summary_words) > 18 else "THE UNEXPECTED OUTCOME",
+                accent_color=(100, 255, 150),
+                motion_type="pan_left",
+                sub_label="AFTERMATH & EVIDENCE",
+            ),
+            VisualBeatConfig(
+                id=f"{topic.id}_beat_5",
+                image_filename="",
+                start_sec=t4,
+                end_sec=t5,
+                top_tag=tag,
+                editorial_text="SUBSCRIBE TO CRAZZYDOCS",
+                accent_color=(255, 255, 255),
+                motion_type="zoom_in",
+                sub_label="UNBELIEVABLE TRUE STORIES",
+            ),
+        ]
+        return beats
 
     def _update_checkpoint(self, job_id: str, stage: str, progress: float, stage_data: Dict):
         """Persists incremental stage checkpoint to SQLite JobModel."""
@@ -239,81 +333,25 @@ class CrazzyDocsMasterOrchestrator:
                 selected_topic.category, selected_topic.title, selected_topic.summary
             )
 
-            # Topic-aware asset, script and visual mapping
-            is_vesna = (
-                "vesna" in selected_topic.title.lower()
-                or "flight attendant" in selected_topic.title.lower()
-                or "33,000" in selected_topic.title.lower()
-                or "33000" in selected_topic.title.lower()
-                or getattr(selected_topic, "id", "") == "cand_03_vesna_fall"
-            )
+            # Topic-aware dynamic script and storyboard generation
+            narration_text = self._synthesize_topic_script(selected_topic, best_hook.hook_text)
+            dur = max(50.5, min(58.5, round(len(narration_text.split()) / 2.3, 2)))
+            script_fp = compute_script_fingerprint(narration_text)
 
-            if is_vesna:
-                voice_path = os.path.join(prod_ws.narration_dir, "stage_3_13_vesna_voice.mp3")
-                cand_v = os.path.join(WORKSPACE, "media", "productions", "prod_20261110_vesna_vulovic", "narration", "stage_3_13_vesna_voice.mp3")
-                if not os.path.exists(voice_path):
-                    if os.path.isfile(cand_v):
-                        shutil.copy2(cand_v, voice_path)
-                    else:
-                        subprocess.run([
-                            FFMPEG_EXE, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "54.0",
-                            "-c:a", "libmp3lame", "-b:a", "192k", voice_path
-                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                narration_text = (
-                    "She fell 33,000 feet without a parachute—and walked out of the hospital alive. "
-                    "In 1972, flight attendant Vesna Vulović boarded JAT Flight 367 over Czechoslovakia. "
-                    "At 33,000 feet, a briefcase bomb detonated, tearing the airliner apart in mid-air. "
-                    "While passengers were sucked into the sky, Vesna was trapped in the tail, pinned by a food cart. "
-                    "Plummeting at terminal velocity, the wreckage slammed into a snowy mountain, cushioned by dense pines. "
-                    "A wartime medic, Bruno Honke, found her in the freezing forest and kept her alive until help arrived. "
-                    "Despite a fractured skull and crushed spine, she miraculously learned to walk again. "
-                    "Guinness officially confirmed her world record: the highest fall survived without a parachute."
-                )
-                visual_beats = VESNA_BEAT_CONFIGS
-                source_video = os.path.join(WORKSPACE, "media", "productions", "prod_20261110_vesna_vulovic", "video", "showcase_vesna_vulovic_verified.mp4")
-                vesna_img_dir = os.path.join(WORKSPACE, "media", "images", "vesna_vulovic")
-                thumb_assets = [
-                    os.path.join(vesna_img_dir, f)
-                    for f in os.listdir(vesna_img_dir)
-                    if f.lower().endswith((".jpg", ".png"))
-                ] if os.path.isdir(vesna_img_dir) else []
-                manifest_path = os.path.join(vesna_img_dir, "attribution_manifest.json")
-                manifest_assets = []
-                if os.path.isfile(manifest_path):
-                    try:
-                        with open(manifest_path, "r", encoding="utf-8") as f:
-                            raw = json.load(f)
-                            manifest_assets = raw if isinstance(raw, list) else raw.get("assets", [])
-                    except Exception as me:
-                        logger.warning("Could not read attribution manifest: %s", me)
-                dur = 54.01
-            else:
-                voice_path = os.path.join(prod_ws.narration_dir, "stage_3_4_yamaguchi_voice.mp3")
-                cand_v = os.path.join(WORKSPACE, "media", "audio", "stage_3_4_yamaguchi_voice.mp3")
-                if not os.path.exists(voice_path):
-                    if os.path.isfile(cand_v):
-                        shutil.copy2(cand_v, voice_path)
-                    else:
-                        subprocess.run([
-                            FFMPEG_EXE, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "56.0",
-                            "-c:a", "libmp3lame", "-b:a", "192k", voice_path
-                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                narration_text = (
-                    "In 1945, Tsutomu Yamaguchi survived the atomic blast in Hiroshima. "
-                    "Three days later, he returned to Nagasaki just as the second bomb detonated. "
-                    "He lived to be 93."
-                )
-                visual_beats = YAMAGUCHI_BEAT_CONFIGS
-                source_video = os.path.join(WORKSPACE, "media", "productions", "prod_cycle_4_20261110_1800", "video", "showcase_cycle_4_20261110_1800.mp4")
-                if not os.path.exists(source_video):
-                    source_video = os.path.join(VIDEO_DIR, "showcase_stage_3_4_tsutomu_yamaguchi.mp4")
-                yamaguchi_img_dir = os.path.join(WORKSPACE, "media", "images", "yamaguchi")
-                thumb_assets = [
-                    os.path.join(yamaguchi_img_dir, "Atomic_cloud_over_Hiroshima_jpg.jpg"),
-                    os.path.join(yamaguchi_img_dir, "Nagasakibomb_jpg.jpg"),
-                ] if os.path.isdir(yamaguchi_img_dir) else []
-                manifest_assets = []
-                dur = 56.67
+            visual_beats = self._build_topic_visual_beats(selected_topic, best_hook.hook_text, dur)
+            storyboard_fp = compute_storyboard_fingerprint(visual_beats)
+            prod_ws.script_fingerprint = script_fp
+            prod_ws.storyboard_fingerprint = storyboard_fp
+
+            voice_path = os.path.join(prod_ws.narration_dir, f"voiceover_{job_id}.mp3")
+            if not os.path.exists(voice_path):
+                subprocess.run([
+                    FFMPEG_EXE, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", str(dur),
+                    "-c:a", "libmp3lame", "-b:a", "192k", voice_path
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+            thumb_assets = []
+            manifest_assets = []
 
             # -------------------------------------------------------------
             # Stage 8: Expressive Narration Synthesis
@@ -334,30 +372,12 @@ class CrazzyDocsMasterOrchestrator:
                 final_video_path = existing_cp["video_path"]
                 logger.info("[CHECKPOINT RECOVERY] Reusing verified video render: %s", final_video_path)
             else:
-                logger.info("[STAGE 9] Rendering and compositing 1080x1920 video to canonical workspace...")
-                if is_vesna:
-                    if os.path.isfile(source_video):
-                        logger.info("Reusing verified Vesna Vulovic deliverable: %s", source_video)
-                        shutil.copy2(source_video, final_video_path)
-                    else:
-                        logger.info("Generating video with VesnaFastRenderer & FFmpeg pipe...")
-                        try:
-                            renderer = VesnaFastRenderer()
-                            renderer.render_video_to_mp4(audio_path=voice_path, output_mp4=final_video_path)
-                        except Exception:
-                            subprocess.run([
-                                FFMPEG_EXE, "-y", "-f", "lavfi", "-i", f"color=c=0x111622:s=1080x1920:d={dur}",
-                                "-i", voice_path, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest",
-                                final_video_path
-                            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                elif os.path.isfile(source_video):
-                    shutil.copy2(source_video, final_video_path)
-                else:
-                    subprocess.run([
-                        FFMPEG_EXE, "-y", "-f", "lavfi", "-i", f"color=c=0x111622:s=1080x1920:d={dur}",
-                        "-i", voice_path, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest",
-                        final_video_path
-                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                logger.info("[STAGE 9] Rendering fresh 1080x1920 video with dynamic slate and typography...")
+                subprocess.run([
+                    FFMPEG_EXE, "-y", "-f", "lavfi", "-i", f"color=c=0x111622:s=1080x1920:d={dur}",
+                    "-i", voice_path, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest",
+                    final_video_path
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 self._update_checkpoint(job_id, "RENDERING", 75.0, {"video_path": final_video_path})
             prod_ws.register_artifact("STAGE_09_RENDERING", "video", final_video_path, copy_into_workspace=False)
 
@@ -370,11 +390,11 @@ class CrazzyDocsMasterOrchestrator:
 
             if prod_ws.has_verified_deliverable():
                 logger.info("[PRODUCTION WORKSPACE IDEMPOTENCY] Reusing canonical thumbnail: %s", thumb_path)
-                winning_headline = existing_cp.get("winning_thumbnail", "SURVIVED 33,000 FT" if is_vesna else "SURVIVED BOTH BOMBS")
+                winning_headline = existing_cp.get("winning_thumbnail", selected_topic.title[:25].upper())
             elif existing_cp.get("thumbnail_path") and os.path.isfile(existing_cp["thumbnail_path"]) and os.path.getsize(existing_cp["thumbnail_path"]) > 1024:
                 thumb_path = existing_cp["thumbnail_path"]
                 logger.info("[CHECKPOINT RECOVERY] Reusing verified thumbnail: %s", thumb_path)
-                winning_headline = existing_cp.get("winning_thumbnail", "SURVIVED 33,000 FT" if is_vesna else "SURVIVED BOTH BOMBS")
+                winning_headline = existing_cp.get("winning_thumbnail", selected_topic.title[:25].upper())
             else:
                 logger.info("[STAGE 10] Generating multi-candidate thumbnails in production workspace...")
                 winning_thumb, thumb_rep = self.thumb_engine.select_and_render_best_thumbnail(
@@ -491,13 +511,13 @@ class CrazzyDocsMasterOrchestrator:
                 opening_hook=best_hook.hook_text,
                 main_subject=selected_topic.title,
                 key_entities=selected_topic.key_entities,
-                script_fingerprint=compute_script_fingerprint(selected_topic.summary),
+                script_fingerprint=script_fp,
                 category=selected_topic.category,
                 visual_style="historical_documentary",
                 created_at=datetime.utcnow().isoformat() + "Z",
                 publication_status="produced",
             )
-            self.ledger.record_content(rec, allow_override=True)
+            self.ledger.record_content(rec, allow_override=False, execution_context=str(execution_context))
 
             # -------------------------------------------------------------
             # Stage 13: Notification Dispatch

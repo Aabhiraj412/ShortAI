@@ -89,6 +89,8 @@ class ProductionWorkspace:
 
         self.manifest_path = os.path.join(self.prod_dir, "production_manifest.json")
         self.artifacts: List[ProductionArtifact] = []
+        self.script_fingerprint: str = ""
+        self.storyboard_fingerprint: str = ""
 
     def get_canonical_video_path(self, filename: Optional[str] = None) -> str:
         """Returns the authoritative final video destination for this production."""
@@ -258,6 +260,8 @@ class ProductionWorkspace:
             "topic_id": self.topic_id,
             "topic_title": self.topic_title,
             "category": self.category,
+            "script_fingerprint": self.script_fingerprint,
+            "storyboard_fingerprint": self.storyboard_fingerprint,
             "workspace_dir": os.path.relpath(self.prod_dir, self.workspace_root).replace("\\", "/"),
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "artifacts_count": len(self.artifacts),

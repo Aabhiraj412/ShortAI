@@ -3,6 +3,7 @@ Persistent Topic & Content Ledger for CrazzyDocs YouTube Shorts Studio.
 
 Tracks all generated topics, hooks, scripts, key entities, and fingerprints
 to enforce strict content diversity and prevent repetitive stories across runs.
+Includes title normalization, configurable cooldown, and multi-dimensional collision checks.
 """
 
 from dataclasses import asdict, dataclass, field
@@ -13,7 +14,7 @@ import logging
 import os
 import re
 import sqlite3
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,55 @@ class ContentRecord:
         return asdict(self)
 
 
+def normalize_topic_title(title: str) -> str:
+    """Normalizes a topic title for resilient deduplication and collision detection."""
+    if not title:
+        return ""
+    # Strip punctuation without introducing extra spaces so numbers stay intact (e.g. 33,000 -> 33000)
+    clean = re.sub(r"[,.'\"!?:;()\-–—]", "", title.lower())
+    clean = re.sub(r"[^\w\s]", " ", clean)
+    return " ".join(clean.split())
+
+
 def compute_script_fingerprint(script_text: str) -> str:
     """Computes a deterministic SHA-256 hash of normalized script text."""
+    if not script_text:
+        return ""
     clean = re.sub(r"\[.*?\]", "", script_text).lower()
     clean = re.sub(r"[^\w\s]", "", clean)
     normalized = " ".join(clean.split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def compute_storyboard_fingerprint(beats: List[Any]) -> str:
+    """Computes a deterministic SHA-256 hash of storyboard beat configurations."""
+    if not beats:
+        return ""
+    beat_summaries = []
+    for beat in beats:
+        label = getattr(beat, "label", getattr(beat, "stage", getattr(beat, "id", "")))
+        style = getattr(beat, "style", getattr(beat, "visual_style", getattr(beat, "motion_type", "")))
+        text = getattr(
+            beat,
+            "primary_text",
+            getattr(beat, "editorial_text", getattr(beat, "on_screen_text", getattr(beat, "spoken_text", "")))
+        )
+        sub = getattr(beat, "sub_label", getattr(beat, "top_tag", ""))
+        img = getattr(beat, "image_filename", "")
+        beat_summaries.append(f"{label}|{style}|{text}|{sub}|{img}")
+    raw = "||".join(beat_summaries)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def parse_iso_datetime(dt_str: str) -> Optional[datetime]:
+    """Safely parses ISO datetime string."""
+    if not dt_str:
+        return None
+    try:
+        clean_str = dt_str.rstrip("Z")
+        return datetime.fromisoformat(clean_str)
+    except Exception:
+        return None
 
 
 class TopicLedger:
@@ -124,14 +168,16 @@ class TopicLedger:
         candidate_hook: str,
         candidate_entities: List[str],
         candidate_script: Optional[str] = None,
-        similarity_threshold: float = 0.55,
+        similarity_threshold: float = 0.45,
+        cooldown_days: int = 30,
     ) -> Tuple[bool, float, str]:
         """
         Evaluates a candidate topic against historical records across multiple dimensions:
-        1. Exact script fingerprint match (100% duplicate).
-        2. Title semantic similarity.
-        3. Hook semantic similarity.
-        4. Key entity set overlap (Jaccard index).
+        1. Exact script fingerprint match.
+        2. Production cooldown window (cooldown_days).
+        3. Key entity set overlap (Jaccard index).
+        4. Title normalized word-level semantic similarity.
+        5. Hook semantic similarity.
         
         Returns: (is_duplicate: bool, highest_score: float, reason: str)
         """
@@ -141,52 +187,108 @@ class TopicLedger:
 
         candidate_fp = compute_script_fingerprint(candidate_script) if candidate_script else None
         cand_ent_set = {e.lower().strip() for e in candidate_entities if e.strip()}
-        cand_title_words = set(re.findall(r"\w+", candidate_title.lower()))
-        cand_hook_words = set(re.findall(r"\w+", candidate_hook.lower()))
+        cand_norm_title = normalize_topic_title(candidate_title)
+        cand_title_words = set(cand_norm_title.split())
+        cand_hook_words = set(normalize_topic_title(candidate_hook).split())
+
+        stopwords = {
+            "why", "what", "how", "the", "a", "an", "of", "in", "for", "to",
+            "and", "is", "was", "who", "with", "without", "that", "this", "from"
+        }
+        w1_title = cand_title_words - stopwords
+        h1_hook = cand_hook_words - stopwords
+
+        now = datetime.utcnow()
 
         for rec in records:
+            rec_norm_title = normalize_topic_title(rec.topic_title)
+            rec_title_words = set(rec_norm_title.split())
+            rec_ent_set = {e.lower().strip() for e in rec.key_entities if e.strip()}
+
             # 1. Exact script fingerprint match
-            if candidate_fp and rec.script_fingerprint == candidate_fp:
+            if candidate_fp and rec.script_fingerprint and rec.script_fingerprint == candidate_fp:
                 return True, 1.0, f"Exact script fingerprint match with existing topic '{rec.topic_title}'"
 
-            # 2. Entity Overlap (Jaccard similarity)
-            rec_ent_set = {e.lower().strip() for e in rec.key_entities}
+            # 2. Check Cooldown Window
+            rec_dt = parse_iso_datetime(rec.created_at)
+            is_under_cooldown = False
+            age_days = -1
+            if rec_dt:
+                age_days = (now - rec_dt).days
+                if 0 <= age_days < cooldown_days:
+                    is_under_cooldown = True
+
+            # Calculate entity overlap
+            entity_jaccard = 0.0
+            intersect_ent = set()
             if cand_ent_set and rec_ent_set:
-                intersect = cand_ent_set & rec_ent_set
-                union = cand_ent_set | rec_ent_set
-                entity_jaccard = len(intersect) / len(union) if union else 0.0
-                if entity_jaccard >= 0.50:
-                    return True, round(entity_jaccard, 2), f"High key-entity collision ({intersect}) with topic '{rec.topic_title}'"
+                intersect_ent = cand_ent_set & rec_ent_set
+                union_ent = cand_ent_set | rec_ent_set
+                entity_jaccard = len(intersect_ent) / len(union_ent) if union_ent else 0.0
 
-            # 3. Title word-level overlap
-            rec_title_words = set(re.findall(r"\w+", rec.topic_title.lower()))
-            if cand_title_words and rec_title_words:
-                stopwords = {"why", "what", "how", "the", "a", "an", "of", "in", "for", "to", "and", "is"}
-                w1 = cand_title_words - stopwords
-                w2 = rec_title_words - stopwords
-                title_sim = len(w1 & w2) / len(w1 | w2) if (w1 | w2) else 0.0
-                if title_sim >= similarity_threshold:
-                    return True, round(title_sim, 2), f"Title similarity ({title_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+            # Calculate title overlap
+            w2_title = rec_title_words - stopwords
+            title_sim = len(w1_title & w2_title) / len(w1_title | w2_title) if (w1_title | w2_title) else 0.0
 
-            # 4. Hook overlap
-            rec_hook_words = set(re.findall(r"\w+", rec.opening_hook.lower()))
-            if cand_hook_words and rec_hook_words:
-                stopwords = {"the", "a", "an", "of", "in", "for", "to", "and", "is", "was"}
-                h1 = cand_hook_words - stopwords
-                h2 = rec_hook_words - stopwords
-                hook_sim = len(h1 & h2) / len(h1 | h2) if (h1 | h2) else 0.0
-                if hook_sim >= similarity_threshold:
-                    return True, round(hook_sim, 2), f"Opening hook similarity ({hook_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+            # If under cooldown and substantial overlap, reject immediately
+            if is_under_cooldown:
+                if cand_norm_title == rec_norm_title or title_sim >= 0.35 or entity_jaccard >= 0.30:
+                    return (
+                        True,
+                        1.0,
+                        f"Topic '{rec.topic_title}' was produced {age_days} days ago (within {cooldown_days}-day cooldown period)"
+                    )
+
+            # 3. Entity Overlap (Jaccard similarity >= 0.40)
+            if entity_jaccard >= 0.40:
+                return (
+                    True,
+                    round(entity_jaccard, 2),
+                    f"High key-entity collision ({intersect_ent}) with topic '{rec.topic_title}'"
+                )
+
+            # 4. Title word-level overlap
+            if title_sim >= similarity_threshold:
+                return (
+                    True,
+                    round(title_sim, 2),
+                    f"Title similarity ({title_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+                )
+
+            # 5. Hook overlap
+            rec_hook_words = set(normalize_topic_title(rec.opening_hook).split())
+            h2_hook = rec_hook_words - stopwords
+            hook_sim = len(h1_hook & h2_hook) / len(h1_hook | h2_hook) if (h1_hook | h2_hook) else 0.0
+            if hook_sim >= similarity_threshold:
+                return (
+                    True,
+                    round(hook_sim, 2),
+                    f"Opening hook similarity ({hook_sim:.2f}) exceeds threshold against '{rec.topic_title}'"
+                )
 
         return False, 0.0, "Topic passed all diversity checks."
 
-    def record_content(self, record: ContentRecord, allow_override: bool = False) -> bool:
-        """Saves a verified content record to both SQLite and the JSON mirror."""
+    def record_content(
+        self,
+        record: ContentRecord,
+        allow_override: bool = False,
+        execution_context: str = "production"
+    ) -> bool:
+        """Saves a verified content record to both SQLite and the JSON mirror.
+        Strictly prevents tests from polluting the production database (DB_PATH).
+        """
+        is_ctx_test = "test" in str(execution_context).lower()
+        is_env_test = os.environ.get("CRAZZYDOCS_TEST_MODE") == "1"
+        if not allow_override and (is_ctx_test or is_env_test):
+            logger.info("Test execution context; skipping write to persistent content_ledger.")
+            return True
+
         if not allow_override:
             is_dup, score, reason = self.check_content_collision(
                 record.topic_title,
                 record.opening_hook,
                 record.key_entities,
+                record.script_fingerprint,
             )
             if is_dup:
                 logger.warning("Rejecting duplicate content (%s, score=%.2f): %s", record.topic_title, score, reason)
