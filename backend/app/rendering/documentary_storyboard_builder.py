@@ -19,6 +19,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from backend.app.content.creative_production_policy import (
+    CategorySpec,
+    get_creative_production_policy,
+)
 from backend.app.content.curiosity_topic_engine import ScoredTopic
 from backend.app.content.visual_diversity_policy import (
     MAX_IMAGE_REUSE,
@@ -86,16 +90,24 @@ def _wrap_text_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeT
     return lines
 
 
-def compose_structured_script(topic: ScoredTopic, hook_text: str) -> Dict[str, Any]:
+def compose_structured_script(
+    topic: ScoredTopic,
+    hook_text: str,
+    execution_context: ExecutionContext = ExecutionContext.VALIDATION,
+) -> Dict[str, Any]:
     """
-    Composes a tight, factual 5-section documentary narration script (~115-138 words, ~50-56s spoken)
-    strictly grounded in the topic's verified research extract and factual bullets.
+    Composes a tight, factual 5-section documentary narration script (~104-124 words, ~48-56s spoken)
+    strictly grounded in the topic's verified research extract and shaped by its category's
+    narrative arc from the shared permanent CreativeProductionPolicy.
     """
+    policy = get_creative_production_policy(execution_context)
+    cat_spec: CategorySpec = policy.get_category(getattr(topic, "category", "science"))
+    arc = cat_spec.narrative_arc or ["question", "mechanism", "evidence", "revelation"]
+
     s1 = (hook_text or "").strip()
     if s1 and not s1.endswith((".", "!", "?")):
         s1 += "."
 
-    # Gather verified non-duplicate factual sentences from extended_extract + factual_bullets + summary
     raw_pool: List[str] = []
     if getattr(topic, "factual_bullets", None):
         raw_pool.extend(topic.factual_bullets)
@@ -116,13 +128,11 @@ def compose_structured_script(topic: ScoredTopic, hook_text: str) -> Dict[str, A
         if wc < 6 or wc > 38:
             continue
         norm = re.sub(r"\W+", " ", clean.lower()).strip()
-        # Skip near-identical repetitions
         if norm in seen_norms or any(norm[:40] == sn[:40] for sn in seen_norms):
             continue
         seen_norms.add(norm)
         facts.append(clean)
 
-    # Ensure topic title words appear cleanly in the narration without repeating previously used sentences
     title_anchor = topic.title.split("(")[0].strip()
 
     def _pop_next_fact(used: set, fallback: str) -> str:
@@ -134,33 +144,53 @@ def compose_structured_script(topic: ScoredTopic, hook_text: str) -> Dict[str, A
         return fallback
 
     used_norms = {s1_norm}
-    sec_hook = s1 or _pop_next_fact(used_norms, f"Behind {title_anchor} lies a remarkable documented record.")
+    sec_hook = s1 or _pop_next_fact(used_norms, f"Why does {title_anchor} still astonish experts today?")
     f1 = _pop_next_fact(used_norms, topic.summary)
-    sec_context = f1 if title_anchor.lower() in f"{sec_hook} {f1}".lower() else f"The story of {title_anchor} starts here: {f1}"
-    sec_escalation = _pop_next_fact(used_norms, f"Key measurements around {title_anchor} revealed how quickly events unfolded.")
-    sec_revelation = _pop_next_fact(used_norms, f"Archival findings later showed the lasting scientific and historical impact of {title_anchor}.")
+    sec_context = (
+        f1
+        if title_anchor.lower() in f"{sec_hook} {f1}".lower()
+        else f"At the core of {title_anchor} is this finding: {f1}"
+    )
+
+    arc_step2 = arc[1].replace("_", " ") if len(arc) > 1 else "mechanism"
+    arc_step3 = arc[2].replace("_", " ") if len(arc) > 2 else "evidence"
+    sec_escalation = _pop_next_fact(
+        used_norms,
+        f"Examining the {arc_step2} behind {title_anchor} uncovered an unexpected structural dynamic.",
+    )
+    sec_revelation = _pop_next_fact(
+        used_norms,
+        f"Verified {arc_step3} confirmed the real impact of {title_anchor}.",
+    )
     extra_fact = _pop_next_fact(used_norms, "")
 
-    closing = f"And that is how {title_anchor} earned its place in verified history. Subscribe to CrazzyDocs for more true documentary stories."
+    closing = f"And that is how {title_anchor} reshaped our understanding. Subscribe to CrazzyDocs for more real-world stories."
     sec_payoff = f"{extra_fact} {closing}".strip()
 
+    stage_tags = [
+        arc[0].upper()[:16] if len(arc) > 0 else "HOOK",
+        "CONTEXT",
+        arc[1].upper()[:16] if len(arc) > 1 else "ESCALATION",
+        arc[2].upper()[:16] if len(arc) > 2 else "REVELATION",
+        arc[3].upper()[:16] if len(arc) > 3 else "PAYOFF",
+    ]
     sections = [
-        {"id": "seg_01_hook", "stage": "HOOK", "emotion": "hook", "text": sec_hook},
-        {"id": "seg_02_context", "stage": "CONTEXT", "emotion": "curiosity", "text": sec_context},
-        {"id": "seg_03_escalation", "stage": "ESCALATION", "emotion": "tension", "text": sec_escalation},
-        {"id": "seg_04_revelation", "stage": "REVELATION", "emotion": "revelation", "text": sec_revelation},
-        {"id": "seg_05_payoff", "stage": "PAYOFF", "emotion": "closing", "text": sec_payoff},
+        {"id": "seg_01_hook", "stage": "HOOK", "arc_phase": stage_tags[0], "emotion": "hook", "text": sec_hook},
+        {"id": "seg_02_context", "stage": "CONTEXT", "arc_phase": stage_tags[1], "emotion": "curiosity", "text": sec_context},
+        {"id": "seg_03_escalation", "stage": "ESCALATION", "arc_phase": stage_tags[2], "emotion": "tension", "text": sec_escalation},
+        {"id": "seg_04_revelation", "stage": "REVELATION", "arc_phase": stage_tags[3], "emotion": "revelation", "text": sec_revelation},
+        {"id": "seg_05_payoff", "stage": "PAYOFF", "arc_phase": stage_tags[4], "emotion": "closing", "text": sec_payoff},
     ]
 
-    # Trim gently if total word count > 142 so spoken audio + 2.0s outro never crosses 60.0s
+    # Trim gently if total word count > 124 so spoken audio + 2.0s outro never crosses 58.0s
     total_words = sum(len(s["text"].split()) for s in sections)
-    if total_words > 142 and extra_fact:
+    if total_words > 124 and extra_fact:
         sections[4]["text"] = closing
         total_words = sum(len(s["text"].split()) for s in sections)
 
-    # Pad cleanly from extra verified facts if too short (< 110 words)
+    # Pad cleanly from extra verified facts if too short (< 104 words)
     fact_idx = 4
-    while total_words < 112 and fact_idx < len(facts):
+    while total_words < 104 and fact_idx < len(facts):
         candidate_sent = facts[fact_idx]
         fact_idx += 1
         target_sec = sections[2] if (fact_idx % 2 == 1) else sections[3]
@@ -172,6 +202,8 @@ def compose_structured_script(topic: ScoredTopic, hook_text: str) -> Dict[str, A
         "full_script": full_script,
         "sections": sections,
         "word_count": len(full_script.split()),
+        "category": cat_spec.display_name,
+        "narrative_arc": arc,
     }
 
 
@@ -226,7 +258,7 @@ def synthesize_and_probe_narration(
 
     # Probe cumulative timings cleanly
     total_voice_dur = tts_engine.probe_duration(combined_mp3)
-    # Keep narrative window comfortably inside 48.5s - 56.8s so +2.0s outro hits 50.5s - 58.8s
+    # Keep narrative window comfortably inside 48.8s - 55.6s so +2.0s outro hits 50.8s - 57.6s
     if 42.0 <= total_voice_dur < 48.8:
         pad_sec = round(49.2 - total_voice_dur, 3)
         padded_mp3 = os.path.join(prod_ws.audio_dir, f"voiceover_{prod_ws.production_id}_padded.mp3")
@@ -242,6 +274,22 @@ def synthesize_and_probe_narration(
         )
         if res.returncode == 0 and os.path.isfile(padded_mp3):
             os.replace(padded_mp3, combined_mp3)
+            total_voice_dur = tts_engine.probe_duration(combined_mp3)
+    elif total_voice_dur > 55.6:
+        tempo = min(1.28, max(1.01, round(total_voice_dur / 54.4, 4)))
+        tempo_mp3 = os.path.join(prod_ws.audio_dir, f"voiceover_{prod_ws.production_id}_tempo.mp3")
+        from backend.app.core.paths import FFMPEG_DEFAULT_PATH
+        import subprocess
+        res = subprocess.run(
+            [
+                str(FFMPEG_DEFAULT_PATH), "-y", "-i", combined_mp3,
+                "-af", f"atempo={tempo:.4f}",
+                "-c:a", "libmp3lame", "-b:a", "192k", tempo_mp3,
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        if res.returncode == 0 and os.path.isfile(tempo_mp3):
+            os.replace(tempo_mp3, combined_mp3)
             total_voice_dur = tts_engine.probe_duration(combined_mp3)
 
     raw_sum = sum(max(0.5, s.duration_sec) for s in synthesized)
@@ -275,10 +323,11 @@ def acquire_isolated_topic_assets(
     stats_out: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[MediaAsset], Optional[AttributionManifest], List[Dict[str, Any]]]:
     """
-    Acquires openly licensed topic images directly into prod_ws.assets_acquired_dir
-    (isolated from prior runs & studio.db). Never pads with irrelevant stock imagery.
-    Returns: (acquired_assets, attribution_manifest, manifest_asset_dicts)
+    Acquires openly licensed topic visuals (Priority A authentic images & maps, Priority B open-source
+    animations) directly into prod_ws.assets_acquired_dir using the shared permanent
+    CreativeProductionPolicy (identical across VALIDATION and PRODUCTION).
     """
+    _ = get_creative_production_policy(execution_context)
     raw_dir = getattr(prod_ws, "assets_acquired_dir", os.path.join(prod_ws.assets_dir, "acquired"))
     portrait_dir = os.path.join(prod_ws.assets_dir, "portrait")
     os.makedirs(raw_dir, exist_ok=True)
@@ -291,24 +340,37 @@ def acquire_isolated_topic_assets(
 
     from backend.app.media.license_verifier import LicenseVerifier
     from backend.app.media.models import LicenseStatus
+    from backend.app.media.providers.internet_archive_provider import InternetArchiveProvider
     from backend.app.media.providers.nasa_provider import NASAProvider
     from backend.app.media.providers.openverse_provider import OpenverseProvider
+    from backend.app.media.providers.stock_provider import PexelsProvider, PixabayProvider
     from backend.app.media.providers.wikimedia_provider import WikimediaProvider
 
     verifier = LicenseVerifier()
     wiki_provider = WikimediaProvider(license_verifier=verifier)
+    ia_provider = InternetArchiveProvider(license_verifier=verifier)
 
-    # Include NASA only when the topic actually relates to space, astronomy, aeronautics, or Earth observation
     topic_blob = f"{topic.title} {topic.category} {topic.summary}".lower()
-    is_space_or_astro = any(
+    is_space_or_geo = any(
         k in topic_blob
-        for k in ("space", "nasa", "quasar", "galaxy", "black hole", "planet", "orbit", "telescope", "moon", "mars", "rocket", "apollo", "voyager", "satellite", "observatory", "earth", "atmosphere")
+        for k in (
+            "space", "nasa", "quasar", "galaxy", "black hole", "planet", "orbit", "telescope",
+            "moon", "mars", "rocket", "apollo", "voyager", "satellite", "observatory",
+            "earth", "atmosphere", "climate", "glacier", "tectonic", "geography",
+        )
     )
-    providers = [wiki_provider, OpenverseProvider(license_verifier=verifier)]
-    if is_space_or_astro:
+    providers = [wiki_provider, OpenverseProvider(license_verifier=verifier), ia_provider]
+    if is_space_or_geo:
         providers.append(NASAProvider(license_verifier=verifier))
+    # Optional commercial stock providers when configured with env keys
+    pexels = PexelsProvider(license_verifier=verifier)
+    if pexels.is_configured():
+        providers.append(pexels)
+    pixabay = PixabayProvider(license_verifier=verifier)
+    if pixabay.is_configured():
+        providers.append(pixabay)
 
-    # 1. Directly fetch openly licensed Wikimedia Commons files linked to the topic's own Wikipedia article
+    # 1. Directly fetch openly licensed Wikimedia Commons files linked to the topic's Wikipedia article
     acquired: List[MediaAsset] = []
     seen_hashes = set()
     failed_downloads = 0
@@ -318,7 +380,7 @@ def acquire_isolated_topic_assets(
         for cand in direct_candidates:
             if cand.verification_status != LicenseStatus.APPROVED:
                 continue
-            if cand.width and cand.width < 180:
+            if cand.width and cand.width < 180 and getattr(cand, "asset_type", "") != "existing_animation":
                 continue
             ok, local_path, sha_h, _ = downloader.download_asset(cand)
             if ok and local_path and os.path.isfile(local_path):
@@ -327,9 +389,13 @@ def acquire_isolated_topic_assets(
                     continue
                 try:
                     cand.asset_hash = file_sha
-                    cand.portrait_path = processor.adapt_image_to_portrait(
-                        input_path=local_path, mode=AdaptationMode.FIT_BLURRED_BACKGROUND
-                    )
+                    if getattr(cand, "asset_type", "") == "existing_animation" or local_path.lower().endswith((".gif", ".webm", ".mp4")):
+                        cand.asset_type = "existing_animation"
+                        cand.portrait_path = local_path
+                    else:
+                        cand.portrait_path = processor.adapt_image_to_portrait(
+                            input_path=local_path, mode=AdaptationMode.FIT_BLURRED_BACKGROUND
+                        )
                     seen_hashes.add(file_sha)
                     acquired.append(cand)
                 except Exception:
@@ -360,6 +426,7 @@ def acquire_isolated_topic_assets(
     if len(queries) < 3:
         queries.append(f"{clean_title} {topic.category}")
 
+    engine_stats: Dict[str, Any] = {}
     if len(acquired) < max_assets:
         extra_acquired, _ = asyncio.run(
             acq_engine.acquire_scene_assets(
@@ -371,7 +438,8 @@ def acquire_isolated_topic_assets(
                 adaptation_mode=AdaptationMode.FIT_BLURRED_BACKGROUND,
             )
         )
-        failed_downloads += int(getattr(acq_engine, "last_acquisition_stats", {}).get("failed", 0))
+        engine_stats = dict(getattr(acq_engine, "last_acquisition_stats", {}) or {})
+        failed_downloads += int(engine_stats.get("failed", 0))
         for ea in extra_acquired:
             file_sha = ea.asset_hash or compute_asset_sha256(ea.local_path)
             if file_sha and file_sha in seen_hashes:
@@ -381,10 +449,22 @@ def acquire_isolated_topic_assets(
             if file_sha:
                 seen_hashes.add(file_sha)
 
+    existing_anims_count = sum(
+        1 for a in acquired
+        if getattr(a, "asset_type", "") == "existing_animation"
+        or (a.local_path or "").lower().endswith((".gif", ".webm", ".mp4"))
+    )
+    authentic_imgs_count = len(acquired) - existing_anims_count
+    rejected_licenses = int(engine_stats.get("rejected_license_count", 0))
+
     if stats_out is not None:
         stats_out.update({
-            "unique_images": len(acquired),
+            "unique_images": authentic_imgs_count,
+            "authentic_images_acquired": authentic_imgs_count,
+            "existing_animations_acquired": existing_anims_count,
+            "rejected_license_count": rejected_licenses,
             "failed_acquisitions": failed_downloads,
+            "failed_providers": list(getattr(acq_engine, "last_failed_providers", []) or []),
         })
 
     attrib_manifest = attrib_gen.generate_manifest(video_id=prod_ws.production_id, assets=acquired) if acquired else None
@@ -394,14 +474,21 @@ def acquire_isolated_topic_assets(
         manifest_assets.append({
             "asset_id": asset.asset_id,
             "filename": os.path.basename(asset.local_path or ""),
+            "original_filename": getattr(asset, "original_filename", "") or os.path.basename(asset.local_path or ""),
             "path": asset.local_path,
             "portrait_path": asset.portrait_path,
+            "asset_type": getattr(asset, "asset_type", "authentic_image"),
             "title": asset.title,
             "creator": asset.creator or "Public Archive Contributor",
+            "provider": getattr(asset, "source_repository", "") or "Open Archive",
             "source_repository": asset.source_repository,
             "source_url": asset.source_url,
             "license": asset.license_type.value,
             "license_url": asset.license_url,
+            "download_timestamp": getattr(asset, "download_timestamp", ""),
+            "usage_restrictions": getattr(asset, "usage_restrictions", "None"),
+            "attribution_requirements": getattr(asset, "attribution_requirements", "Credit author & license"),
+            "modification_permitted": getattr(asset, "modification_permitted", True),
             "width": asset.width,
             "height": asset.height,
             "sha256": asset.asset_hash or compute_file_sha256(asset.local_path or ""),
@@ -687,27 +774,31 @@ def build_20_beat_storyboard(
     script_full_text: str = "",
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
     max_image_reuse: int = MAX_IMAGE_REUSE,
+    execution_context: ExecutionContext = ExecutionContext.VALIDATION,
 ) -> Tuple[StoryboardPlan, List[VisualBeatConfig], str]:
     """
     Generates a 20-beat multi-modal 1080x1920 documentary storyboard synced to voiceover timings.
 
-    Stage 3.21J rules enforced:
-    - Each unique acquired photo (tracked by SHA-256 + canonical asset ID) used <= max_image_reuse (2) times.
-    - Never repeats the same image on consecutive beats.
-    - Fills remaining beats with unique topic-driven generated illustrations (assets/generated/*.png)
-      and genuine 30 FPS script-grounded explanatory animations (assets/animations/*.mp4).
-    - Persists complete storyboard JSON inside storyboards/ & visual_timeline/ and registers all assets
-      with SHA-256 hashes, dimensions, source/license/prompt provenance in production_manifest.json.
+    Stage 3.21M Visual Director Hierarchy (shared identically across VALIDATION & PRODUCTION):
+    - Priority A: Authentic existing photographs, archival documents & scientific diagrams (<= max_image_reuse).
+    - Priority B: Existing open-source GIF/WebM/MP4 animations adapted via FFmpeg into documentary 30 FPS portrait clips.
+    - Priority C: Animated authentic composites (route lines, pulsing beacons, timelines, metrics over authentic assets).
+    - Priority D: Selective procedural/conceptual illustrations (explicitly tagged illustrative_reconstruction=True).
     - Fails closed via VisualDiversityValidator before returning.
     """
+    policy = get_creative_production_policy(execution_context)
+    cat_spec = policy.get_category(getattr(topic, "category", "science"))
+    effective_max_reuse = min(max_image_reuse, policy.visual_policy.max_image_reuse)
+
     plates_dir = os.path.join(prod_ws.assets_dir, "plates")
     os.makedirs(plates_dir, exist_ok=True)
     os.makedirs(prod_ws.assets_generated_dir, exist_ok=True)
     os.makedirs(prod_ws.assets_animations_dir, exist_ok=True)
     os.makedirs(prod_ws.storyboards_dir, exist_ok=True)
 
-    # Deduplicate acquired assets strictly by SHA-256 hash & canonical ID
-    unique_acquired: List[Dict[str, Any]] = []
+    # Partition acquired assets into Priority A (photos/diagrams) and Priority B (open animations)
+    unique_photos: List[Dict[str, Any]] = []
+    unique_animations: List[Dict[str, Any]] = []
     seen_hashes: set = set()
     for asset in acquired_assets:
         if not asset.local_path or not os.path.isfile(asset.local_path):
@@ -716,19 +807,26 @@ def build_20_beat_storyboard(
         if not sha or sha in seen_hashes:
             continue
         seen_hashes.add(sha)
-        unique_acquired.append({
+        entry = {
             "asset": asset,
             "path": asset.local_path,
             "sha256": sha,
             "canonical_id": getattr(asset, "asset_id", None) or getattr(asset, "id", None) or sha[:16],
-        })
+        }
+        is_anim = getattr(asset, "asset_type", "") == "existing_animation" or asset.local_path.lower().endswith(
+            (".gif", ".webm", ".mp4")
+        )
+        if is_anim:
+            unique_animations.append(entry)
+        else:
+            unique_photos.append(entry)
 
     # Pre-flatten the 20 timing subdivisions across the 5 script sections
-    total_beats = 20
     sub_count = 4
     flat_beats: List[Dict[str, Any]] = []
     full_script_parts: List[str] = []
     g_idx = 0
+    arc_names = cat_spec.narrative_arc or ["hook", "context", "mechanism", "revelation"]
     for sec_idx, sec in enumerate(timings):
         sec_start = float(sec["start_sec"])
         sec_end = float(sec["end_sec"])
@@ -737,6 +835,7 @@ def build_20_beat_storyboard(
         full_script_parts.append(sec_text)
         words = sec_text.split()
         chunk_len = max(2, len(words) // sub_count)
+        narrative_purpose = sec.get("arc_phase") or arc_names[min(sec_idx, len(arc_names) - 1)].upper()
         for sub_i in range(sub_count):
             beat_start = round(sec_start + (sub_i * sec_dur / sub_count), 3)
             beat_end = round(sec_start + ((sub_i + 1) * sec_dur / sub_count), 3)
@@ -747,6 +846,7 @@ def build_20_beat_storyboard(
                 "idx": g_idx,
                 "sec_idx": sec_idx,
                 "stage": sec["stage"],
+                "narrative_purpose": narrative_purpose,
                 "sec_text": sec_text,
                 "seg_text": seg_text,
                 "beat_start": beat_start,
@@ -760,25 +860,37 @@ def build_20_beat_storyboard(
     actual_total_beats = len(flat_beats)
     combined_script = script_full_text or " ".join(full_script_parts)
 
-    # Plan beat modalities: cap photo beats so every video blends photos + illustrations + animations
-    max_photo_beats = min(
-        len(unique_acquired) * max_image_reuse,
-        8 if len(unique_acquired) <= 4 else 10,
-    )
-    photo_slot_set = set(_spread_photo_indices(actual_total_beats, max_photo_beats))
-    remaining_indices = [i for i in range(actual_total_beats) if i not in photo_slot_set]
+    # Plan slots following Priority A -> Priority B -> Priority C -> Priority D
+    # Use at most 1 static slot per unique photo initially so every photo retains reuse budget for Priority C composites
+    photo_target = min(len(unique_photos), 8) if unique_photos else 0
+    photo_slot_set = set(_spread_photo_indices(actual_total_beats, photo_target))
 
-    # Allocate generated illustrations (~4-6 unique PNG plates) & remaining beats to 30 FPS explainer animations
-    gen_target = min(len(remaining_indices), max(4, min(6, len(remaining_indices) // 3)))
-    gen_step = max(1, len(remaining_indices) // max(1, gen_target))
-    gen_slot_set = set(remaining_indices[::gen_step][:gen_target])
+    open_slots_after_a = [i for i in range(actual_total_beats) if i not in photo_slot_set]
+    anim_b_target = min(len(unique_animations), len(open_slots_after_a), 4)
+    anim_b_step = max(1, len(open_slots_after_a) // max(1, anim_b_target)) if anim_b_target > 0 else 1
+    anim_b_slots = list(open_slots_after_a[::anim_b_step][:anim_b_target]) if anim_b_target > 0 else []
+    anim_b_slot_set = set(anim_b_slots)
 
-    photo_use_counts: Dict[str, int] = {item["sha256"]: 0 for item in unique_acquired}
+    open_slots_after_b = [i for i in open_slots_after_a if i not in anim_b_slot_set]
+    # Priority C (animated overlays composited onto authentic acquired images within max reuse budget)
+    remaining_photo_budget = max(0, len(unique_photos) * effective_max_reuse - len(photo_slot_set))
+    priority_c_target = min(remaining_photo_budget, len(open_slots_after_b), 4 if len(unique_photos) >= 3 else 2)
+    priority_c_step = max(1, len(open_slots_after_b) // max(1, priority_c_target)) if priority_c_target > 0 else 1
+    priority_c_slot_set = set(open_slots_after_b[::priority_c_step][:priority_c_target]) if priority_c_target > 0 else set()
+
+    remaining_for_d = [i for i in open_slots_after_b if i not in priority_c_slot_set]
+    # Selective Priority D generated illustrations: use only sparingly when authentic assets aren't saturated
+    gen_cap = 3 if len(unique_photos) >= 5 else 5
+    gen_target = min(len(remaining_for_d), max(2, min(gen_cap, len(remaining_for_d) // 2)))
+    gen_step = max(1, len(remaining_for_d) // max(1, gen_target)) if gen_target > 0 else 1
+    gen_slot_set = set(remaining_for_d[::gen_step][:gen_target]) if gen_target > 0 else set()
+
+    photo_use_counts: Dict[str, int] = {item["sha256"]: 0 for item in unique_photos}
     last_photo_sha: Optional[str] = None
     anim_type_counts: Dict[str, int] = {}
 
     accents = [
-        (255, 82, 82),
+        cat_spec.accent_rgb,
         (56, 189, 248),
         (245, 194, 66),
         (34, 211, 153),
@@ -800,12 +912,18 @@ def build_20_beat_storyboard(
     asset_reuse_tracker: Dict[str, int] = {}
     generated_count = 0
     animated_count = 0
+    priority_a_beats = 0
+    priority_b_beats = 0
+    priority_c_beats = 0
+    priority_d_bespoke_beats = 0
+    b_cursor = 0
 
     for beat_info in flat_beats:
         idx = beat_info["idx"]
         beat_id = f"{topic.id}_b{idx + 1:02d}"
         sec_idx = beat_info["sec_idx"]
         stage_label = beat_info["stage"]
+        narrative_purpose = beat_info["narrative_purpose"]
         seg_text = beat_info["seg_text"]
         callout = beat_info["callout"]
         stat_badge = beat_info["stat_badge"]
@@ -817,24 +935,22 @@ def build_20_beat_storyboard(
 
         slug = re.sub(r"[^a-z0-9]+", "_", callout.lower()).strip("_")[:24] or f"beat_{idx + 1}"
         plate_path = os.path.join(plates_dir, f"plate_{idx + 1:02d}_{stage_label.lower()}.png")
+        search_kws = [w for w in re.findall(r"[A-Za-z0-9]{4,}", seg_text)][:4] or [topic.title.split()[0]]
 
-        if idx in photo_slot_set and unique_acquired:
-            # Select least-used eligible photo whose SHA differs from previous beat's photo
-            candidates = [
-                item for item in unique_acquired
-                if photo_use_counts[item["sha256"]] < max_image_reuse
-            ]
+        if idx in photo_slot_set and unique_photos:
+            candidates = [item for item in unique_photos if photo_use_counts[item["sha256"]] < effective_max_reuse]
             non_consec = [c for c in candidates if c["sha256"] != last_photo_sha] or candidates
             chosen = min(non_consec, key=lambda c: photo_use_counts[c["sha256"]])
             photo_sha = chosen["sha256"]
             photo_use_counts[photo_sha] += 1
             last_photo_sha = photo_sha
+            chosen_asset = chosen["asset"]
 
             img1 = chosen["path"]
             img2 = None
             layout_mode = "focal_photo"
-            if len(unique_acquired) >= 2 and idx % 4 == 3:
-                other = next((x for x in unique_acquired if x["sha256"] != photo_sha), None)
+            if len(unique_photos) >= 2 and idx % 4 == 3:
+                other = next((x for x in unique_photos if x["sha256"] != photo_sha), None)
                 if other:
                     img2 = other["path"]
                     layout_mode = "split_dual"
@@ -855,16 +971,173 @@ def build_20_beat_storyboard(
                 secondary_img_path=img2,
             )
 
-            visual_type = "historical_photo"
+            visual_type = "documentary_image"
             canonical_path = img1
             canonical_hash = photo_sha
             canonical_id = chosen["canonical_id"]
-            visual_desc = f"Acquired documentary photograph depicting {topic.title}: {callout}"
-            gen_instr = f"Display acquired image {getattr(chosen['asset'], 'filename', None) or os.path.basename(img1)} in {layout_mode} plate"
+            visual_desc = f"Authentic {cat_spec.display_name} visual depicting {topic.title}: {callout}"
+            gen_instr = f"Display acquired image {os.path.basename(img1)} in {layout_mode} documentary frame"
             anim_mp4_path = None
             modality = VisualModality.REAL_PHOTO
+            sourcing_priority = "A_authentic_existing"
+            req_asset_type = "authentic_photo"
+            anim_instr = f"Gentle Ken Burns motion ({z0:.2f}->{z1:.2f})"
+            beat_license = chosen_asset.license_type.value
+            beat_license_url = chosen_asset.license_url
+            beat_creator = chosen_asset.creator
+            beat_provider = chosen_asset.source_repository
+            source_img_sha = photo_sha
+            illustrative_flag = False
+            asset_key = f"sha256:{canonical_hash}"
+            asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
+            reuse_num = asset_reuse_tracker[asset_key]
+            priority_a_beats += 1
 
-            # Track canonical reuse across beats
+        elif idx in anim_b_slot_set and b_cursor < len(unique_animations):
+            last_photo_sha = None
+            anim_item = unique_animations[b_cursor]
+            b_cursor += 1
+            anim_asset = anim_item["asset"]
+            visual_type = "motion_graphic"
+            anim_mp4_path = os.path.join(prod_ws.assets_animations_dir, f"anim_{beat_id}_priorityB.mp4")
+            b_meta = anim_engine.adapt_existing_animation_to_portrait(
+                input_anim_path=anim_item["path"],
+                out_mp4_path=anim_mp4_path,
+                duration_sec=beat_dur,
+                beat_idx=idx,
+                total_beats=actual_total_beats,
+                stage_label=stage_label,
+                topic_title=topic.title,
+                segment_text=seg_text,
+                accent_color=accent,
+                source_credit=f"{anim_asset.source_repository} / {anim_asset.creator}",
+                fps=30.0,
+            )
+            animated_count += 1
+            priority_b_beats += 1
+            prod_ws.register_artifact(
+                "STAGE_7_ANIMATION",
+                "animation",
+                anim_mp4_path,
+                asset_id=f"anim_{beat_id}",
+                source_url=anim_asset.source_url,
+                creator=anim_asset.creator,
+                license=anim_asset.license_type.value,
+                generation_provider=b_meta["generation_provider"],
+                prompt_metadata=b_meta["prompt_metadata"],
+                width=b_meta["width"],
+                height=b_meta["height"],
+                format="mp4",
+            )
+            _render_documentary_plate(
+                out_path=plate_path,
+                width=1080,
+                height=1920,
+                beat_idx=idx,
+                total_beats=actual_total_beats,
+                stage_label=stage_label,
+                callout_text=callout,
+                stat_text=stat_badge,
+                topic_title=topic.title,
+                accent_color=accent,
+                layout_mode="stat_card",
+                primary_img_path=None,
+                secondary_img_path=None,
+            )
+            canonical_path = anim_mp4_path
+            canonical_hash = compute_asset_sha256(anim_mp4_path)
+            canonical_id = f"anim_{beat_id}"
+            visual_desc = f"Open-source archival animation for '{topic.title}': {seg_text[:90]}"
+            gen_instr = b_meta["prompt_metadata"]["prompt"]
+            modality = VisualModality.MAP_TIMELINE
+            sourcing_priority = "B_open_source_animation"
+            req_asset_type = "existing_animation"
+            anim_instr = "Open-source GIF/WebM loop framed at 30 FPS with documentary stage card"
+            beat_license = anim_asset.license_type.value
+            beat_license_url = anim_asset.license_url
+            beat_creator = anim_asset.creator
+            beat_provider = anim_asset.source_repository
+            source_img_sha = anim_item["sha256"]
+            illustrative_flag = False
+            asset_key = f"sha256:{canonical_hash}"
+            asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
+            reuse_num = asset_reuse_tracker[asset_key]
+
+        elif idx in priority_c_slot_set and any(photo_use_counts[p["sha256"]] < effective_max_reuse for p in unique_photos):
+            eligible = [p for p in unique_photos if photo_use_counts[p["sha256"]] < effective_max_reuse]
+            non_consec = [p for p in eligible if p["sha256"] != last_photo_sha] or eligible
+            chosen = min(non_consec, key=lambda c: photo_use_counts[c["sha256"]])
+            photo_sha = chosen["sha256"]
+            photo_use_counts[photo_sha] += 1
+            last_photo_sha = photo_sha
+            chosen_asset = chosen["asset"]
+
+            visual_type = _select_explanatory_visual_type(
+                idx, stage_label, seg_text, combined_script, bool(coords), anim_type_counts
+            )
+            anim_type_counts[visual_type] = anim_type_counts.get(visual_type, 0) + 1
+            anim_mp4_path = os.path.join(prod_ws.assets_animations_dir, f"anim_{beat_id}_pC_{visual_type}.mp4")
+            c_meta = anim_engine.render_explainer_animation_mp4(
+                visual_type=visual_type,
+                out_mp4_path=anim_mp4_path,
+                duration_sec=beat_dur,
+                beat_idx=idx,
+                total_beats=actual_total_beats,
+                stage_label=stage_label,
+                topic_title=topic.title,
+                segment_text=seg_text,
+                full_script=combined_script,
+                accent_color=accent,
+                coordinates=coords,
+                fps=30.0,
+                background_image_path=chosen["path"],
+            )
+            animated_count += 1
+            priority_c_beats += 1
+            prod_ws.register_artifact(
+                "STAGE_7_ANIMATION",
+                "animation",
+                anim_mp4_path,
+                asset_id=f"anim_{beat_id}",
+                source_url=chosen_asset.source_url,
+                creator=f"{chosen_asset.creator} + CrazzyDocs Overlay",
+                license=chosen_asset.license_type.value,
+                generation_provider=c_meta["generation_provider"],
+                prompt_metadata=c_meta["prompt_metadata"],
+                width=c_meta["width"],
+                height=c_meta["height"],
+                format="mp4",
+            )
+            _render_documentary_plate(
+                out_path=plate_path,
+                width=1080,
+                height=1920,
+                beat_idx=idx,
+                total_beats=actual_total_beats,
+                stage_label=stage_label,
+                callout_text=callout,
+                stat_text=stat_badge,
+                topic_title=topic.title,
+                accent_color=accent,
+                layout_mode="focal_photo",
+                primary_img_path=chosen["path"],
+                secondary_img_path=None,
+            )
+            canonical_path = anim_mp4_path
+            canonical_hash = compute_asset_sha256(anim_mp4_path)
+            canonical_id = f"anim_{beat_id}"
+            visual_desc = f"Priority C animated {visual_type} composited over authentic visual for '{topic.title}': {seg_text[:80]}"
+            gen_instr = c_meta["prompt_metadata"]["prompt"]
+            modality = VisualModality.MAP_TIMELINE
+            sourcing_priority = "C_animated_authentic"
+            req_asset_type = "animated_authentic"
+            anim_instr = f"Animated {visual_type} markers, highlight brackets, and callout overlay over {os.path.basename(chosen['path'])}"
+            beat_license = chosen_asset.license_type.value
+            beat_license_url = chosen_asset.license_url
+            beat_creator = chosen_asset.creator
+            beat_provider = f"{chosen_asset.source_repository} + Overlay"
+            source_img_sha = photo_sha
+            illustrative_flag = False
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
             reuse_num = asset_reuse_tracker[asset_key]
@@ -884,6 +1157,8 @@ def build_20_beat_storyboard(
                 accent_color=accent,
                 coordinates=coords,
                 variant=generated_count,
+                category=cat_spec.display_name,
+                illustrative_label="ILLUSTRATIVE RECONSTRUCTION",
             )
             generated_count += 1
             prod_ws.register_artifact(
@@ -900,16 +1175,24 @@ def build_20_beat_storyboard(
                 height=gen_meta["height"],
                 format="png",
             )
-            # generated_image is already 1080x1920 documentary-framed
             plate_path = gen_path
             visual_type = "generated_image"
             canonical_path = gen_path
             canonical_hash = compute_asset_sha256(gen_path)
             canonical_id = f"gen_{beat_id}"
-            visual_desc = f"Bespoke analytical schematic illustration for '{topic.title}': {seg_text[:90]}"
+            visual_desc = f"Selective illustrative schematic reconstruction for '{topic.title}': {seg_text[:90]}"
             gen_instr = gen_meta["prompt_metadata"]["prompt"]
             anim_mp4_path = None
             modality = VisualModality.CINEMATIC_STILL
+            sourcing_priority = "D_selective_generated"
+            req_asset_type = "illustrative_reconstruction"
+            anim_instr = "Static conceptual schematic labeled ILLUSTRATIVE RECONSTRUCTION"
+            beat_license = "CC0 / Original Work"
+            beat_license_url = "local://generated"
+            beat_creator = "CrazzyDocs Analytical Illustration Generator"
+            beat_provider = "Local Conceptual Synthesizer"
+            source_img_sha = None
+            illustrative_flag = True
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
             reuse_num = asset_reuse_tracker[asset_key]
@@ -946,6 +1229,7 @@ def build_20_beat_storyboard(
                 fps=30.0,
             )
             animated_count += 1
+            priority_d_bespoke_beats += 1
             prod_ws.register_artifact(
                 "STAGE_7_ANIMATION",
                 "animation",
@@ -960,7 +1244,6 @@ def build_20_beat_storyboard(
                 height=anim_meta["height"],
                 format="mp4",
             )
-            # Generate companion documentary keyframe plate PNG so image_path invariant always holds
             _render_documentary_plate(
                 out_path=plate_path,
                 width=1080,
@@ -982,6 +1265,15 @@ def build_20_beat_storyboard(
             visual_desc = f"Script-grounded {visual_type} animation for '{topic.title}': {seg_text[:90]}"
             gen_instr = anim_meta["prompt_metadata"]["prompt"]
             modality = VisualModality.MAP_TIMELINE
+            sourcing_priority = "D_procedural_animation"
+            req_asset_type = visual_type
+            anim_instr = f"Procedural 30 FPS {visual_type} driven by script facts"
+            beat_license = "CC0 / Original Work"
+            beat_license_url = "local://animation"
+            beat_creator = "CrazzyDocs Explainer Animation Engine"
+            beat_provider = "Local Explainer Engine"
+            source_img_sha = None
+            illustrative_flag = False
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
             reuse_num = asset_reuse_tracker[asset_key]
@@ -999,6 +1291,7 @@ def build_20_beat_storyboard(
         beat_params: Dict[str, Any] = {
             "image_path": plate_path,
             "visual_type": visual_type,
+            "sourcing_priority": sourcing_priority,
             "asset_path": canonical_path,
             "asset_hash": canonical_hash,
             "asset_id": canonical_id,
@@ -1027,7 +1320,7 @@ def build_20_beat_storyboard(
                 image_filename=os.path.basename(canonical_path),
                 start_sec=beat_start,
                 end_sec=beat_end,
-                top_tag=topic.category[:16].upper(),
+                top_tag=cat_spec.category_code[:16].upper(),
                 editorial_text=callout,
                 accent_color=accent,
                 motion_type="zoom_in" if z1 > z0 else "zoom_out",
@@ -1038,12 +1331,24 @@ def build_20_beat_storyboard(
             "beat_id": beat_id,
             "id": beat_id,
             "stage": stage_label,
+            "narrative_purpose": narrative_purpose,
             "start_sec": beat_start,
             "end_sec": beat_end,
             "duration_sec": beat_dur,
             "script_segment": seg_text,
             "callout": callout,
             "visual_type": visual_type,
+            "required_asset_type": req_asset_type,
+            "search_keywords": search_kws,
+            "preferred_acquisition_method": sourcing_priority,
+            "sourcing_priority": sourcing_priority,
+            "license": beat_license,
+            "license_url": beat_license_url,
+            "creator": beat_creator,
+            "source_provider": beat_provider,
+            "source_image_sha256": source_img_sha,
+            "illustrative_reconstruction": illustrative_flag,
+            "animation_instructions": anim_instr,
             "visual_description": visual_desc,
             "asset_path": canonical_path,
             "asset_hash": canonical_hash,
@@ -1052,16 +1357,20 @@ def build_20_beat_storyboard(
             "animation_path": anim_mp4_path,
             "visual_generation_instructions": gen_instr,
             "transition": "cut",
-            "relevance_score": 0.92 if anim_mp4_path or visual_type == "generated_image" else 0.88,
+            "relevance_score": 0.92 if anim_mp4_path or visual_type == "generated_image" else 0.89,
             "reuse_count": reuse_num,
             "source_image": os.path.basename(canonical_path),
         })
 
-    # Fail-closed Stage 3.21J visual diversity validation
+    # Fail-closed Stage 3.21J visual diversity + base-photo reuse verification
+    if photo_use_counts and max(photo_use_counts.values()) > effective_max_reuse:
+        offending = {k[:12]: v for k, v in photo_use_counts.items() if v > effective_max_reuse}
+        raise ValueError(f"Base authentic image reuse limit ({effective_max_reuse}) exceeded across Priority A+C: {offending}")
+
     audit_res = VisualDiversityValidator.validate_storyboard(
         storyboard_beat_records,
         topic_title=topic.title,
-        max_image_reuse=max_image_reuse,
+        max_image_reuse=effective_max_reuse,
         check_files_on_disk=True,
         min_distinct_assets=MIN_DISTINCT_ASSETS_FULL_SHORT if actual_total_beats >= 18 else None,
         workspace_root=prod_ws.prod_dir,
@@ -1083,13 +1392,27 @@ def build_20_beat_storyboard(
     outro_assets = os.path.join(WORKSPACE_ROOT, "assets", "branding", "crazzydocs", "crazzydocs_outro_1080x1920.mp4")
     outro_path = outro_media if os.path.isfile(outro_media) else outro_assets
 
+    sourcing_summary = {
+        "authentic_images_acquired": len(unique_photos),
+        "existing_animations_acquired": len(unique_animations),
+        "priority_a_photo_beats": priority_a_beats,
+        "priority_b_existing_anim_beats": priority_b_beats,
+        "priority_c_animated_authentic_beats": priority_c_beats,
+        "priority_d_generated_image_beats": generated_count,
+        "priority_d_bespoke_anim_beats": priority_d_bespoke_beats,
+        "max_source_photo_reuse": max(photo_use_counts.values()) if photo_use_counts else 0,
+    }
+
     storyboard_payload = {
-        "schema_version": "3.21J",
+        "schema_version": "3.21M",
         "topic_id": topic.id,
         "topic_title": topic.title,
+        "category": cat_spec.display_name,
+        "narrative_arc": arc_names,
         "beat_count": len(scene_beats),
         "narration_duration_sec": total_voice_dur,
         "outro_path": outro_path,
+        "visual_sourcing_summary": sourcing_summary,
         "visual_diversity_audit": {
             "is_valid": audit_res.is_valid,
             "distinct_assets": audit_res.distinct_assets,
@@ -1111,18 +1434,19 @@ def build_20_beat_storyboard(
         subtitles_ass_path=ass_path,
         metadata={
             "topic_id": topic.id,
+            "category": cat_spec.display_name,
             "beat_count": len(scene_beats),
             "distinct_visual_assets": audit_res.distinct_assets,
             "unique_images": audit_res.unique_images,
             "unique_animations": audit_res.unique_animations,
             "max_image_reuse_observed": audit_res.max_reuse_observed,
+            "visual_sourcing_summary": sourcing_summary,
             "storyboard_beats": storyboard_beat_records,
         },
         include_crazzydocs_outro=True,
         crazzydocs_outro_path=outro_path,
     )
 
-    # Save visual timeline artifact into BOTH visual_timeline/ and storyboards/
     timeline_json = os.path.join(prod_ws.visual_timeline_dir, f"storyboard_{prod_ws.production_id}.json")
     canonical_sb_json = os.path.join(prod_ws.storyboards_dir, f"storyboard_{prod_ws.production_id}.json")
     for dest_json in (timeline_json, canonical_sb_json):

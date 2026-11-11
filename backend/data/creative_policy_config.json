@@ -1,0 +1,21 @@
+{
+  "policy_version": "3.21M",
+  "scoring_weights": {
+    "curiosity": 0.18,
+    "novelty": 0.14,
+    "storytelling": 0.15,
+    "factual_reliability": 0.14,
+    "visual_availability": 0.14,
+    "audience_relevance": 0.09,
+    "short_form_suitability": 0.08,
+    "freshness": 0.08
+  },
+  "scoring_disclaimer": "Topic scores estimate storytelling potential and short-form suitability; they do not predict viral outcomes.",
+  "visual_priority_order": [
+    "A_AUTHENTIC_EXISTING",
+    "B_OPEN_SOURCE_ANIMATION",
+    "C_ANIMATED_AUTHENTIC",
+    "D_SELECTIVE_AI_GENERATION"
+  ],
+  "custom_categories": []
+}

@@ -51,20 +51,29 @@ class RelevanceScorer:
             if words:
                 queries.append(f"{clean_topic} {' '.join(words)}".strip())
 
-        # 3. Category domain queries
+        # 3. Category & domain queries (never hardcode history-only fallbacks)
         topic_lower = topic_title.lower()
+        cat_lower = (category or "").lower()
         if "black hole" in topic_lower or "singularity" in topic_lower:
             queries.extend(["black hole accretion disk", "gravitational lensing", "event horizon telescope"])
-        elif "moon" in topic_lower and ("orbit" in topic_lower or "fall" in topic_lower):
-            queries.extend(["moon orbiting earth", "lunar orbit", "earth moon space"])
-        elif "solar" in topic_lower or "photovoltaic" in topic_lower:
-            queries.extend(["solar farm utility photovoltaic", "solar panels field", "silicon solar cell"])
-        elif "baby" in topic_lower or "amnesia" in topic_lower:
-            queries.extend(["human brain hippocampus neurons", "synapse brain neural network"])
-        elif "mantle" in topic_lower or "ringwoodite" in topic_lower:
-            queries.extend(["earth mantle cross section", "subterranean geology ringwoodite"])
-        elif "hash" in topic_lower or "algorithm" in topic_lower:
-            queries.extend(["hash table computer science diagram", "binary search tree data structure"])
+        elif "space" in cat_lower or "astronomy" in cat_lower:
+            queries.extend([f"{clean_topic} nasa telescope", f"{clean_topic} space diagram"])
+        elif "psychology" in cat_lower:
+            queries.extend([f"{clean_topic} brain experiment", f"{clean_topic} cognitive psychology"])
+        elif "biology" in cat_lower or "medical" in cat_lower:
+            queries.extend([f"{clean_topic} microscope anatomy", f"{clean_topic} medical diagram"])
+        elif "nature" in cat_lower or "wildlife" in cat_lower or "environment" in cat_lower:
+            queries.extend([f"{clean_topic} wildlife habitat", f"{clean_topic} satellite map"])
+        elif "technology" in cat_lower or "artificial intelligence" in cat_lower or "cybersecurity" in cat_lower:
+            queries.extend([f"{clean_topic} computer hardware diagram", f"{clean_topic} network architecture"])
+        elif "geography" in cat_lower or "archaeology" in cat_lower:
+            queries.extend([f"{clean_topic} map satellite", f"{clean_topic} geological site"])
+        elif "engineering" in cat_lower or "architecture" in cat_lower:
+            queries.extend([f"{clean_topic} structural engineering blueprint", f"{clean_topic} construction photograph"])
+        elif "math" in cat_lower:
+            queries.extend([f"{clean_topic} geometric proof diagram", f"{clean_topic} mathematical visualization"])
+        else:
+            queries.append(f"{clean_topic} diagram photograph")
 
         # Deduplicate preserving order
         seen = set()

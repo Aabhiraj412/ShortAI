@@ -1,0 +1,311 @@
+{
+  "stage": "3.21M",
+  "executed_at": "2026-11-11T10:02:31.699765Z",
+  "supported_categories_count": 20,
+  "db_counts_before": {
+    "content_ledger": 9,
+    "publishing_ledger": 0,
+    "publishing_ledger_archive": 253,
+    "persistent_jobs": 4,
+    "media_assets": 2
+  },
+  "db_counts_after": {
+    "content_ledger": 9,
+    "publishing_ledger": 0,
+    "publishing_ledger_archive": 253,
+    "persistent_jobs": 4,
+    "media_assets": 2
+  },
+  "db_isolated": true,
+  "distinct_actual_categories": [
+    "Nature and Wildlife",
+    "Psychology",
+    "Science",
+    "Technology"
+  ],
+  "category_distribution_window": {
+    "Science": 1,
+    "Technology": 1,
+    "Psychology": 1,
+    "Nature and Wildlife": 1
+  },
+  "runs": [
+    {
+      "mode": "full_render",
+      "requested_category": "Science",
+      "topic_title": "Breakthrough Prize in Fundamental Physics",
+      "duration_sec": 53.07,
+      "video_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_science_20261111_152005_1\\video\\showcase_val_3_21m_science_20261111_152005_1.mp4",
+      "thumbnail_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_science_20261111_152005_1\\thumbnails\\thumb_val_3_21m_science_20261111_152005_1.png",
+      "contact_sheet_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_science_20261111_152005_1\\audit\\contact_sheet_val_3_21m_science_20261111_152005_1.png",
+      "integrity_report": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_science_20261111_152005_1\\audit\\integrity_report_val_3_21m_science_20261111_152005_1.json",
+      "publishing_status": "suppressed_validation_execution",
+      "elapsed_sec": 294.6,
+      "production_id": "val_3_21m_science_20261111_152005_1",
+      "production_dir": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_science_20261111_152005_1",
+      "visual_sourcing_summary": {
+        "authentic_images_acquired": 4,
+        "existing_animations_acquired": 0,
+        "priority_a_photo_beats": 4,
+        "priority_b_existing_anim_beats": 0,
+        "priority_c_animated_authentic_beats": 4,
+        "priority_d_generated_image_beats": 5,
+        "priority_d_bespoke_anim_beats": 7,
+        "max_source_photo_reuse": 2
+      },
+      "visual_diversity_audit": {
+        "is_valid": true,
+        "distinct_assets": 18,
+        "unique_images": 7,
+        "unique_animations": 11,
+        "max_reuse_observed": 2,
+        "reuse_counts": {
+          "sha256:73fcda1e0b598b727f7e6f0f5bed34fc558be7e1fba27883d6efe459d31217e5": 2,
+          "sha256:8e91415738a4f9d57698b3eec4aa49b2dc818169236e4960d75895e6c7d3b821": 1,
+          "sha256:4ba1671d00f7b46b8ca811616f52409866cf3b06315d24d4028f7bb967fb45eb": 1,
+          "sha256:04c637f33167720ba1dd8b64f670e00a05312d80fa7aa28efce37a23b5217110": 1,
+          "sha256:d927bd6ae6741aa0c1e26d507bbfb074639ed59a7077bcce9f2e1b94d0272aa2": 1,
+          "sha256:98640ca3c05fd95432387c889ded95d5a7f9e6d3ee7308905f6b3583310e53d4": 2,
+          "sha256:f5f07fea9aaf919400f696b5501979665ad3a0761d61c72ee3eb27e8a92bd030": 1,
+          "sha256:aef727561998e15a3dda6b1c1fdc137f112bc702a5bf012eb351907a23f0d7d1": 1,
+          "sha256:3147eb39b9ed736ffd102f0ea0204baf5a06fed5b46f77ec072e6b63e208ad49": 1,
+          "sha256:911b66414f5c52151648cda2d110d9553d0621e122d2919313064c34898f1f1c": 1,
+          "sha256:47e7914e6c23079cb188ec40604655e82f67280ade61b11b7daaee25f1349d24": 1,
+          "sha256:faa165de0a7880a745220a258cca0c711f45fefb2ef26cdc6145dcb8355b0708": 1,
+          "sha256:679ae44ce83a53209104b7b05ef9e9825e7dc8499a3adce849dd9171008d7062": 1,
+          "sha256:966af4eb73967ad428a41cf1efdc72aaee4cead910d9abe3d8755c4d33256364": 1,
+          "sha256:8f03b465162d1a7a297a40ca0ca245ec65ebe078fdba76b405726ed5977f0943": 1,
+          "sha256:bd7a022f3f6b9cd552d208f6ac06e27571063fb8e4f414a94fce380141877364": 1,
+          "sha256:180f5162e64afa116dda9c4a3d2a0bc831ca757cab4abcd9c6590f63dccbcfdc": 1,
+          "sha256:8aa598c2e864736e4780da0313156748632ddcf098ceef0e52f4a793f378ebd6": 1
+        }
+      },
+      "narrative_arc": [
+        "question",
+        "scientific_principle",
+        "experiment_evidence",
+        "revelation"
+      ],
+      "beat_count": 20,
+      "actual_category": "Science",
+      "composite_score": 8.95,
+      "discovery_source": "wikipedia_search:science"
+    },
+    {
+      "mode": "full_render",
+      "requested_category": "Technology",
+      "topic_title": "History of communication",
+      "duration_sec": 50.84,
+      "video_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_technology_20261111_152005_2\\video\\showcase_val_3_21m_technology_20261111_152005_2.mp4",
+      "thumbnail_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_technology_20261111_152005_2\\thumbnails\\thumb_val_3_21m_technology_20261111_152005_2.png",
+      "contact_sheet_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_technology_20261111_152005_2\\audit\\contact_sheet_val_3_21m_technology_20261111_152005_2.png",
+      "integrity_report": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_technology_20261111_152005_2\\audit\\integrity_report_val_3_21m_technology_20261111_152005_2.json",
+      "publishing_status": "suppressed_validation_execution",
+      "elapsed_sec": 268.1,
+      "production_id": "val_3_21m_technology_20261111_152005_2",
+      "production_dir": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_technology_20261111_152005_2",
+      "visual_sourcing_summary": {
+        "authentic_images_acquired": 4,
+        "existing_animations_acquired": 0,
+        "priority_a_photo_beats": 4,
+        "priority_b_existing_anim_beats": 0,
+        "priority_c_animated_authentic_beats": 4,
+        "priority_d_generated_image_beats": 5,
+        "priority_d_bespoke_anim_beats": 7,
+        "max_source_photo_reuse": 2
+      },
+      "visual_diversity_audit": {
+        "is_valid": true,
+        "distinct_assets": 18,
+        "unique_images": 7,
+        "unique_animations": 11,
+        "max_reuse_observed": 2,
+        "reuse_counts": {
+          "sha256:c13dce196f1dfae279b635c116036a25a4a53c679547da6c2c5ff409f556209a": 2,
+          "sha256:dd8313afc0720f84be44836589c94580a0587041c4fc6e8019963dda80710815": 1,
+          "sha256:c370e1ccb008b15d66bada0aa1881012b02a035b27fddcaa6617a264bbe4999e": 1,
+          "sha256:96322731b9beae79e7a17c2aba6b48addb81407709caa0a7b7efe3058bfa58a6": 1,
+          "sha256:e76e6f2b7e63c5e07e9d29f111f784cf8b59a6a962e70aedd06855b00feefc6c": 1,
+          "sha256:379d43cca3ab7edc3bc244031b2f6172a587d1908df647816fd67d988dc791cc": 2,
+          "sha256:c64425afcfa8d0de00d1c8ca586e129970c40c2f6bf8acbb8c1b68f6bc79d041": 1,
+          "sha256:df2359c32a4e8987320c86722ac7eec781a6c41c496efe88c31e9bebfa293e52": 1,
+          "sha256:5bdf921b1a2126eb41cd9da06456a9942016542c17ecabdd7fca17827d6c6aa6": 1,
+          "sha256:661ecfac34d0c79eeec914b8e0c1a3f2c14e644146c23f3be7735672f0d8410c": 1,
+          "sha256:2b3bc2f8eb9e1f3848a2f1e219a931d712bddd87a3550cf3a4677bf3a5e73b17": 1,
+          "sha256:12320ac33bf1cfd51066af7c537e715a804b727d3fb46efaaa41065bc1a5d65e": 1,
+          "sha256:595f6bc4b5b867c2510ca9a27667a85913faebded626df7d2b8e36433d30c26d": 1,
+          "sha256:1ff1cd9600c06d5af2d2d306c3aec2b72e2eebd00b4147e8c6d422df082ae763": 1,
+          "sha256:96326336963266a73c30c08b04e44b8a2fc4410dd965636dfd7e95e82bc4d64a": 1,
+          "sha256:b63ed774ef025318200816e13f5fa2044936582057e52e3ce71c5aee3c10b90a": 1,
+          "sha256:8470ed7f46531214d08124a617e702904dd381a4e89ca316e2a220d4dab6606f": 1,
+          "sha256:7065a9706d8d5f7a18c87fe5ff5da91bb40c260558e31512ec513bb09314faaa": 1
+        }
+      },
+      "narrative_arc": [
+        "problem",
+        "innovation",
+        "mechanism",
+        "impact"
+      ],
+      "beat_count": 20,
+      "actual_category": "Technology",
+      "composite_score": 9.46,
+      "discovery_source": "wikipedia_search:technology"
+    },
+    {
+      "mode": "upstream_discovery_storyboard",
+      "requested_category": "Psychology",
+      "actual_category": "Psychology",
+      "topic_title": "Na\u00efve realism (psychology)",
+      "composite_score": 9.27,
+      "score_breakdown": {
+        "curiosity": 9.4,
+        "novelty": 8.5,
+        "storytelling": 9.3,
+        "factual_reliability": 9.6,
+        "visual_availability": 8.7,
+        "audience_relevance": 8.9,
+        "short_form_suitability": 9.2,
+        "freshness": 9.8
+      },
+      "discovery_source": "wikipedia_search:psychology",
+      "word_count": 108,
+      "acquired_assets_count": 2,
+      "acq_stats": {
+        "unique_images": 2,
+        "authentic_images_acquired": 2,
+        "existing_animations_acquired": 0,
+        "rejected_license_count": 7,
+        "failed_acquisitions": 0,
+        "failed_providers": []
+      },
+      "attribution_count": 2,
+      "subtitles_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_psychology_20261111_152005_3\\scripts\\subtitles_val_3_21m_psychology_20261111_152005_3.ass",
+      "manifest_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_psychology_20261111_152005_3\\production_manifest.json",
+      "production_id": "val_3_21m_psychology_20261111_152005_3",
+      "production_dir": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_psychology_20261111_152005_3",
+      "visual_sourcing_summary": {
+        "authentic_images_acquired": 2,
+        "existing_animations_acquired": 0,
+        "priority_a_photo_beats": 2,
+        "priority_b_existing_anim_beats": 0,
+        "priority_c_animated_authentic_beats": 2,
+        "priority_d_generated_image_beats": 5,
+        "priority_d_bespoke_anim_beats": 11,
+        "max_source_photo_reuse": 2
+      },
+      "visual_diversity_audit": {
+        "is_valid": true,
+        "distinct_assets": 19,
+        "unique_images": 6,
+        "unique_animations": 13,
+        "max_reuse_observed": 2,
+        "reuse_counts": {
+          "sha256:dd6413a4c49c2d050c18f3ad474770f90b9aa5e40ba5ec6af242252afcc9d335": 2,
+          "sha256:2c1629c3ea5190dacb68f208e82b98be9ca244935ad7856b0c6793af681bb48f": 1,
+          "sha256:76573ddab25b78ba04550087c2cef34acc2be15d8f53a40486f9f3ba453e92ec": 1,
+          "sha256:a0547c8eb1f4ac733dce197ae4e2431b79d84072c6ed2f5c8b58acd46faec38b": 1,
+          "sha256:7e2a18708cfcd56cd5fe853df248fc21e8df34dac7dba4297aca629fa357f7d3": 1,
+          "sha256:d69d2521652dbfb9d965cb692ce81cb2bd1c18187e0d97eee0d3a937eac1ead1": 1,
+          "sha256:5eace64a0c13acaed6830da2d12dd0170b0647c3bb5b1dd1821479168acfc343": 1,
+          "sha256:d7f0a2d40257e5a89fda1c89dfb17a353ec3d6e2e2a86aff3b45ed8ef6ed9144": 1,
+          "sha256:b9ba58084e2d12cab7425cf313ede503d9f930137577e1e99267d3dd55ea94b7": 1,
+          "sha256:9753a7ebbc5165993c41c01f5766b17198c73a9cf749580c77e8170dad270940": 1,
+          "sha256:c38e44a7eaa76dc404e4cd0de287e120f117797f7ff045e4e55ea1e0afdaaf10": 1,
+          "sha256:67c94a6479c085f4ffa6f69319498ffd3110314091b41a8d28b340fcf932e592": 1,
+          "sha256:9d428659c072144f3326cfe43d8041d7b0586fd1f0f55d8d7ac1dfef645fb0f3": 1,
+          "sha256:8be421cdb043e75aad54c56c5cd54447f9e306defd94075fc7015f666396e027": 1,
+          "sha256:061fcc7482263d43f1ad723adf88b6f41ef3297c65812a292162dcdeff949cda": 1,
+          "sha256:e965dc06f1d0c9b40cfbf935ee40254e2ba0847ba14263ea84231f2be70fa11c": 1,
+          "sha256:0029fcfb914e80cf52a5550084f2e3e34fd36b1f593fe3a925565b2b398c882f": 1,
+          "sha256:6727f723c83d2e0072434056982824238f017c7e1680ca4abdb341b3569a9ea3": 1,
+          "sha256:4f18db6b4cc4efd56703fe01951fd7b7230624020947c11b895527c4b0a6f506": 1
+        }
+      },
+      "narrative_arc": [
+        "relatable_phenomenon",
+        "explanation",
+        "evidence",
+        "implication"
+      ],
+      "beat_count": 20
+    },
+    {
+      "mode": "upstream_discovery_storyboard",
+      "requested_category": "Nature and Wildlife",
+      "actual_category": "Nature and Wildlife",
+      "topic_title": "Pakistan",
+      "composite_score": 9.46,
+      "score_breakdown": {
+        "curiosity": 9.4,
+        "novelty": 9.2,
+        "storytelling": 9.3,
+        "factual_reliability": 9.6,
+        "visual_availability": 9.4,
+        "audience_relevance": 8.9,
+        "short_form_suitability": 9.2,
+        "freshness": 9.7
+      },
+      "discovery_source": "wikipedia_search:nature_and_wildlife",
+      "word_count": 128,
+      "acquired_assets_count": 8,
+      "acq_stats": {
+        "unique_images": 8,
+        "authentic_images_acquired": 8,
+        "existing_animations_acquired": 0,
+        "rejected_license_count": 10,
+        "failed_acquisitions": 0,
+        "failed_providers": []
+      },
+      "attribution_count": 8,
+      "subtitles_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_nature_20261111_152005_4\\scripts\\subtitles_val_3_21m_nature_20261111_152005_4.ass",
+      "manifest_path": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_nature_20261111_152005_4\\production_manifest.json",
+      "production_id": "val_3_21m_nature_20261111_152005_4",
+      "production_dir": "D:\\Agents\\CrazzyDocs\\media\\productions\\val_3_21m_nature_20261111_152005_4",
+      "visual_sourcing_summary": {
+        "authentic_images_acquired": 8,
+        "existing_animations_acquired": 0,
+        "priority_a_photo_beats": 8,
+        "priority_b_existing_anim_beats": 0,
+        "priority_c_animated_authentic_beats": 4,
+        "priority_d_generated_image_beats": 3,
+        "priority_d_bespoke_anim_beats": 5,
+        "max_source_photo_reuse": 2
+      },
+      "visual_diversity_audit": {
+        "is_valid": true,
+        "distinct_assets": 18,
+        "unique_images": 9,
+        "unique_animations": 9,
+        "max_reuse_observed": 2,
+        "reuse_counts": {
+          "sha256:09551e4a063b21c8a1da9e6ae800a32a8d5abe1af21e947784df71bfc1986bb5": 2,
+          "sha256:c1146bfd43c95ef74c4c450df45ac80ae47c0ac4ceeb99d2c289d8aaaa9999c4": 1,
+          "sha256:0e3d897c9a84c6b4a3eb056c07b060cb1f9ebd07d46fd7ffafc6cbe97538dffb": 1,
+          "sha256:3f106f8363348dc4fbcb81e8ff8ddc19ed73e7966c4825256dc5434087851bb1": 1,
+          "sha256:26b096936cd8e0fa5cfb822b40191357e5ab9e7d27e73235d9a3c2757b31f064": 1,
+          "sha256:509fa1c2cd25bbe48d27485aa21f5b4d5ad2ccc3fafa26e0bdbece04972d9c41": 2,
+          "sha256:90119a1aa44f6cc41567d0d3bc154e05851561bab9bbaf03863635cdeed3ba98": 1,
+          "sha256:946a0f128d92ce69240eb2bbc5dd1f4d790eabfd526020701fab1fed0ea5f6ee": 1,
+          "sha256:ed65ffebaad8b86902b28b75e71a54555099afd5e9d2ea67e963e8244e0315a1": 1,
+          "sha256:ec4a72e3308883fb8c0fe261b9699ef0beee322e1abf903d30c1c3986f930a46": 1,
+          "sha256:513aa2a6a28bd9e4f473878c4d72cb2a344d3062fb7b8a941de6063e7342555d": 1,
+          "sha256:c585d5fd8a3c1fddce6a6949b63d7b1afa589684f305a1ceb247730c91053656": 1,
+          "sha256:0f32b8be7b8d979ad07b3d0c4702e5519c75f411ea82189bf8701b199cec1e33": 1,
+          "sha256:78474f8cbc41f69f9c4e3968fa37bec21adf87b46ab44501d4bfbd8f5f7aa2be": 1,
+          "sha256:4f895a7e627c11245592bc688dc011942518f3c1215fb3bb3c613bbdf1417e74": 1,
+          "sha256:298163e5337006e17ffd924e4e39becb5e538ac08d0091bb38118d8df9bc1194": 1,
+          "sha256:cca30085e0a9c51490f899aecb7be12ed356de0900cbc82ccb8564952b3c5274": 1,
+          "sha256:ad51da0944aee99842c1166d35a39d3277cb37c7a74259a963ca04a525cb1cb8": 1
+        }
+      },
+      "narrative_arc": [
+        "unusual_behavior",
+        "biological_mechanism",
+        "surprising_adaptation",
+        "ecological_payoff"
+      ],
+      "beat_count": 20
+    }
+  ]
+}

@@ -13,6 +13,8 @@ class LicenseType(str, Enum):
     PUBLIC_DOMAIN = "Public Domain"
     US_GOV_PD = "US Government Work"
     CC_BY = "CC BY"
+    PEXELS = "Pexels License"
+    PIXABAY = "Pixabay License"
     CC_BY_NC = "CC BY-NC"
     CC_BY_ND = "CC BY-ND"
     CC_BY_SA = "CC BY-SA"
@@ -50,12 +52,20 @@ class MediaAsset:
     verification_status: LicenseStatus = LicenseStatus.PENDING
     rejection_reason: Optional[str] = None
     search_query: Optional[str] = None
+    asset_type: str = "image"         # "image", "existing_animation", "animated_gif", "video", "generated_illustration"
+    download_timestamp: str = ""
+    original_filename: str = ""
+    usage_restrictions: str = "None (Commercial Use Permitted)"
+    attribution_requirements: str = "Credit creator/source in manifest and video description"
+    modification_permitted: bool = True
+    share_alike_compatible: bool = True
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["license_type"] = self.license_type.value
         d["verification_status"] = self.verification_status.value
+        d["sha256"] = self.asset_hash or ""
         return d
 
 
@@ -70,6 +80,14 @@ class AttributionItem:
     license_url: str
     modifications: str = "Adapted and cropped to 9:16 portrait video"
     verified: bool = True
+    asset_id: str = ""
+    asset_type: str = "image"
+    download_timestamp: str = ""
+    original_filename: str = ""
+    sha256: str = ""
+    usage_restrictions: str = "None (Commercial Use Permitted)"
+    attribution_requirements: str = "Credit creator and source"
+    modification_permitted: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -35,6 +35,12 @@ class LicenseVerifier:
 
         norm = raw_license.strip().lower()
 
+        # Commercial Stock Licenses (Pexels / Pixabay)
+        if "pexels" in norm:
+            return LicenseType.PEXELS, "Pexels License"
+        if "pixabay" in norm:
+            return LicenseType.PIXABAY, "Pixabay License"
+
         # CC0
         if norm in ("cc0", "cc0 1.0", "cc-zero"):
             return LicenseType.CC0, "CC0 1.0 Universal"
@@ -122,7 +128,7 @@ class LicenseVerifier:
         lic_type, lic_name = self.normalize_license(raw_license)
 
         # 4. License Policy Enforcement
-        if lic_type in (LicenseType.CC0, LicenseType.PUBLIC_DOMAIN, LicenseType.US_GOV_PD):
+        if lic_type in (LicenseType.CC0, LicenseType.PUBLIC_DOMAIN, LicenseType.US_GOV_PD, LicenseType.PEXELS, LicenseType.PIXABAY):
             return LicenseStatus.APPROVED, lic_type, lic_name, None
 
         if lic_type == LicenseType.CC_BY:

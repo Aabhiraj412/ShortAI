@@ -37,7 +37,7 @@ class WikimediaProvider(BaseMediaProvider):
 
     def _parse_commons_pages(self, pages: dict, query: str) -> List[MediaAsset]:
         assets: List[MediaAsset] = []
-        allowed_mimes = {"image/jpeg", "image/png", "image/webp"}
+        allowed_mimes = {"image/jpeg", "image/png", "image/webp", "image/gif", "video/webm"}
         for page_id, page in pages.items():
             imageinfo_list = page.get("imageinfo", [])
             if not imageinfo_list:
@@ -51,8 +51,12 @@ class WikimediaProvider(BaseMediaProvider):
             orig_url = info.get("url", "")
             thumb_url = info.get("thumburl", "")
             orig_w = int(info.get("width") or 0)
-            # Prefer 1280px Wikimedia thumb when original is large or available to reduce 429 rate-limits
-            download_url = thumb_url if (thumb_url and (orig_w > 1400 or not orig_url)) else orig_url
+            is_open_anim = mime in ("image/gif", "video/webm")
+            # For animations/videos keep original stream; for oversized images prefer 1280px Wikimedia thumb
+            if is_open_anim:
+                download_url = orig_url or thumb_url
+            else:
+                download_url = thumb_url if (thumb_url and (orig_w > 1400 or not orig_url)) else orig_url
             if not download_url:
                 continue
 
@@ -97,6 +101,8 @@ class WikimediaProvider(BaseMediaProvider):
                 height=int(info.get("thumbheight") or int(info.get("height") or 0)),
                 file_size_bytes=int(info.get("size") or 0),
                 mime_type=mime or "image/jpeg",
+                asset_type="existing_animation" if mime in ("image/gif", "video/webm") else "image",
+                original_filename=raw_title,
                 verification_status=status,
                 rejection_reason=reason,
                 search_query=query

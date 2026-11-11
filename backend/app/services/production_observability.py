@@ -120,22 +120,61 @@ class ProductionObservabilityStore:
     def _load_file(self, path: str) -> Dict[str, Any]:
         if not os.path.isfile(path):
             return self._empty_state()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and isinstance(data.get("productions"), dict):
-                data.setdefault("order", list(data["productions"].keys()))
-                return data
-        except Exception:
-            pass
+        for attempt in range(4):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("productions"), dict):
+                    data.setdefault("order", list(data["productions"].keys()))
+                    return data
+            except PermissionError:
+                if attempt < 3:
+                    time.sleep(0.015 * (attempt + 1))
+                    continue
+            except Exception:
+                if attempt < 2:
+                    time.sleep(0.01)
+                    continue
+                break
         return self._empty_state()
 
     def _save_file(self, path: str, state: Dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = json.dumps(state, indent=2)
         tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
-        os.replace(tmp_path, path)
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(payload)
+            last_exc: Optional[Exception] = None
+            for attempt in range(12):
+                try:
+                    os.replace(tmp_path, path)
+                    return
+                except PermissionError as exc:
+                    last_exc = exc
+                    time.sleep(min(0.12, 0.015 * (attempt + 1)))
+                except OSError as exc:
+                    last_exc = exc
+                    if getattr(exc, "winerror", None) in (5, 32):
+                        time.sleep(min(0.12, 0.015 * (attempt + 1)))
+                    else:
+                        raise
+            # Final in-place fallback if Windows reader briefly locks rename target
+            for attempt in range(5):
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(payload)
+                    return
+                except PermissionError:
+                    time.sleep(0.02 * (attempt + 1))
+            if last_exc is not None:
+                raise last_exc
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     def reload_from_disk(self) -> None:
         """Reloads persisted JSON state from disk (verifying restart durability)."""
@@ -242,6 +281,20 @@ class ProductionObservabilityStore:
                     "reused_images": 0,
                     "max_allowed_reuse": 2,
                     "status": "PENDING",
+                },
+                "creative": {
+                    "category": "",
+                    "supported_categories_count": 20,
+                    "category_distribution": {},
+                    "topic_score_breakdown": {},
+                    "authentic_images_acquired": 0,
+                    "existing_animations_acquired": 0,
+                    "animated_authentic_composites": 0,
+                    "generated_images": 0,
+                    "bespoke_animations": 0,
+                    "license_verified_count": 0,
+                    "rejected_license_count": 0,
+                    "attribution_completeness_pct": 0.0,
                 },
                 "rendering": {
                     "current_operation": "Waiting for storyboard...",
@@ -402,6 +455,56 @@ class ProductionObservabilityStore:
                 f"Assets: {assets['unique_images']} acquired, {assets['generated_images']} generated, {assets['animations']} animations",
                 dict(assets),
             )
+            self._save_file(path, state)
+
+    def update_creative_intelligence(
+        self,
+        production_id: str,
+        *,
+        category: Optional[str] = None,
+        supported_categories_count: Optional[int] = None,
+        category_distribution: Optional[Dict[str, int]] = None,
+        topic_score_breakdown: Optional[Dict[str, Any]] = None,
+        authentic_images_acquired: Optional[int] = None,
+        existing_animations_acquired: Optional[int] = None,
+        animated_authentic_composites: Optional[int] = None,
+        generated_images: Optional[int] = None,
+        bespoke_animations: Optional[int] = None,
+        license_verified_count: Optional[int] = None,
+        rejected_license_count: Optional[int] = None,
+        attribution_completeness_pct: Optional[float] = None,
+    ) -> None:
+        with self._lock:
+            path, state, _ = self._select_store(production_id)
+            record = state["productions"].get(production_id)
+            if not record:
+                return
+            cr = record.setdefault("creative", {})
+            if category is not None:
+                cr["category"] = str(category)
+            if supported_categories_count is not None:
+                cr["supported_categories_count"] = int(supported_categories_count)
+            if category_distribution is not None:
+                cr["category_distribution"] = dict(category_distribution)
+            if topic_score_breakdown is not None:
+                cr["topic_score_breakdown"] = dict(topic_score_breakdown)
+            if authentic_images_acquired is not None:
+                cr["authentic_images_acquired"] = int(authentic_images_acquired)
+            if existing_animations_acquired is not None:
+                cr["existing_animations_acquired"] = int(existing_animations_acquired)
+            if animated_authentic_composites is not None:
+                cr["animated_authentic_composites"] = int(animated_authentic_composites)
+            if generated_images is not None:
+                cr["generated_images"] = int(generated_images)
+            if bespoke_animations is not None:
+                cr["bespoke_animations"] = int(bespoke_animations)
+            if license_verified_count is not None:
+                cr["license_verified_count"] = int(license_verified_count)
+            if rejected_license_count is not None:
+                cr["rejected_license_count"] = int(rejected_license_count)
+            if attribution_completeness_pct is not None:
+                cr["attribution_completeness_pct"] = round(float(attribution_completeness_pct), 1)
+            record["last_updated"] = _utc_iso()
             self._save_file(path, state)
 
     def update_rendering(
@@ -675,6 +778,7 @@ class ProductionObservabilityStore:
                     "overall_progress": h["overall_progress"],
                     "current_stage": h["current_stage"],
                     "assets": h["assets"],
+                    "creative": h.get("creative", {}),
                     "started_at": h["started_at"],
                     "last_updated": h["last_updated"],
                     "completed_at": h.get("completed_at"),

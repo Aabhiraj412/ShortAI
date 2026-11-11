@@ -32,6 +32,11 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from backend.app.content.creative_production_policy import (
+    CategoryDistributionTracker,
+    CreativeProductionPolicy,
+    get_creative_production_policy,
+)
 from backend.app.content.topic_ledger import TopicLedger
 from backend.app.content.validation_topic_history import (
     compute_research_fingerprint,
@@ -296,27 +301,31 @@ class ScoredTopic:
     discovery_source: str = "curated"
     coordinates: Optional[Dict[str, float]] = None
     research_fingerprint: str = ""
+    score_breakdown: Dict[str, float] = field(default_factory=dict)
     discovery_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class CuriosityTopicEngine:
-    """Discovers, scores, and selects high-curiosity video topics across 5 categories."""
+    """Discovers, scores, and selects high-curiosity video topics across 20+ configurable categories."""
 
-    DISCOVERY_SEARCH_QUERIES: Tuple[str, ...] = (
-        "deep ocean shipwreck expedition discovery",
-        "engineering failure bridge tunnel collapse history",
-        "spacecraft anomaly telescope astronomical discovery",
-        "historic financial crisis market crash corporation",
-        "archaeological discovery lost city submarine",
-        "scientific physics radiation laboratory accident",
-        "extreme survival antarctica mountaineering rescue",
-        "volcano eruption atmospheric anomaly history",
+    DISCOVERY_SEARCH_QUERIES: Tuple[str, ...] = tuple(
+        q for spec in get_creative_production_policy().list_categories() for q in spec.search_queries[:1]
     )
 
-    def __init__(self, ledger: Optional[TopicLedger] = None, cooldown_days: int = 30):
+    def __init__(
+        self,
+        ledger: Optional[TopicLedger] = None,
+        cooldown_days: int = 30,
+        policy: Optional[CreativeProductionPolicy] = None,
+        category_tracker: Optional[CategoryDistributionTracker] = None,
+    ):
         self.ledger = ledger or TopicLedger()
         self.cooldown_days = cooldown_days
+        self.policy = policy or get_creative_production_policy()
+        self.category_tracker = category_tracker or CategoryDistributionTracker()
         self.last_discovery_audit: List[Dict[str, Any]] = []
+        self.last_failed_providers: List[Dict[str, str]] = []
+        self.last_discovery_summary: Dict[str, Any] = {}
 
     def _recent_sources_and_categories(self) -> Tuple[List[str], List[str]]:
         """Inspects recent validation & ledger items to encourage source/category rotation."""
@@ -367,28 +376,10 @@ class CuriosityTopicEngine:
         return round(best, 3), reason
 
     def score_candidate(self, cand: Dict) -> ScoredTopic:
-        """Computes 6-dimensional weighted score plus novelty & collision checks."""
-        w_curiosity = 0.25
-        w_surprise = 0.20
-        w_storytelling = 0.20
-        w_visual = 0.15
-        w_emotional = 0.10
-        w_factual = 0.10
-
-        base_composite = round(
-            cand["curiosity"] * w_curiosity +
-            cand["surprise"] * w_surprise +
-            cand["storytelling"] * w_storytelling +
-            cand["visual_potential"] * w_visual +
-            cand["emotional_connection"] * w_emotional +
-            cand["factual_reliability"] * w_factual,
-            2
-        )
-
-        # Factual reliability gate: minimum 7.5/10
-        if cand["factual_reliability"] < 7.5:
-            base_composite = 0.0
-
+        """
+        Computes transparent 8-dimension engagement & suitability score plus novelty,
+        soft category-distribution adjustment, and collision checks.
+        """
         research_fp = cand.get("research_fingerprint") or compute_research_fingerprint(
             summary=cand.get("summary", ""),
             extended_extract=cand.get("extended_extract", ""),
@@ -408,17 +399,76 @@ class CuriosityTopicEngine:
         )
 
         recent_sources, recent_cats = self._recent_sources_and_categories()
+        dist_recent = self.category_tracker.recent_categories(window=6)
+        merged_recent_cats = recent_cats + [c for c in dist_recent if c not in recent_cats[-2:]] if dist_recent else recent_cats
         src_name = cand.get("discovery_source", "curated")
         cat_name = cand.get("category", "")
         sim_score, _ = self._highest_historical_similarity(cand)
 
-        novelty_score = round(max(0.0, 10.0 * (1.0 - sim_score)), 2)
+        img_count = len(cand.get("image_urls") or [])
+        extract_len = len(cand.get("extended_extract") or cand.get("summary") or "")
+        bullets_count = len(cand.get("factual_bullets") or [])
+
+        # Derive explicit 8-dimension ratings (0..10 scale)
+        curiosity_dim = float(cand.get("curiosity", 8.5))
+        novelty_dim = float(cand.get("surprise", 8.5))
+        if sim_score > 0:
+            novelty_dim = round(max(0.0, min(novelty_dim, 10.0 * (1.0 - sim_score))), 2)
+        storytelling_dim = float(cand.get("storytelling", 8.5))
+        factual_dim = float(cand.get("factual_reliability", 9.0))
+        visual_avail_dim = float(cand.get("visual_potential", 8.0))
+        if img_count >= 5:
+            visual_avail_dim = max(visual_avail_dim, 9.4)
+        elif img_count >= 2:
+            visual_avail_dim = max(visual_avail_dim, 8.8)
+        elif img_count == 0 and src_name != "curated":
+            visual_avail_dim = min(visual_avail_dim, 6.8)
+
+        audience_dim = float(cand.get("audience_relevance", cand.get("emotional_connection", 8.6)))
+        # Short-form suitability favors tight, crisp 50-60s factual arcs
+        short_suit_dim = float(
+            cand.get(
+                "short_form_suitability",
+                9.2 if (extract_len >= 450 and bullets_count >= 4) else (8.4 if extract_len >= 250 else 6.5),
+            )
+        )
+        freshness_dim = round(max(0.0, 10.0 * (1.0 - max(sim_score, dup_score if is_dup else 0.0))), 2)
+
+        weights = self.policy.scoring_weights.normalized()
+        score_breakdown = {
+            "curiosity": round(curiosity_dim, 2),
+            "novelty": round(novelty_dim, 2),
+            "storytelling": round(storytelling_dim, 2),
+            "factual_reliability": round(factual_dim, 2),
+            "visual_availability": round(visual_avail_dim, 2),
+            "audience_relevance": round(audience_dim, 2),
+            "short_form_suitability": round(short_suit_dim, 2),
+            "freshness": round(freshness_dim, 2),
+        }
+
+        base_composite = round(sum(score_breakdown[k] * weights[k] for k in weights), 2)
+
+        # Factual & suitability gates: reject low-reliability or non-visual empty stubs
+        total_text_chars = (
+            len(cand.get("summary") or "")
+            + len(cand.get("extended_extract") or "")
+            + sum(len(str(b)) for b in (cand.get("factual_bullets") or []))
+        )
+        if factual_dim < 7.5:
+            base_composite = 0.0
+        elif src_name != "curated" and total_text_chars < 80:
+            base_composite = 0.0
+
+        cat_penalty = self.category_tracker.compute_soft_recency_penalty(cat_name, recent_override=merged_recent_cats)
         src_diversity_adj = 0.0
         if src_name != "curated":
-            src_diversity_adj += -0.20 if recent_sources and recent_sources[-1] == src_name else 0.15
-            if cat_name:
-                src_diversity_adj += -0.15 if recent_cats and recent_cats[-1] == cat_name else 0.10
-            final_composite = round(max(0.0, base_composite + src_diversity_adj - (sim_score * 0.4)), 2) if base_composite > 0 else 0.0
+            src_diversity_adj += -0.15 if recent_sources and recent_sources[-1] == src_name else 0.12
+            # Exceptional topics (>= 9.15) are still allowed to overcome mild category recency
+            final_composite = (
+                round(max(0.0, base_composite + src_diversity_adj - cat_penalty - (sim_score * 0.35)), 2)
+                if base_composite > 0
+                else 0.0
+            )
         else:
             final_composite = base_composite
 
@@ -427,31 +477,36 @@ class CuriosityTopicEngine:
             "discovery_timestamp": cand.get("discovery_timestamp") or datetime.now(timezone.utc).isoformat(),
             "publication_or_update_timestamp": cand.get("publication_timestamp") or "",
             "research_availability": {
-                "extract_chars": len(cand.get("extended_extract") or cand.get("summary") or ""),
-                "factual_bullets": len(cand.get("factual_bullets") or []),
-                "image_candidates": len(cand.get("image_urls") or []),
+                "extract_chars": extract_len,
+                "factual_bullets": bullets_count,
+                "image_candidates": img_count,
                 "sources_count": len(cand.get("sources") or []),
             },
-            "factual_confidence": cand["factual_reliability"],
-            "novelty_score": novelty_score,
+            "score_breakdown": score_breakdown,
+            "scoring_weights": weights,
+            "category_recency_penalty": cat_penalty,
+            "scoring_disclaimer": "Estimates storytelling and engagement suitability; does not predict or guarantee viral view counts.",
+            "factual_confidence": factual_dim,
+            "novelty_score": freshness_dim,
             "semantic_similarity": max(sim_score, round(dup_score, 3)) if is_dup else sim_score,
             "curiosity_score": base_composite,
             "final_score": final_composite,
             "topic_fingerprint": topic_fp,
         }
 
+        resolved_code = cand.get("category_code") or self.policy.get_category(cat_name).category_code
         return ScoredTopic(
             id=cand["id"],
             title=cand["title"],
-            category=cand["category"],
-            category_code=cand["category_code"],
-            summary=cand["summary"],
-            curiosity=cand["curiosity"],
-            surprise=cand["surprise"],
-            storytelling=cand["storytelling"],
-            visual_potential=cand["visual_potential"],
-            emotional_connection=cand["emotional_connection"],
-            factual_reliability=cand["factual_reliability"],
+            category=cat_name,
+            category_code=resolved_code,
+            summary=cand.get("summary", ""),
+            curiosity=float(cand.get("curiosity", curiosity_dim)),
+            surprise=float(cand.get("surprise", novelty_dim)),
+            storytelling=float(cand.get("storytelling", storytelling_dim)),
+            visual_potential=float(cand.get("visual_potential", visual_avail_dim)),
+            emotional_connection=float(cand.get("emotional_connection", audience_dim)),
+            factual_reliability=float(cand.get("factual_reliability", factual_dim)),
             composite_score=final_composite,
             sources=cand.get("sources", []),
             key_entities=cand.get("key_entities", []),
@@ -463,6 +518,7 @@ class CuriosityTopicEngine:
             discovery_source=src_name,
             coordinates=cand.get("coordinates"),
             research_fingerprint=research_fp,
+            score_breakdown=score_breakdown,
             discovery_metadata=meta,
         )
 
@@ -535,16 +591,8 @@ class CuriosityTopicEngine:
 
     @staticmethod
     def _infer_category(title: str, text: str) -> Tuple[str, str]:
-        blob = f"{title} {text}".lower()
-        if any(k in blob for k in ("nasa", "telescope", "orbit", "spacecraft", "physics", "quantum", "discovery", "volcano", "geolog", "observatory", "rocket", "mission", "patent", "invented")):
-            return "Science & Technology", "C"
-        if any(k in blob for k in ("ship", "expedition", "survived", "rescue", "crash", "wreck", "submarine", "atlantic", "antarctica", "mount")):
-            return "Unbelievable Real-Life Stories", "B"
-        if any(k in blob for k in ("company", "bank", "market", "billion", "million", "factory", "patent", "corporation", "trade")):
-            return "Corporate & Financial Stories", "D"
-        if any(k in blob for k in ("mystery", "disappear", "crypt", "signal", "unexplained", "cipher", "code")):
-            return "Mysteries & Unexplained Events", "E"
-        return "Strange but True History", "A"
+        spec = get_creative_production_policy().classify_topic(title, text)
+        return spec.display_name, spec.category_code
 
     def enrich_wikipedia_candidate(
         self,
@@ -684,17 +732,25 @@ class CuriosityTopicEngine:
             logger.debug("Wikipedia enrichment failed for '%s': %s", wiki_title, e)
             return None
 
-    def discover_live_candidates(self, max_candidates: int = 12) -> List[Dict]:
-        """Discovers genuine, fresh documentary topics from diverse live external feeds."""
-        recent_sources, _ = self._recent_sources_and_categories()
+    def discover_live_candidates(
+        self,
+        max_candidates: int = 12,
+        preferred_category: Optional[str] = None,
+    ) -> List[Dict]:
+        """Discovers genuine, fresh documentary topics from diverse live external multi-category feeds."""
+        self.last_failed_providers = []
+        recent_sources, recent_cats = self._recent_sources_and_categories()
+        dist_recent = self.category_tracker.recent_categories(window=12)
+        all_recent_cats = recent_cats + dist_recent
         vh = getattr(self.ledger, "validation_history", None)
         history_offset = len(vh.load_records()) if vh is not None else 0
 
-        source_buckets: Dict[str, List[Tuple[str, str, str]]] = {
+        source_buckets: Dict[str, List[Tuple[str, str, str, Optional[str]]]] = {
             "wikipedia_search": [],
-            "wikipedia_onthisday": [],
+            "nasa_library": [],
             "wikipedia_tfa": [],
             "wikipedia_mostread": [],
+            "wikipedia_onthisday": [],
         }
         rss_candidates: List[Dict] = []
 
@@ -704,60 +760,32 @@ class CuriosityTopicEngine:
             "actor", "actress", "singer", "rapper", "politician", "television", "footballer",
         )
         preferred_terms = (
-            "space", "expedition", "ship", "bridge", "telescope", "discovery",
-            "earthquake", "volcano", "submarine", "observatory", "apollo",
-            "voyager", "invention", "tunnel", "dam", "nuclear", "ocean", "wreck",
+            "science", "physics", "biology", "psychology", "technology", "algorithm",
+            "engineering", "space", "telescope", "discovery", "medical", "climate",
+            "ocean", "glacier", "bridge", "invention", "cybersecurity", "mathematics",
         )
 
-        # 1. Wikipedia Featured / On-This-Day Feed rotated across recent days to avoid same-day lock-in
-        now_utc = datetime.now(timezone.utc)
-        day_offsets = [1, 3, 7]
-        rotated_offsets = day_offsets[history_offset % len(day_offsets):] + day_offsets[:history_offset % len(day_offsets)]
-        for d_off in rotated_offsets[:2]:
-            try:
-                ref_dt = now_utc - timedelta(days=d_off)
-                feed_url = f"https://en.wikipedia.org/api/rest_v1/feed/featured/{ref_dt.strftime('%Y/%m/%d')}"
-                feed = self._http_get_json(feed_url, timeout=10.0) or {}
+        # 1. Select diverse multi-category queries favoring under-represented categories
+        all_specs = self.policy.list_categories()
+        if preferred_category:
+            target_spec = self.policy.get_category(preferred_category)
+            selected_specs = [target_spec]
+        else:
+            recent_lower = [c.lower() for c in all_recent_cats[-8:]]
+            cat_freq = {s.key: sum(1 for c in recent_lower if c == s.display_name.lower()) for s in all_specs}
+            non_hist = [s for s in all_specs if s.key != "history"]
+            hist_only = [s for s in all_specs if s.key == "history"]
+            ordered_specs = sorted(non_hist, key=lambda s: (cat_freq.get(s.key, 0), (all_specs.index(s) - history_offset) % max(1, len(all_specs))))
+            if ordered_specs:
+                selected_specs = ordered_specs[:4]
+                if not hist_only or cat_freq.get("history", 0) == 0:
+                    selected_specs = ordered_specs[:3] + hist_only[:1]
+            else:
+                selected_specs = all_specs[:4]
 
-                scored_otd: List[Tuple[int, Dict]] = []
-                for ev in feed.get("onthisday", []):
-                    ev_text = self._clean_text(ev.get("text", ""))
-                    pages = ev.get("pages", [])
-                    if not pages or not ev_text:
-                        continue
-                    low_ev = ev_text.lower()
-                    if any(b in low_ev for b in blocked_terms):
-                        continue
-                    prio = sum(1 for p in preferred_terms if p in low_ev)
-                    scored_otd.append((prio, ev))
-
-                scored_otd.sort(key=lambda x: x[0], reverse=True)
-                for _, ev in scored_otd[:6]:
-                    for pg in ev.get("pages", [])[:2]:
-                        t = pg.get("title", "")
-                        if t and not t.isdigit():
-                            source_buckets["wikipedia_onthisday"].append((t, ev.get("text", ""), f"wikipedia_onthisday_{ref_dt.strftime('%m%d')}"))
-                            break
-
-                tfa = feed.get("tfa", {})
-                if tfa.get("title") and not any(b in tfa["title"].lower() for b in blocked_terms):
-                    source_buckets["wikipedia_tfa"].append((tfa["title"], "", f"wikipedia_tfa_{ref_dt.strftime('%m%d')}"))
-
-                for art in feed.get("mostread", {}).get("articles", [])[:12]:
-                    t = art.get("title", "")
-                    desc = (art.get("description") or "").lower()
-                    if not t or ":" in t or t.startswith("Main_Page") or t.startswith("List_of"):
-                        continue
-                    if any(b in desc or b in t.lower() for b in blocked_terms + ("deaths",)):
-                        continue
-                    source_buckets["wikipedia_mostread"].append((t, "", f"wikipedia_mostread_{ref_dt.strftime('%m%d')}"))
-            except Exception as e:
-                logger.warning("Wikipedia Featured Feed unavailable (offset=%s): %s", d_off, e)
-
-        # 2. Live Wikipedia Documentary Search Pool (rotates distinct scientific/historical queries per run)
-        q_count = len(self.DISCOVERY_SEARCH_QUERIES)
-        for q_step in range(2):
-            query_str = self.DISCOVERY_SEARCH_QUERIES[(history_offset + q_step) % q_count]
+        for s_idx, spec in enumerate(selected_specs):
+            q_list = spec.search_queries or [spec.display_name]
+            query_str = q_list[(history_offset + s_idx) % len(q_list)]
             try:
                 search_url = (
                     "https://en.wikipedia.org/w/api.php?action=query&list=search"
@@ -769,27 +797,88 @@ class CuriosityTopicEngine:
                     snip = self._clean_text(hit.get("snippet", ""))
                     if not t or t.startswith("List of") or any(b in t.lower() for b in blocked_terms):
                         continue
-                    source_buckets["wikipedia_search"].append((t, snip, f"wikipedia_search:{query_str.split()[0]}"))
+                    source_buckets["wikipedia_search"].append(
+                        (t, snip, f"wikipedia_search:{spec.key}", spec.display_name)
+                    )
             except Exception as e:
                 logger.warning("Wikipedia search discovery error (%s): %s", query_str, e)
+                self.last_failed_providers.append({"provider": f"wikipedia_search:{spec.key}", "error": str(e)})
 
-        # Interleave buckets round-robin, placing search & less-recently-used origins earlier for source diversity
-        bucket_order = ["wikipedia_search", "wikipedia_tfa", "wikipedia_mostread", "wikipedia_onthisday"]
-        if recent_sources and any("wikipedia_onthisday" in s for s in recent_sources[-2:]):
-            # Push onthisday after other sources if it dominated the previous runs
-            bucket_order = ["wikipedia_search", "wikipedia_mostread", "wikipedia_tfa", "wikipedia_onthisday"]
+        # 2. NASA Image & Video Library topic discovery for space/astronomy/earth coverage
+        if not preferred_category or self.policy.get_category(preferred_category).key in ("space_and_astronomy", "science", "geography", "environment_and_climate"):
+            try:
+                nasa_q = ["james webb exoplanet", "voyager interstellar", "mars rover crater", "black hole accretion"][history_offset % 4]
+                nasa_url = f"https://images-api.nasa.gov/search?q={urllib.parse.quote(nasa_q)}&media_type=image&page_size=4"
+                n_json = self._http_get_json(nasa_url, timeout=8.0) or {}
+                for n_item in n_json.get("collection", {}).get("items", [])[:3]:
+                    nd = (n_item.get("data") or [{}])[0]
+                    nt = str(nd.get("title") or "").strip()
+                    ndesc = self._clean_text(str(nd.get("description") or ""))
+                    if nt and len(ndesc) >= 120:
+                        wiki_seed = nasa_q.split()[0] + " " + " ".join(nt.split()[:3])
+                        source_buckets["nasa_library"].append((nt.split("(")[0].strip()[:60], ndesc[:240], "nasa_library", "Space and Astronomy"))
+            except Exception as e:
+                logger.info("NASA topic discovery unavailable: %s", e)
+                self.last_failed_providers.append({"provider": "nasa_library", "error": str(e)})
 
-        interleaved_proposals: List[Tuple[str, str, str]] = []
+        # 3. Wikipedia Featured / MostRead / OnThisDay (skip onthisday dominance for non-history categories)
+        if not preferred_category or self.policy.get_category(preferred_category).key == "history":
+            now_utc = datetime.now(timezone.utc)
+            day_offsets = [1, 3, 7]
+            rotated_offsets = day_offsets[history_offset % len(day_offsets):] + day_offsets[:history_offset % len(day_offsets)]
+            for d_off in rotated_offsets[:1]:
+                try:
+                    ref_dt = now_utc - timedelta(days=d_off)
+                    feed_url = f"https://en.wikipedia.org/api/rest_v1/feed/featured/{ref_dt.strftime('%Y/%m/%d')}"
+                    feed = self._http_get_json(feed_url, timeout=10.0) or {}
+
+                    tfa = feed.get("tfa", {})
+                    if tfa.get("title") and not any(b in tfa["title"].lower() for b in blocked_terms):
+                        source_buckets["wikipedia_tfa"].append((tfa["title"], "", f"wikipedia_tfa_{ref_dt.strftime('%m%d')}", None))
+
+                    for art in feed.get("mostread", {}).get("articles", [])[:10]:
+                        t = art.get("title", "")
+                        desc = (art.get("description") or "").lower()
+                        if not t or ":" in t or t.startswith("Main_Page") or t.startswith("List_of"):
+                            continue
+                        if any(b in desc or b in t.lower() for b in blocked_terms + ("deaths",)):
+                            continue
+                        source_buckets["wikipedia_mostread"].append((t, "", f"wikipedia_mostread_{ref_dt.strftime('%m%d')}", None))
+
+                    scored_otd: List[Tuple[int, Dict]] = []
+                    for ev in feed.get("onthisday", []):
+                        ev_text = self._clean_text(ev.get("text", ""))
+                        pages = ev.get("pages", [])
+                        if not pages or not ev_text:
+                            continue
+                        low_ev = ev_text.lower()
+                        if any(b in low_ev for b in blocked_terms):
+                            continue
+                        prio = sum(1 for p in preferred_terms if p in low_ev)
+                        scored_otd.append((prio, ev))
+                    scored_otd.sort(key=lambda x: x[0], reverse=True)
+                    for _, ev in scored_otd[:3]:
+                        for pg in ev.get("pages", [])[:1]:
+                            t = pg.get("title", "")
+                            if t and not t.isdigit():
+                                source_buckets["wikipedia_onthisday"].append((t, ev.get("text", ""), f"wikipedia_onthisday_{ref_dt.strftime('%m%d')}", "History"))
+                except Exception as e:
+                    logger.warning("Wikipedia Featured Feed unavailable (offset=%s): %s", d_off, e)
+                    self.last_failed_providers.append({"provider": "wikipedia_featured_feed", "error": str(e)})
+
+        # Interleave buckets keeping Wikipedia multi-category search & science/mostread ahead of onthisday
+        bucket_order = ["wikipedia_search", "nasa_library", "wikipedia_tfa", "wikipedia_mostread", "wikipedia_onthisday"]
+        interleaved_proposals: List[Tuple[str, str, str, Optional[str]]] = []
         max_len = max((len(source_buckets[k]) for k in bucket_order), default=0)
         for idx in range(max_len):
             for bk in bucket_order:
                 if idx < len(source_buckets[bk]):
                     interleaved_proposals.append(source_buckets[bk][idx])
 
-        # 3. Pre-filter known duplicate titles BEFORE enriching, so duplicate history cannot starve fresh candidates
+        # Pre-filter known duplicates before enrichment
         enriched_candidates: List[Dict] = []
         seen_titles = set()
-        for wiki_title, blurb, origin in interleaved_proposals:
+        for wiki_title, blurb, origin, hint_cat in interleaved_proposals:
             if len(enriched_candidates) >= max_candidates:
                 break
             norm_key = re.sub(r"\W+", "", wiki_title.lower())
@@ -808,51 +897,76 @@ class CuriosityTopicEngine:
 
             cand = self.enrich_wikipedia_candidate(wiki_title, event_blurb=blurb, discovery_origin=origin)
             if cand:
+                if hint_cat and not preferred_category:
+                    # Only retain classifier result if it has strong signal; otherwise allow category alignment
+                    classified_spec = self.policy.classify_topic(cand["title"], cand["extended_extract"])
+                    cand["category"] = classified_spec.display_name
+                    cand["category_code"] = classified_spec.category_code
+                elif preferred_category:
+                    pref_spec = self.policy.get_category(preferred_category)
+                    cand_spec = self.policy.classify_topic(cand["title"], cand["extended_extract"])
+                    if cand_spec.key == pref_spec.key or origin == f"wikipedia_search:{pref_spec.key}":
+                        cand["category"] = pref_spec.display_name
+                        cand["category_code"] = pref_spec.category_code
                 enriched_candidates.append(cand)
 
-        # 4. Phys.org Live Science, Space & Earth RSS Feeds
+        # 4. Phys.org Live Multi-Category RSS Feeds (Science, Technology, Space, Biology, Earth)
         disc_ts = datetime.now(timezone.utc).isoformat()
-        for feed_url, origin_tag in (
-            ("https://phys.org/rss-feed/space-news/", "physorg_space_rss"),
-            ("https://phys.org/rss-feed/science-news/", "physorg_science_rss"),
-            ("https://phys.org/rss-feed/earth-news/", "physorg_earth_rss"),
-        ):
+        rss_feeds = (
+            ("https://phys.org/rss-feed/science-news/", "physorg_science_rss", "Science", "SCI"),
+            ("https://phys.org/rss-feed/technology-news/", "physorg_tech_rss", "Technology", "TECH"),
+            ("https://phys.org/rss-feed/space-news/", "physorg_space_rss", "Space and Astronomy", "SPACE"),
+            ("https://phys.org/rss-feed/biology-news/", "physorg_biology_rss", "Nature and Wildlife", "NAT"),
+            ("https://phys.org/rss-feed/earth-news/", "physorg_earth_rss", "Environment and Climate", "ENV"),
+        )
+        for feed_url, origin_tag, rss_cat, rss_code in rss_feeds:
+            if preferred_category:
+                pref_key = self.policy.get_category(preferred_category).key
+                if self.policy.get_category(rss_cat).key != pref_key:
+                    continue
             try:
-                xml_txt = self._http_get_text(feed_url, timeout=10.0)
+                xml_txt = self._http_get_text(feed_url, timeout=8.0)
                 if not xml_txt:
                     continue
                 root = ET.fromstring(xml_txt)
                 items = root.findall(".//item")
-                for item in items[:4]:
+                for item in items[:3]:
                     title = self._clean_text(item.findtext("title", ""))
                     desc = self._clean_text(item.findtext("description", ""))
                     link = (item.findtext("link", "") or "").strip()
                     pub_date = (item.findtext("pubDate", "") or "").strip()
-                    if len(desc) < 120 or not link.startswith("http"):
+                    if len(desc) < 160 or not link.startswith("http"):
                         continue
                     sents = self._split_clean_sentences(desc)
-                    if len(sents) < 4:
+                    if len(sents) < 3:
                         continue
+                    thumb_urls: List[str] = []
+                    for child in item:
+                        if child.tag.endswith("thumbnail") or child.tag.endswith("enclosure"):
+                            u = child.attrib.get("url", "")
+                            if u.startswith("http"):
+                                thumb_urls.append(u)
+                    classified = self.policy.classify_topic(title, desc)
                     slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:36]
                     ents = self._extract_entities(title, desc)
                     src_list = [f"Phys.org Science Archive Source: {link}"]
                     rss_candidates.append({
                         "id": f"rss_{slug}",
                         "title": title,
-                        "category": "Science & Technology",
-                        "category_code": "C",
+                        "category": classified.display_name if classified else rss_cat,
+                        "category_code": classified.category_code if classified else rss_code,
                         "summary": desc,
                         "extended_extract": desc,
                         "factual_bullets": sents if sents else [desc],
                         "curiosity": 8.9,
                         "surprise": 8.8,
                         "storytelling": 8.5,
-                        "visual_potential": 8.8,
-                        "emotional_connection": 8.3,
-                        "factual_reliability": 9.2,
+                        "visual_potential": 8.8 if thumb_urls else 8.1,
+                        "emotional_connection": 8.4,
+                        "factual_reliability": 9.1,
                         "sources": src_list,
                         "key_entities": ents,
-                        "image_urls": [],
+                        "image_urls": thumb_urls,
                         "discovery_source": origin_tag,
                         "discovery_timestamp": disc_ts,
                         "publication_timestamp": pub_date,
@@ -865,6 +979,7 @@ class CuriosityTopicEngine:
                     })
             except Exception as e:
                 logger.warning("Phys.org RSS fetch error (%s): %s", feed_url, e)
+                self.last_failed_providers.append({"provider": origin_tag, "error": str(e)})
 
         return (enriched_candidates + rss_candidates)[: max_candidates + 6]
 
@@ -872,23 +987,36 @@ class CuriosityTopicEngine:
         self,
         filter_duplicates: bool = True,
         max_candidates: int = 12,
+        preferred_category: Optional[str] = None,
     ) -> List[ScoredTopic]:
-        """Discovers, verifies, scores, and filters genuinely fresh topics strictly from live feeds."""
-        live_cands = self.discover_live_candidates(max_candidates=max_candidates)
+        """Discovers, verifies, scores, and filters genuinely fresh topics across multiple categories."""
+        live_cands = self.discover_live_candidates(
+            max_candidates=max_candidates,
+            preferred_category=preferred_category,
+        )
         if not live_cands:
             self.last_discovery_audit = []
+            self.last_discovery_summary = {
+                "candidate_pool_size": 0,
+                "duplicates_rejected": 0,
+                "failed_providers": list(self.last_failed_providers),
+                "categories_discovered": [],
+                "providers_used": [],
+            }
             return []
 
         scored = [self.score_candidate(c) for c in live_cands]
         valid: List[ScoredTopic] = []
         audit_rows: List[Dict[str, Any]] = []
+        dups_rejected = 0
 
         for t in scored:
             is_valid = (not t.is_duplicate if filter_duplicates else True) and t.composite_score > 0
             rej = None
             if t.composite_score <= 0:
-                rej = "Failed factual reliability gate (< 7.5)"
+                rej = "Failed factual, extract length, or visual suitability gate"
             elif filter_duplicates and t.is_duplicate:
+                dups_rejected += 1
                 rej = t.duplicate_reason or "Duplicate/cooldown collision"
             if is_valid:
                 valid.append(t)
@@ -908,18 +1036,28 @@ class CuriosityTopicEngine:
         for row in audit_rows:
             row["final_rank"] = rank_map.get(row["topic_id"])
             if row["final_rank"] is not None:
-                # Propagate final_rank back onto ScoredTopic.discovery_metadata
                 for vt in valid:
                     if vt.id == row["topic_id"]:
                         vt.discovery_metadata["final_rank"] = row["final_rank"]
                         break
 
         self.last_discovery_audit = audit_rows
+        self.last_discovery_summary = {
+            "candidate_pool_size": len(live_cands),
+            "accepted_count": len(valid),
+            "duplicates_rejected": dups_rejected,
+            "failed_providers": list(self.last_failed_providers),
+            "categories_discovered": sorted({t.category for t in scored if t.category}),
+            "providers_used": sorted({t.discovery_source for t in scored if t.discovery_source}),
+            "selected_category": valid[0].category if valid else None,
+            "selected_topic": valid[0].title if valid else None,
+            "selected_score": valid[0].composite_score if valid else None,
+        }
         return valid
 
-    def select_best_live_topic(self) -> Tuple[ScoredTopic, HookCandidate]:
+    def select_best_live_topic(self, preferred_category: Optional[str] = None) -> Tuple[ScoredTopic, HookCandidate]:
         """Selects top live-discovered verified topic. Fails closed; never falls back to historical topics."""
-        ranked = self.discover_and_rank_live_topics(filter_duplicates=True)
+        ranked = self.discover_and_rank_live_topics(filter_duplicates=True, preferred_category=preferred_category)
         if not ranked:
             raise RuntimeError(
                 "Live topic discovery failed or yielded no eligible verified topics; stopping safely without old-topic fallback."
@@ -1091,7 +1229,7 @@ class CuriosityTopicEngine:
                 ),
                 HookCandidate(
                     "Paradox / Contradiction",
-                    f"How did {topic.title} change history in ways almost no one expected?",
+                    f"Why does {topic.title} still challenge everything experts assumed about {topic.category}?",
                     9.3, 9.4, 9.3, 9.6, 9.2, 9.5,
                 ),
                 HookCandidate(

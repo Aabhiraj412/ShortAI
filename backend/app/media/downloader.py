@@ -18,7 +18,9 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from PIL import Image
@@ -39,7 +41,10 @@ FILE_SIGNATURES = {
     "jpeg": b"\xFF\xD8\xFF",
     "png": b"\x89PNG\r\n\x1a\n",
     "webp_riff": b"RIFF",
-    "webp_tag": b"WEBP"
+    "webp_tag": b"WEBP",
+    "gif87": b"GIF87a",
+    "gif89": b"GIF89a",
+    "webm": b"\x1a\x45\xdf\xa3",
 }
 
 
@@ -51,7 +56,7 @@ def sanitize_filename(name: str, max_length: int = 50) -> str:
 
 
 def detect_magic_type(header: bytes) -> Optional[str]:
-    """Inspects the leading bytes of a buffer to verify genuine image type."""
+    """Inspects leading bytes of a buffer to verify genuine image or open animation media."""
     if len(header) < 12:
         return None
     if header.startswith(FILE_SIGNATURES["jpeg"]):
@@ -60,6 +65,12 @@ def detect_magic_type(header: bytes) -> Optional[str]:
         return "image/png"
     if header.startswith(FILE_SIGNATURES["webp_riff"]) and header[8:12] == FILE_SIGNATURES["webp_tag"]:
         return "image/webp"
+    if header.startswith(FILE_SIGNATURES["gif87"]) or header.startswith(FILE_SIGNATURES["gif89"]):
+        return "image/gif"
+    if header.startswith(FILE_SIGNATURES["webm"]):
+        return "video/webm"
+    if len(header) >= 8 and header[4:8] == b"ftyp":
+        return "video/mp4"
     return None
 
 
@@ -103,8 +114,8 @@ class AssetDownloader:
                 with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp:
                     # Validate Content-Type header if present
                     ctype = resp.headers.get("Content-Type", "").lower()
-                    if ctype and not any(t in ctype for t in ("image", "octet-stream")):
-                        return False, None, None, f"Rejected: HTTP Content-Type is '{ctype}', not an image."
+                    if ctype and not any(t in ctype for t in ("image", "video", "octet-stream")):
+                        return False, None, None, f"Rejected: HTTP Content-Type is '{ctype}', not image/video media."
 
                     with open(temp_path, "wb") as f:
                         while True:
@@ -135,16 +146,26 @@ class AssetDownloader:
                 os.remove(temp_path)
             return False, None, None, "Rejected: File header failed magic bytes signature validation (corrupt or unsupported format)."
 
-        # 2. Corrupt image and decompression bomb check via Pillow
-        try:
-            with Image.open(temp_path) as img:
-                img.verify()  # Verifies file integrity without full decode
-                width, height = img.size
-                img_format = img.format.lower() if img.format else "jpeg"
-        except Exception as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return False, None, None, f"Rejected: Image decode/integrity check failed: {e}"
+        # 2. Verify image integrity via Pillow OR video/GIF stream header
+        is_video_or_gif = detected_mime in ("video/webm", "video/mp4", "image/gif")
+        width, height = int(asset.width or 0), int(asset.height or 0)
+        if detected_mime in ("video/webm", "video/mp4"):
+            img_format = "webm" if detected_mime == "video/webm" else "mp4"
+            asset.asset_type = "existing_animation"
+        else:
+            try:
+                with Image.open(temp_path) as img:
+                    is_animated_gif = (detected_mime == "image/gif") and bool(getattr(img, "is_animated", False) or getattr(img, "n_frames", 1) > 1)
+                    if not is_animated_gif:
+                        img.verify()
+                    width, height = img.size
+                    img_format = img.format.lower() if img.format else "jpeg"
+                    if is_animated_gif:
+                        asset.asset_type = "existing_animation"
+            except Exception as e:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return False, None, None, f"Rejected: Media decode/integrity check failed: {e}"
 
         # 3. Finalize path with extension and SHA-256 hash
         file_hash = hasher.hexdigest()
@@ -153,19 +174,21 @@ class AssetDownloader:
         final_path = os.path.join(self.storage_dir, final_filename)
 
         if os.path.exists(final_path):
-            # Duplicate file already exists on disk
             if os.path.exists(temp_path):
                 os.remove(temp_path)
         else:
             os.replace(temp_path, final_path)
 
-        # Update asset metadata
+        # Update asset metadata with full provenance
+        orig_name = os.path.basename(urllib.parse.urlparse(url).path) or final_filename
         asset.local_path = final_path
         asset.asset_hash = file_hash
         asset.width = width
         asset.height = height
         asset.file_size_bytes = total_downloaded
         asset.mime_type = detected_mime
+        asset.original_filename = asset.original_filename or orig_name
+        asset.download_timestamp = datetime.now(timezone.utc).isoformat()
 
         logger.info("Successfully downloaded and validated asset: %s (%dx%d, %.1f KB)", final_path, width, height, total_downloaded / 1024)
         return True, final_path, file_hash, None

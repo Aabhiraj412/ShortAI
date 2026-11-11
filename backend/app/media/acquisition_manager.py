@@ -18,8 +18,10 @@ from backend.app.media.image_processor import AdaptationMode, ImageProcessor
 from backend.app.media.license_verifier import LicenseVerifier
 from backend.app.media.models import AttributionManifest, LicenseStatus, MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
+from backend.app.media.providers.internet_archive_provider import InternetArchiveProvider
 from backend.app.media.providers.nasa_provider import NASAProvider
 from backend.app.media.providers.openverse_provider import OpenverseProvider
+from backend.app.media.providers.stock_provider import PexelsProvider, PixabayProvider
 from backend.app.media.providers.wikimedia_provider import WikimediaProvider
 from backend.app.media.relevance_scorer import RelevanceScorer
 
@@ -40,28 +42,42 @@ class MediaAcquisitionEngine:
         attribution_gen: Optional[AttributionGenerator] = None
     ):
         self.verifier = verifier or LicenseVerifier()
-        self.providers = providers or [
-            NASAProvider(license_verifier=self.verifier),
-            WikimediaProvider(license_verifier=self.verifier),
-            OpenverseProvider(license_verifier=self.verifier)
-        ]
+        if providers is not None:
+            self.providers = providers
+        else:
+            default_providers: List[BaseMediaProvider] = [
+                NASAProvider(license_verifier=self.verifier),
+                WikimediaProvider(license_verifier=self.verifier),
+                OpenverseProvider(license_verifier=self.verifier),
+                InternetArchiveProvider(license_verifier=self.verifier),
+            ]
+            pexels = PexelsProvider(license_verifier=self.verifier)
+            if pexels.api_key:
+                default_providers.append(pexels)
+            pixabay = PixabayProvider(license_verifier=self.verifier)
+            if pixabay.api_key:
+                default_providers.append(pixabay)
+            self.providers = default_providers
         self.downloader = downloader or AssetDownloader()
         self.processor = processor or ImageProcessor()
         self.scorer = scorer or RelevanceScorer()
         self.registry = registry or AssetRegistry()
         self.attribution_gen = attribution_gen or AttributionGenerator()
+        self.last_failed_providers: List[dict] = []
+        self.last_acquisition_stats: dict = {}
 
     async def search_all_providers(self, query: str, limit_per_provider: int = 5) -> List[MediaAsset]:
-        """Dispatches query across all configured providers concurrently."""
+        """Dispatches query across all configured providers concurrently, recording provider errors."""
         tasks = [p.search_media(query, limit=limit_per_provider) for p in self.providers]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_assets: List[MediaAsset] = []
-        for res in results:
+        for prov, res in zip(self.providers, results):
             if isinstance(res, list):
                 all_assets.extend(res)
             elif isinstance(res, Exception):
-                logger.debug("Provider error during search: %s", res)
+                logger.debug("Provider error during search (%s): %s", prov.provider_name, res)
+                self.last_failed_providers.append({"provider": prov.provider_name, "query": query, "error": str(res)})
 
         return all_assets
 
@@ -87,6 +103,7 @@ class MediaAcquisitionEngine:
         """
         queries = scene_queries or self.scorer.generate_search_queries(topic_title, category)
         candidate_pool: List[MediaAsset] = []
+        self.last_failed_providers = []
 
         # 1. Search providers for each query
         for q in queries:
@@ -96,10 +113,12 @@ class MediaAcquisitionEngine:
         # 2. Score and filter candidates
         scored_candidates: List[Tuple[float, MediaAsset]] = []
         seen_urls = set()
+        rejected_license_count = 0
 
         for a in candidate_pool:
             # Skip rejected licenses immediately
             if a.verification_status != LicenseStatus.APPROVED:
+                rejected_license_count += 1
                 continue
 
             if a.download_url in seen_urls:
@@ -110,12 +129,13 @@ class MediaAcquisitionEngine:
             a.relevance_score = score
             scored_candidates.append((score, a))
 
-        # Sort descending by relevance score and reject unrelated (zero-overlap < 0.20) candidates
+        # Sort descending by relevance score and reject unrelated (< 0.20) unless zero scored above
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
         relevant = [item[1] for item in scored_candidates if item[0] >= 0.20]
-        top_candidates = (relevant or [item[1] for item in scored_candidates])[:max_assets]
+        # Never silently select zero-overlap noise if candidate set only contains completely irrelevant items
+        top_candidates = relevant[:max_assets] if relevant else []
 
-        # 3. Download and process top candidates
+        # 3. Download and process top candidates (supporting both static images and Priority B open animations)
         acquired_assets: List[MediaAsset] = []
         failed_downloads: int = 0
         seen_hashes = set()
@@ -132,21 +152,24 @@ class MediaAcquisitionEngine:
                 logger.info("Asset download skipped or failed: %s (%s)", asset.title, err)
                 continue
 
-            # Deduplicate identical image bytes cleanly
+            # Deduplicate identical media bytes cleanly
             if sha_hash and sha_hash in seen_hashes:
                 continue
 
-            # Adapt image to 1080x1920 portrait
-            try:
-                portrait_path = self.processor.adapt_image_to_portrait(
-                    input_path=local_path,
-                    mode=adaptation_mode
-                )
-                asset.portrait_path = portrait_path
-            except Exception as e:
-                failed_downloads += 1
-                logger.error("Failed to adapt image to portrait: %s", e)
-                continue
+            if getattr(asset, "asset_type", "image") == "existing_animation" or str(asset.mime_type).startswith("video/") or asset.mime_type == "image/gif":
+                asset.asset_type = "existing_animation"
+                asset.portrait_path = local_path
+            else:
+                try:
+                    portrait_path = self.processor.adapt_image_to_portrait(
+                        input_path=local_path,
+                        mode=adaptation_mode
+                    )
+                    asset.portrait_path = portrait_path
+                except Exception as e:
+                    failed_downloads += 1
+                    logger.error("Failed to adapt image to portrait: %s", e)
+                    continue
 
             if sha_hash:
                 seen_hashes.add(sha_hash)
@@ -154,11 +177,17 @@ class MediaAcquisitionEngine:
             self.registry.register_asset(asset, job_id=video_id)
             acquired_assets.append(asset)
 
+        authentic_imgs = sum(1 for a in acquired_assets if getattr(a, "asset_type", "image") != "existing_animation")
+        existing_anims = sum(1 for a in acquired_assets if getattr(a, "asset_type", "image") == "existing_animation")
         self.last_acquisition_stats = {
             "candidate_pool": len(candidate_pool),
             "top_candidates": len(top_candidates),
             "acquired": len(acquired_assets),
+            "authentic_images_acquired": authentic_imgs,
+            "existing_animations_acquired": existing_anims,
+            "rejected_license_count": rejected_license_count,
             "failed": failed_downloads,
+            "failed_providers": list(self.last_failed_providers),
         }
 
         # 4. Generate and save legal AttributionManifest

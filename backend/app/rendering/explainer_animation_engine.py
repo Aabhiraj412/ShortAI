@@ -29,7 +29,7 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from backend.app.content.creative_identity_policy import CreativeIdentityPolicy
 from backend.app.core.paths import FFMPEG_DEFAULT_PATH
@@ -192,10 +192,13 @@ class ExplainerAnimationEngine:
         accent_color: Tuple[int, int, int],
         coordinates: Optional[Dict[str, float]] = None,
         variant: int = 0,
+        category: str = "",
+        illustrative_label: str = "ILLUSTRATIVE RECONSTRUCTION",
     ) -> Dict[str, Any]:
         """
         Generates a distinct 1080x1920 analytical illustration / cartographic schematic PNG
         saved in assets/generated/ with prompt & provider provenance.
+        Clearly labeled as illustrative reconstruction (Priority D fallback).
         """
         prompt = (
             f"Documentary {visual_type_label} plate explaining '{topic_title}': "
@@ -204,7 +207,7 @@ class ExplainerAnimationEngine:
         ok, issues = CreativeIdentityPolicy.validate_prompt(prompt)
         if not ok:
             raise ValueError(f"Creative policy rejected generation prompt: {issues}")
-        safe_prompt = CreativeIdentityPolicy.inject_safe_negative_prompt(prompt)
+        _ = CreativeIdentityPolicy.inject_safe_negative_prompt(prompt)
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         canvas = _draw_base_documentary_backdrop(
@@ -212,21 +215,32 @@ class ExplainerAnimationEngine:
         )
         draw = ImageDraw.Draw(canvas)
 
+        # Explicit illustrative disclosure badge on Priority D conceptual visuals
+        badge_text = (illustrative_label or "ILLUSTRATIVE RECONSTRUCTION")[:28].upper()
+        bb = draw.textbbox((0, 0), badge_text, font=self.font_small)
+        bw_badge = (bb[2] - bb[0]) + 24
+        draw.rounded_rectangle(
+            [self.width - 110 - bw_badge, 274, self.width - 110, 318],
+            radius=12,
+            fill=(26, 35, 54),
+            outline=(148, 163, 184),
+            width=1,
+        )
+        draw.text((self.width - 110 - bw_badge // 2, 296), badge_text, font=self.font_small, fill=(215, 224, 240), anchor="mm")
+
         box = (110, 355, self.width - 110, 1210)
         bx0, by0, bx1, by1 = box
-        bw, bh = bx1 - bx0, by1 - by0
         draw.rounded_rectangle(box, radius=24, fill=(16, 23, 39), outline=accent_color, width=3)
 
         cx, cy = (bx0 + bx1) // 2, (by0 + by1) // 2 - 20
 
         if variant % 2 == 0:
-            # Cartographic latitude/longitude locus diagram
+            # Cartographic / coordinate schematic diagram
             for step in range(-3, 4):
                 yy = cy + step * 75
                 draw.line([(bx0 + 40, yy), (bx1 - 40, yy)], fill=(30, 44, 70), width=2)
                 xx = cx + step * 95
                 draw.line([(xx, by0 + 50), (xx, by1 - 120)], fill=(30, 44, 70), width=2)
-            # stylized terrain / perimeter polygon
             poly = [
                 (cx - 210, cy - 40), (cx - 120, cy - 135), (cx + 40, cy - 150),
                 (cx + 215, cy - 55), (cx + 185, cy + 95), (cx + 15, cy + 135),
@@ -239,16 +253,16 @@ class ExplainerAnimationEngine:
             coord_txt = (
                 f"LAT {coordinates['lat']:.2f}  •  LON {coordinates['lon']:.2f}"
                 if coordinates and "lat" in coordinates and "lon" in coordinates
-                else f"SUBJECT SECTOR  •  {topic_title[:28].upper()}"
+                else f"{(category or 'SUBJECT').upper()[:18]} SECTOR  •  {topic_title[:20].upper()}"
             )
             draw.text((cx, by1 - 65), coord_txt, font=self.font_mono, fill=accent_color, anchor="mm")
         else:
-            # Structural System / Boundary Flow Schematic
+            # Structural System / Mechanism Flow Schematic
             nodes = _wrap_lines(draw, re.sub(r"[^A-Za-z0-9\s\-']", "", segment_text).upper(), self.font_small, 210)[:3]
             step_labels = [
                 ("01 CONTEXT", topic_title[:24].upper()),
-                ("02 MECHANISM", nodes[0] if nodes else "KEY EVENT"),
-                ("03 VERIFIED IMPACT", nodes[-1] if nodes else "DOCUMENTED RESULT"),
+                ("02 MECHANISM", nodes[0] if nodes else "KEY PROCESS"),
+                ("03 EVIDENCE", nodes[-1] if nodes else "DOCUMENTED RESULT"),
             ]
             box_w, box_h = 660, 140
             start_y = by0 + 95
@@ -279,16 +293,128 @@ class ExplainerAnimationEngine:
         return {
             "path": out_path,
             "generation_provider": "CrazzyDocs Analytical Illustration Generator",
+            "sourcing_priority": "D_selective_generated",
+            "illustrative_reconstruction": True,
             "prompt_metadata": {
                 "prompt": prompt,
                 "negative_prompt_enforced": True,
                 "topic_title": topic_title,
+                "category": category,
+                "illustrative_label": badge_text,
                 "segment_anchor": segment_text[:100],
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
             "width": self.width,
             "height": self.height,
             "format": "png",
+        }
+
+    def adapt_existing_animation_to_portrait(
+        self,
+        *,
+        input_anim_path: str,
+        out_mp4_path: str,
+        duration_sec: float,
+        beat_idx: int,
+        total_beats: int,
+        stage_label: str,
+        topic_title: str,
+        segment_text: str,
+        accent_color: Tuple[int, int, int],
+        source_credit: str = "Open Archive Animation",
+        fps: float = 30.0,
+    ) -> Dict[str, Any]:
+        """
+        Priority B Adapter: Converts an authentic open-source animation (GIF, WebM, MP4)
+        into a documentary-framed 1080x1920 @ 30 FPS H.264 MP4 clip using FFmpeg.
+        """
+        prompt = f"Priority B existing open-source animation for '{topic_title}': {segment_text[:120]}"
+        ok, issues = CreativeIdentityPolicy.validate_prompt(prompt)
+        if not ok:
+            raise ValueError(f"Creative policy rejected Priority B animation prompt: {issues}")
+        if not input_anim_path or not os.path.isfile(input_anim_path):
+            raise FileNotFoundError(f"Priority B animation source not found: {input_anim_path}")
+
+        os.makedirs(os.path.dirname(out_mp4_path), exist_ok=True)
+        vx0, vy0, vx1, vy1 = 110, 355, self.width - 110, 1210
+        vw, vh = vx1 - vx0, vy1 - vy0
+
+        # Build RGBA documentary overlay frame with transparent viewport punch-out
+        bg_rgb = _draw_base_documentary_backdrop(
+            self.width, self.height, accent_color, beat_idx, total_beats, stage_label, "ARCHIVE MOTION"
+        )
+        overlay = bg_rgb.convert("RGBA")
+        od = ImageDraw.Draw(overlay)
+        od.rounded_rectangle([vx0, vy0, vx1, vy1], radius=24, fill=(0, 0, 0, 0), outline=accent_color + (255,), width=4)
+
+        # Lower documentary caption + attribution bar
+        od.rounded_rectangle([110, 1235, self.width - 110, 1410], radius=18, fill=(14, 19, 31, 245), outline=(65, 82, 112, 255), width=2)
+        od.rectangle([110, 1235, 124, 1410], fill=accent_color + (255,))
+        cap_lines = _wrap_lines(od, segment_text.upper(), self.font_title, self.width - 280)[:2]
+        yc = 1286 if len(cap_lines) == 2 else 1318
+        for line in cap_lines:
+            od.text((146, yc), line, font=self.font_title, fill=(248, 250, 255, 255), anchor="lm")
+            yc += 58
+        od.text((self.width - 124, 1388), f"SOURCE: {source_credit[:36].upper()}", font=self.font_small, fill=(165, 185, 215, 255), anchor="rm")
+
+        overlay_fd, overlay_png = tempfile.mkstemp(suffix=".png", prefix="cd_pB_overlay_")
+        os.close(overlay_fd)
+        overlay.save(overlay_png, format="PNG")
+
+        target_dur = max(1.0, float(duration_sec))
+        filter_complex = (
+            f"color=c=0x0b101c:s={self.width}x{self.height}:r={fps}:d={target_dur:.3f}[bg];"
+            f"[0:v]scale={vw}:{vh}:force_original_aspect_ratio=decrease,"
+            f"pad={vw}:{vh}:(ow-iw)/2:(oh-ih)/2:color=0x101727,setsar=1,fps={fps}[fg];"
+            f"[bg][fg]overlay={vx0}:{vy0}:shortest=1[comp];"
+            f"[comp][1:v]overlay=0:0:shortest=1[out]"
+        )
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-loglevel", "error",
+            "-stream_loop", "-1",
+            "-i", input_anim_path,
+            "-loop", "1",
+            "-t", f"{target_dur:.3f}",
+            "-i", overlay_png,
+            "-filter_complex", filter_complex,
+            "-map", "[out]",
+            "-t", f"{target_dur:.3f}",
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "superfast",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            out_mp4_path,
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45, check=False)
+            if proc.returncode != 0 or not os.path.isfile(out_mp4_path):
+                raise RuntimeError(f"FFmpeg Priority B adaptation failed: {proc.stderr}")
+        finally:
+            try:
+                os.remove(overlay_png)
+            except OSError:
+                pass
+
+        return {
+            "path": out_mp4_path,
+            "visual_type": "motion_graphic",
+            "sourcing_priority": "B_existing_animation",
+            "generation_provider": "FFmpeg Priority B Open Animation Adapter",
+            "prompt_metadata": {
+                "prompt": prompt,
+                "source_animation": os.path.basename(input_anim_path),
+                "source_credit": source_credit,
+                "topic_title": topic_title,
+                "segment_anchor": segment_text[:100],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "width": self.width,
+            "height": self.height,
+            "format": "mp4",
+            "duration_sec": round(target_dur, 3),
         }
 
     def render_explainer_animation_mp4(
@@ -306,12 +432,18 @@ class ExplainerAnimationEngine:
         accent_color: Tuple[int, int, int],
         coordinates: Optional[Dict[str, float]] = None,
         fps: float = 30.0,
+        background_image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Renders a genuine 30 FPS H.264 MP4 animation directly to `out_mp4_path`
-        using Pillow procedural motion composited atop a cached documentary slate.
+        using Pillow procedural motion composited atop either a Priority C authentic
+        acquired visual (`background_image_path`) or a cached documentary slate.
         """
-        prompt = f"{visual_type} animation for '{topic_title}': {segment_text[:120]}"
+        is_priority_c = bool(background_image_path and os.path.isfile(background_image_path))
+        prompt = (
+            f"{'Priority C animated overlay on authentic asset' if is_priority_c else visual_type} "
+            f"animation for '{topic_title}': {segment_text[:120]}"
+        )
         ok, issues = CreativeIdentityPolicy.validate_prompt(prompt)
         if not ok:
             raise ValueError(f"Creative policy rejected animation prompt: {issues}")
@@ -343,7 +475,25 @@ class ExplainerAnimationEngine:
 
         # Main interactive viewport box (110, 355) .. (970, 1210)
         vx0, vy0, vx1, vy1 = 110, 355, self.width - 110, 1210
+        vw, vh = vx1 - vx0, vy1 - vy0
         base_draw.rounded_rectangle([vx0, vy0, vx1, vy1], radius=24, fill=(16, 23, 39), outline=accent_color, width=3)
+
+        # Priority C: Composite authentic image/map into viewport darkened so animated graphics & callouts shine
+        if is_priority_c:
+            try:
+                with Image.open(background_image_path) as src_im:
+                    fitted = ImageOps.fit(src_im.convert("RGB"), (vw - 8, vh - 8), method=Image.Resampling.LANCZOS)
+                    darkened = ImageEnhance.Brightness(fitted).enhance(0.46)
+                    mask = Image.new("L", (vw - 8, vh - 8), 0)
+                    ImageDraw.Draw(mask).rounded_rectangle([0, 0, vw - 9, vh - 9], radius=20, fill=255)
+                    base.paste(darkened, (vx0 + 4, vy0 + 4), mask)
+                    # Subtle telemetry top strip inside Priority C viewport
+                    base_draw = ImageDraw.Draw(base)
+                    base_draw.rounded_rectangle([vx0 + 18, vy0 + 14, vx0 + 365, vy0 + 50], radius=10, fill=(12, 18, 30))
+                    base_draw.text((vx0 + 32, vy0 + 32), "ENHANCED ARCHIVAL VISUAL", font=self.font_small, fill=accent_color, anchor="lm")
+            except Exception as exc:
+                logger.warning("Priority C background composite skipped (%s); falling back to clean stage.", exc)
+                is_priority_c = False
 
         milestones = extract_milestones_from_text(full_script, topic_title)
         metrics = extract_numeric_metrics(segment_text + " " + full_script, topic_title)
@@ -377,14 +527,30 @@ class ExplainerAnimationEngine:
                 frame = base.copy()
                 d = ImageDraw.Draw(frame)
 
+                if is_priority_c:
+                    # Ambient telemetry particles & highlighted region corner brackets over authentic visual
+                    for p_i in range(6):
+                        px = vx0 + 70 + int(((u * 0.45 + p_i * 0.17) % 1.0) * (vw - 140))
+                        py = vy0 + 120 + int((math.sin(u * math.pi * 2.0 + p_i * 1.3) * 0.5 + 0.5) * (vh - 240))
+                        d.ellipse([px - 3, py - 3, px + 3, py + 3], fill=accent_color)
+                    rx0, ry0 = cx - int(145 * (0.85 + 0.15 * ease)), cy - int(115 * (0.85 + 0.15 * ease))
+                    rx1, ry1 = cx + int(145 * (0.85 + 0.15 * ease)), cy + int(115 * (0.85 + 0.15 * ease))
+                    b_len = 28
+                    for (bx, by, dx_s, dy_s) in ((rx0, ry0, 1, 1), (rx1, ry0, -1, 1), (rx0, ry1, 1, -1), (rx1, ry1, -1, -1)):
+                        d.line([(bx, by), (bx + dx_s * b_len, by)], fill=accent_color, width=3)
+                        d.line([(bx, by), (bx, by + dy_s * b_len)], fill=accent_color, width=3)
+
                 if visual_type == "animated_map":
-                    # Animated graticule sweep + pulsing perimeter & moving target vector
+                    # Animated graticule sweep + pulsing perimeter & moving target route arc
                     poly = [
                         (cx - 210, cy - 35), (cx - 115, cy - 130), (cx + 45, cy - 145),
                         (cx + 215, cy - 50), (cx + 180, cy + 95), (cx + 15, cy + 135),
                         (cx - 165, cy + 75),
                     ]
-                    d.polygon(poly, fill=(24, 38, 60), outline=(72, 102, 148), width=3)
+                    if is_priority_c:
+                        d.line(poly + [poly[0]], fill=accent_color, width=3)
+                    else:
+                        d.polygon(poly, fill=(24, 38, 60), outline=(72, 102, 148), width=3)
                     # Expanding beacon radius
                     ring_r = int(35 + ((u * 2.2) % 1.0) * 195)
                     d.ellipse([cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r], outline=accent_color, width=3)
@@ -399,13 +565,13 @@ class ExplainerAnimationEngine:
                     d.line([(cx, cy), (mx, my)], fill=accent_color, width=3)
                     d.ellipse([mx - 10, my - 10, mx + 10, my + 10], fill=(255, 255, 255), outline=accent_color, width=3)
                     # Perimeter completion bar at top of map viewport
-                    d.rounded_rectangle([vx0 + 50, vy0 + 36, vx1 - 50, vy0 + 84], radius=12, fill=(22, 32, 52))
+                    d.rounded_rectangle([vx0 + 50, vy0 + 62 if is_priority_c else vy0 + 36, vx1 - 50, vy0 + 110 if is_priority_c else vy0 + 84], radius=12, fill=(22, 32, 52))
                     coord_str = (
                         f"GEO LOCK  {coordinates['lat']:.2f}°, {coordinates['lon']:.2f}°"
                         if coordinates and "lat" in coordinates
                         else f"BOUNDARY ZONE  •  {topic_title[:24].upper()}"
                     )
-                    d.text((cx, vy0 + 60), coord_str, font=self.font_mono, fill=accent_color, anchor="mm")
+                    d.text((cx, vy0 + 86 if is_priority_c else vy0 + 60), coord_str, font=self.font_mono, fill=accent_color, anchor="mm")
                     d.text((cx, vy1 - 56), f"PERIMETER SCAN {int(ease * 100)}%", font=self.font_mono, fill=(215, 226, 245), anchor="mm")
 
                 elif visual_type == "animated_timeline":
@@ -531,9 +697,17 @@ class ExplainerAnimationEngine:
         return {
             "path": out_mp4_path,
             "visual_type": visual_type,
-            "generation_provider": "CrazzyDocs Explainer Animation Engine (Pillow+FFmpeg)",
+            "sourcing_priority": "C_animated_authentic" if is_priority_c else "D_procedural_animation",
+            "background_image_path": background_image_path if is_priority_c else None,
+            "generation_provider": (
+                "CrazzyDocs Priority C Animated Authentic Overlay (Pillow+FFmpeg)"
+                if is_priority_c
+                else "CrazzyDocs Explainer Animation Engine (Pillow+FFmpeg)"
+            ),
             "prompt_metadata": {
                 "prompt": prompt,
+                "sourcing_priority": "C_animated_authentic" if is_priority_c else "D_procedural_animation",
+                "background_image": os.path.basename(background_image_path) if is_priority_c else None,
                 "topic_title": topic_title,
                 "segment_anchor": segment_text[:100],
                 "created_at": datetime.now(timezone.utc).isoformat(),

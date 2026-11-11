@@ -154,4 +154,5 @@ media/thumbnails/
 media/images/
 media/source/
 backend/data/*.json
+!backend/data/creative_policy_config.json
 tools/

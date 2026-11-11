@@ -501,12 +501,15 @@
 
     <div class="obs-triad">
       <div class="obs-box">
-        <div class="card-label" style="margin-bottom:8px;">Visual Assets & Reuse Control</div>
-        <div class="obs-kv"><span>Unique Acquired Images</span><strong class="mono" id="obsUniqueImages">0</strong></div>
-        <div class="obs-kv"><span>Generated Illustrations</span><strong class="mono" id="obsGeneratedImages">0</strong></div>
-        <div class="obs-kv"><span>Explanatory Animations (30 FPS)</span><strong class="mono" id="obsAnimationsCount">0</strong></div>
+        <div class="card-label" style="margin-bottom:8px;">Visual Sourcing &amp; Licensing Controls</div>
+        <div class="obs-kv"><span>Topic Category</span><strong class="mono" id="obsCreativeCategory">--</strong></div>
+        <div class="obs-kv"><span>Authentic Images Acquired (Pri A)</span><strong class="mono" id="obsUniqueImages">0</strong></div>
+        <div class="obs-kv"><span>Open Animations Acquired (Pri B)</span><strong class="mono" id="obsExistingAnimations">0</strong></div>
+        <div class="obs-kv"><span>Animated Authentic Overlays (Pri C)</span><strong class="mono" id="obsAnimatedAuthentic">0</strong></div>
+        <div class="obs-kv"><span>Selective AI / Bespoke Anim (Pri D)</span><strong class="mono" id="obsGeneratedAndBespoke">0 gen / 0 anim</strong></div>
         <div class="obs-kv"><span>Reused Photo Slots</span><strong class="mono" id="obsReusedImages">0 (max 2/img)</strong></div>
-        <div class="obs-kv"><span>Failed Acquisitions</span><strong class="mono" id="obsFailedAcq">0</strong></div>
+        <div class="obs-kv"><span>Licenses &amp; Attribution</span><strong class="mono" id="obsLicenseCompliance">0 verified (100%)</strong></div>
+        <div style="display:none;"><span id="obsGeneratedImages">0</span><span id="obsAnimationsCount">0</span><span id="obsFailedAcq">0</span></div>
       </div>
 
       <div class="obs-box">
@@ -976,11 +979,33 @@
         }
 
         const a = prod.assets || {};
-        document.getElementById('obsUniqueImages').textContent = a.unique_images ?? 0;
+        const cr = prod.creative || {};
+        const catEl = document.getElementById('obsCreativeCategory');
+        if (catEl) {
+          const catCount = cr.supported_categories_count || 20;
+          catEl.textContent = (cr.category || 'MULTI-CATEGORY') + ` (${catCount} avail)`;
+        }
+        document.getElementById('obsUniqueImages').textContent = cr.authentic_images_acquired ?? a.unique_images ?? 0;
+        const existEl = document.getElementById('obsExistingAnimations');
+        if (existEl) existEl.textContent = cr.existing_animations_acquired ?? 0;
+        const animAuthEl = document.getElementById('obsAnimatedAuthentic');
+        if (animAuthEl) animAuthEl.textContent = cr.animated_authentic_composites ?? 0;
+        const genBespEl = document.getElementById('obsGeneratedAndBespoke');
+        if (genBespEl) {
+          const gCount = cr.generated_images ?? a.generated_images ?? 0;
+          const bCount = cr.bespoke_animations ?? a.animations ?? 0;
+          genBespEl.textContent = `${gCount} gen / ${bCount} anim`;
+        }
         document.getElementById('obsGeneratedImages').textContent = a.generated_images ?? 0;
         document.getElementById('obsAnimationsCount').textContent = a.animations ?? 0;
         document.getElementById('obsReusedImages').textContent = `${a.reused_images ?? 0} (max ${a.max_allowed_reuse ?? 2}/img)`;
         document.getElementById('obsFailedAcq').textContent = a.failed_acquisitions ?? 0;
+        const licEl = document.getElementById('obsLicenseCompliance');
+        if (licEl) {
+          const lVer = cr.license_verified_count ?? 0;
+          const aPct = cr.attribution_completeness_pct ?? 100;
+          licEl.textContent = `${lVer} verified (${aPct}%)`;
+        }
 
         const r = prod.rendering || {};
         document.getElementById('obsFfmpegStatus').textContent = r.ffmpeg_status || 'IDLE';

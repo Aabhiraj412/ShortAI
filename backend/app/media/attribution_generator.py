@@ -22,7 +22,7 @@ class AttributionGenerator:
         os.makedirs(self.manifests_dir, exist_ok=True)
 
     def create_attribution_item(self, asset: MediaAsset, modifications: str = "Adapted and cropped for 9:16 vertical video") -> AttributionItem:
-        """Constructs an AttributionItem from a verified MediaAsset."""
+        """Constructs an AttributionItem from a verified MediaAsset with full provenance."""
         creator_name = asset.creator.strip() if asset.creator else "Public Domain Contributor"
         lic_name = asset.license_type.value
         lic_url = asset.license_url or "https://creativecommons.org/"
@@ -35,7 +35,15 @@ class AttributionGenerator:
             license=lic_name,
             license_url=lic_url,
             modifications=modifications,
-            verified=(asset.verification_status.value == "APPROVED")
+            verified=(asset.verification_status.value == "APPROVED"),
+            asset_id=asset.asset_id,
+            asset_type=getattr(asset, "asset_type", "image"),
+            download_timestamp=getattr(asset, "download_timestamp", "") or getattr(asset, "created_at", ""),
+            original_filename=getattr(asset, "original_filename", "") or os.path.basename(asset.local_path or ""),
+            sha256=asset.asset_hash or "",
+            usage_restrictions=getattr(asset, "usage_restrictions", "None (Commercial Use Permitted)"),
+            attribution_requirements=getattr(asset, "attribution_requirements", "Credit creator and source"),
+            modification_permitted=bool(getattr(asset, "modification_permitted", True)),
         )
 
     def generate_manifest(
@@ -55,7 +63,7 @@ class AttributionGenerator:
         # Format YouTube description text block
         desc_lines = [
             "---",
-            "VISUAL MEDIA CREDITS & LICENSING:",
+            "VISUAL MEDIA CREDITS (SOURCES & LICENSING):",
         ]
         if not items:
             desc_lines.append("All visuals rendered autonomously using original procedurally generated canvas graphics.")

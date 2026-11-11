@@ -254,6 +254,15 @@ async def get_dashboard_overview():
         _, c_pub, _, _ = profile.cycles[0].calculate_datetimes(tomorrow)
         next_pub_str = f"{c_pub.strftime('%Y-%m-%d %H:%M:%S IST')} ({profile.cycles[0].name})"
 
+    from backend.app.content.creative_production_policy import (
+        CategoryDistributionTracker,
+        get_creative_production_policy,
+    )
+    from backend.app.core.execution_context import ExecutionContext
+
+    creative_policy = get_creative_production_policy(ExecutionContext.PRODUCTION).to_summary_dict()
+    category_distribution = CategoryDistributionTracker().get_distribution_counts(window=20)
+
     return {
         "current_cycle": m.current_cycle,
         "next_production_ist": m.next_production_ist,
@@ -267,6 +276,8 @@ async def get_dashboard_overview():
         "validation_worker_state": states["validation_worker_state"],
         "validation_worker": states["validation_worker"],
         "overall_operational_state": states["overall_operational_state"],
+        "creative_policy": creative_policy,
+        "category_distribution": category_distribution,
         "timestamp_ist": m.timestamp_ist,
     }
 

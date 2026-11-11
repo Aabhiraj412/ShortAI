@@ -36,6 +36,10 @@ from backend.app.core.execution_context import (
     require_production_context,
     get_current_execution_context,
 )
+from backend.app.content.creative_production_policy import (
+    CategoryDistributionTracker,
+    get_creative_production_policy,
+)
 from backend.app.content.curiosity_topic_engine import CuriosityTopicEngine, ScoredTopic
 from backend.app.content.topic_ledger import (
     TopicLedger,
@@ -221,6 +225,7 @@ class CrazzyDocsMasterOrchestrator:
         force_topic_id: Optional[str] = None,
         execution_context: Optional[ExecutionContext] = None,
         use_live_pipeline: Optional[bool] = None,
+        preferred_category: Optional[str] = None,
     ) -> Dict:
         """
         Executes Stages 1 through 14: Discovers topic, acquires isolated assets, synthesizes
@@ -329,8 +334,12 @@ class CrazzyDocsMasterOrchestrator:
                 else:
                     filter_dups = (force_topic_id is None)
 
+                creative_policy = get_creative_production_policy(execution_context)
                 if is_full_live:
-                    ranked = self.topic_engine.discover_and_rank_live_topics(filter_duplicates=filter_dups)
+                    ranked = self.topic_engine.discover_and_rank_live_topics(
+                        filter_duplicates=filter_dups,
+                        preferred_category=preferred_category,
+                    )
                 else:
                     ranked = self.topic_engine.discover_and_rank_topics(filter_duplicates=filter_dups)
 
@@ -456,8 +465,12 @@ class CrazzyDocsMasterOrchestrator:
 
                 # Structured 5-stage factual script
                 obs_stage = "script_generation"
-                production_observability.start_stage(job_id, "script_generation", "Drafting 5-stage documentary script...", progress=30.0)
-                script_data = compose_structured_script(selected_topic, best_hook.hook_text)
+                production_observability.start_stage(job_id, "script_generation", "Drafting 5-stage explanatory script...", progress=30.0)
+                script_data = compose_structured_script(
+                    selected_topic,
+                    best_hook.hook_text,
+                    execution_context=execution_context,
+                )
                 narration_text = script_data["full_script"]
                 script_path = os.path.join(prod_ws.scripts_dir, f"script_{job_id}.json")
                 with open(script_path, "w", encoding="utf-8") as f:
@@ -506,17 +519,22 @@ class CrazzyDocsMasterOrchestrator:
                         json.dump(asdict(attrib_manifest), f, indent=2)
                     prod_ws.register_artifact("STAGE_06_ATTRIBUTION", "metadata", attrib_json_path, copy_into_workspace=False)
 
-                unique_img_count = len({ma.get("sha256") for ma in manifest_assets if ma.get("sha256")}) or len(thumb_assets)
+                failed_acq_count = int(acq_stats.get("failed_acquisitions", acq_stats.get("failed", 0)))
+                unique_img_count = int(acq_stats.get("authentic_images_acquired", 0)) or (
+                    len({ma.get("sha256") for ma in manifest_assets if ma.get("sha256") and ma.get("asset_type") != "existing_animation"})
+                    or len(thumb_assets)
+                )
+                existing_anim_count = int(acq_stats.get("existing_animations_acquired", 0))
                 production_observability.update_assets(
                     job_id,
                     unique_images=unique_img_count,
-                    failed_acquisitions=int(acq_stats.get("failed", 0)),
+                    failed_acquisitions=failed_acq_count,
                     status="ACQUIRED",
                 )
                 production_observability.complete_stage(
                     job_id,
                     "asset_acquisition",
-                    f"Acquired {unique_img_count} unique images ({acq_stats.get('failed', 0)} failed)",
+                    f"Acquired {unique_img_count} images + {existing_anim_count} open animations ({failed_acq_count} failed)",
                 )
 
                 # Build 20-beat multi-modal storyboard + generated images + 30 FPS explainer animations
@@ -561,17 +579,40 @@ class CrazzyDocsMasterOrchestrator:
                     prod_ws=prod_ws,
                     script_full_text=narration_text,
                     progress_cb=_sb_progress_cb,
+                    execution_context=execution_context,
                 )
                 storyboard_beats = list((plan.metadata or {}).get("storyboard_beats", []))
                 sb_meta = plan.metadata or {}
+                src_sum = dict(sb_meta.get("visual_sourcing_summary") or {})
                 total_reused_slots = max(0, len([b for b in storyboard_beats if b.get("visual_type") in ("historical_photo", "documentary_image")]) - len({b.get("asset_hash") for b in storyboard_beats if b.get("visual_type") in ("historical_photo", "documentary_image")}))
                 production_observability.update_assets(
                     job_id,
-                    unique_images=int(sb_meta.get("unique_images", unique_img_count)),
-                    generated_images=len([b for b in storyboard_beats if b.get("visual_type") == "generated_image"]),
+                    unique_images=int(src_sum.get("authentic_images_acquired", sb_meta.get("unique_images", unique_img_count))),
+                    generated_images=int(src_sum.get("priority_d_generated_image_beats", 0)),
                     animations=int(sb_meta.get("unique_animations", 0)),
                     reused_images=total_reused_slots,
                     status="COMPLETE",
+                )
+                c_policy = get_creative_production_policy(execution_context)
+                attr_complete_count = sum(
+                    1 for ma in manifest_assets
+                    if ma.get("license") and ma.get("source_url") and ma.get("creator")
+                )
+                attr_pct = (100.0 * attr_complete_count / len(manifest_assets)) if manifest_assets else 100.0
+                production_observability.update_creative_intelligence(
+                    job_id,
+                    category=selected_topic.category,
+                    supported_categories_count=len(c_policy.list_categories()),
+                    category_distribution=CategoryDistributionTracker().get_distribution_counts(window=20),
+                    topic_score_breakdown=getattr(selected_topic, "score_breakdown", {}) or {},
+                    authentic_images_acquired=int(src_sum.get("authentic_images_acquired", unique_img_count)),
+                    existing_animations_acquired=int(src_sum.get("existing_animations_acquired", existing_anim_count)),
+                    animated_authentic_composites=int(src_sum.get("priority_c_animated_authentic_beats", 0)),
+                    generated_images=int(src_sum.get("priority_d_generated_image_beats", 0)),
+                    bespoke_animations=int(src_sum.get("priority_d_bespoke_anim_beats", 0)),
+                    license_verified_count=len(manifest_assets),
+                    rejected_license_count=int(acq_stats.get("rejected_license_count", 0)),
+                    attribution_completeness_pct=attr_pct,
                 )
                 production_observability.complete_stage(job_id, "image_generation", "Analytical illustrations saved in assets/generated/")
                 production_observability.complete_stage(job_id, "animation_generation", f"Rendered {sb_meta.get('unique_animations', 0)} 30 FPS explainer animations")
@@ -947,7 +988,19 @@ class CrazzyDocsMasterOrchestrator:
                     }, f, indent=2)
                 prod_ws.register_artifact("STAGE_12_VALIDATION_SUMMARY", "report", val_cp_path, copy_into_workspace=False)
 
-            # Record in TopicLedger to prevent duplicate topic generation (strictly skipped outside PRODUCTION)
+            # Record category balance & ledger (TopicLedger strictly skipped outside PRODUCTION)
+            resolved_visual_style = f"{selected_topic.category.lower().replace(' ', '_')}_documentary"
+            if is_full_live and not job_id.startswith("test_") and not os.environ.get("PYTEST_CURRENT_TEST"):
+                try:
+                    CategoryDistributionTracker().record_selection(
+                        category=selected_topic.category,
+                        topic_title=selected_topic.title,
+                        execution_context=execution_context.value,
+                        run_id=job_id,
+                    )
+                except Exception as dist_exc:
+                    logger.warning("CategoryDistributionTracker update warning: %s", dist_exc)
+
             rec = ContentRecord(
                 topic_id=f"topic_{job_id}",
                 topic_title=selected_topic.title,
@@ -956,7 +1009,7 @@ class CrazzyDocsMasterOrchestrator:
                 key_entities=selected_topic.key_entities,
                 script_fingerprint=script_fp,
                 category=selected_topic.category,
-                visual_style="historical_documentary",
+                visual_style=resolved_visual_style,
                 created_at=datetime.utcnow().isoformat() + "Z",
                 publication_status="produced",
             )
@@ -974,6 +1027,7 @@ class CrazzyDocsMasterOrchestrator:
                     storyboard_fingerprint=getattr(prod_ws, "storyboard_fingerprint", ""),
                     thumbnail_headline=winning_headline,
                     metadata={
+                        "category": selected_topic.category,
                         "video_path": final_video_path,
                         "thumbnail_path": thumb_path,
                         "manifest_path": prod_ws.manifest_path,
@@ -987,7 +1041,7 @@ class CrazzyDocsMasterOrchestrator:
             notif_res = self.notifier.send_success(
                 video_title=selected_topic.title,
                 topic=selected_topic.title,
-                storytelling_style="historical_documentary",
+                storytelling_style=resolved_visual_style,
                 duration_sec=dur,
                 video_path=final_video_path,
                 thumbnail_path=thumb_path,
