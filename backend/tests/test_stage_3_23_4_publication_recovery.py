@@ -369,7 +369,8 @@ def test_concurrent_recovery_claim_guard_and_resource_awareness():
 
 
 def test_dashboard_and_publication_recovery_endpoints():
-    client = TestClient(app)
+    # Control-center routes are local-only; call them as the local dashboard does.
+    client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     r_dash = client.get("/dashboard")
     assert r_dash.status_code == 200
     assert "Original Cycle Target" in r_dash.text

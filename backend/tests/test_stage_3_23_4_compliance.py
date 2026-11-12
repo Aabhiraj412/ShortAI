@@ -243,7 +243,9 @@ def test_secret_redaction_and_dashboard_endpoints():
     assert "AIzaSyDummySecretKey" not in masked
     assert "***REDACTED***" in masked
 
-    client = TestClient(app)
+    # Publication/control APIs are localhost-only: call them as the local dashboard does.
+    assert TestClient(app).get("/api/control-center/publication-schedule").status_code == 403
+    client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     r_dash = client.get("/dashboard")
     assert r_dash.status_code == 200
     assert "Lemo-Opuscar" in r_dash.text

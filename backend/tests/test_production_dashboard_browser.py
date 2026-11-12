@@ -17,7 +17,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
+WORKSPACE_ROOT = str(__import__("pathlib").Path(__file__).resolve().parents[2])  # this checkout
 if WORKSPACE_ROOT not in sys.path:
     sys.path.insert(0, WORKSPACE_ROOT)
 if os.path.join(WORKSPACE_ROOT, "backend") not in sys.path:

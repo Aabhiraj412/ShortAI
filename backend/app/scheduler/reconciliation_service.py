@@ -407,13 +407,13 @@ class StartupReconciler:
 
                 # Cycle start was in the past!
                 recovery_end = cycle_start + timedelta(hours=cycle.recovery_window_hours)
-                orig_target_str = target_pub.strftime("%H:%M IST")
 
                 # Case A: Inside Recovery Window (e.g. 00-04, 06-10, 12-16, 18-22)
                 if cycle.is_within_recovery_window(cycle_start, now_ist):
                     logger.info("[RECONCILER] Cycle %s is within recovery window (End: %s). Starting recovery.", cycle.cycle_id, recovery_end.strftime("%H:%M IST"))
-                    slot_dt, slot_str, rescheduled = calculate_next_available_publishing_slot(now_ist, cycle, target_pub)
-
+                    # Recovery depends only on the production recovery window. No
+                    # publication slot is computed; legacy original/revised_target_pub
+                    # columns are left as stored for historical rows.
                     if not job:
                         job = JobModel(
                             id=job_id,
@@ -423,8 +423,6 @@ class StartupReconciler:
                             current_stage="TOPIC_DISCOVERY",
                             recovery_reason="STARTUP_RECONCILIATION",
                             recovery_policy=policy,
-                            original_target_pub=orig_target_str,
-                            revised_target_pub=slot_str if rescheduled else orig_target_str,
                             actual_start_at=datetime.utcnow(),
                             heartbeat_at=None,
                         )
@@ -433,7 +431,6 @@ class StartupReconciler:
                         job.status = "RUNNING" if net_ready else "WAITING_FOR_INTERNET"
                         job.recovery_reason = "STARTUP_RECONCILIATION"
                         job.recovery_policy = policy
-                        job.revised_target_pub = slot_str if rescheduled else orig_target_str
                         job.heartbeat_at = None
                     record_cycle_state(
                         job,
@@ -449,9 +446,8 @@ class StartupReconciler:
                         "cycle_id": cycle.cycle_id,
                         "job_id": job_id,
                         "recovery_type": "WINDOW_RECOVERY",
-                        "original_target": orig_target_str,
-                        "revised_target": slot_str,
-                        "rescheduled": rescheduled,
+                        "recovery_deadline": recovery_end.strftime("%H:%M IST"),
+                        "rescheduled": False,  # production never moves into a publication slot
                     })
 
                 # Case B: Recovery has expired; never move this work into a later cycle.

@@ -6,9 +6,11 @@ revision it imported (core.code_revision.LOADED_CODE_REVISION), and refreshes a
 heartbeat. get_deployment_status() compares that with the source currently on disk and
 reports STALE_CODE when they differ, so edits are never silently ignored again.
 
-Controlled restart: request_daemon_restart() only sets a flag. The daemon exits by
-itself at its next safe point (no job QUEUED/RUNNING/RETRYING), and the startup
-manager's monitor starts it again with the current code. Nothing here kills processes.
+Controlled restart: request_daemon_restart() is rejected while any job is
+QUEUED/RUNNING/RETRYING; otherwise it only sets a flag. The daemon re-checks at its
+next loop and exits only if still no job is in flight (a job may have started since),
+and the startup manager's monitor starts it again with the current code. Nothing here
+kills processes.
 """
 from __future__ import annotations
 
@@ -107,6 +109,10 @@ def safe_restart_state() -> dict[str, Any]:
 def request_daemon_restart(confirm: bool, reason: str = "") -> dict[str, Any]:
     if confirm is not True:
         raise ValueError("Explicit confirmation is required to request a scheduler restart.")
+    state = safe_restart_state()
+    if not state["safe"]:
+        ids = ", ".join(f"{j['job_id']} ({j['status']}/{j['stage']})" for j in state["blocking_jobs"])
+        raise ValueError(f"Restart rejected: production job(s) in progress: {ids}. Retry once they finish.")
     req = {"requested_at_utc": _now_iso(), "reason": reason or "Operator requested controlled restart"}
     control._write_settings({RESTART_REQUEST_KEY: json.dumps(req)})
     control.record_change("daemon_restart_request", None, req)

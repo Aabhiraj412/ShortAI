@@ -122,6 +122,11 @@ class YouTubePublisherService:
         queued = self.engine.db.get_publication(ledger_id)
         if not queued:
             raise ValueError(f"Publishing ledger record {ledger_id} was not found.")
+        if queued.get("youtube_video_id") and (
+            str(queued.get("visibility") or "").lower() == "public"
+            or queued.get("upload_status") in ("uploaded_public", "published")
+        ):
+            raise ValueError("This video is already public on YouTube; approval would not change it.")
         target_publish_at = publish_at_iso or queued.get("scheduled_timestamp")
         if str(queued.get("visibility") or "private").lower() != "private" and not target_publish_at:
             raise PermissionError(
@@ -173,9 +178,11 @@ class YouTubePublisherService:
             thumbnail_path=thumbnail_path or None,
         )
         if updated.get("youtube_video_id"):
+            # Metadata/thumbnail edit only: no publishAt is passed, so the engine sends
+            # just the snippet and YouTube keeps the current privacy and schedule.
             self.engine.update_or_reschedule_remote_video(
                 ledger_id,
-                publish_at_iso=updated.get("scheduled_timestamp"),
+                publish_at_iso=None,
                 thumbnail_path=updated.get("thumbnail_path"),
             )
         return self.get_upload(ledger_id) or {}
@@ -185,7 +192,7 @@ class YouTubePublisherService:
         ledger_id: int,
         *,
         scheduled_ist: str,
-        confirm: bool = True,
+        confirm: bool = False,
         title: Optional[str] = None,
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
@@ -204,6 +211,7 @@ class YouTubePublisherService:
         if not queued:
             raise ValueError(f"Publishing ledger record {ledger_id} was not found.")
 
+        already_uploaded = bool(queued.get("youtube_video_id"))
         updated = self.engine.db.update_queue_metadata_and_schedule(
             ledger_id,
             title=title,
@@ -211,10 +219,13 @@ class YouTubePublisherService:
             tags=tags,
             hashtags=hashtags,
             thumbnail_path=thumbnail_path,
-            scheduled_timestamp=publish_at_utc,
+            # For an uploaded video the new time is stored only after YouTube accepts
+            # it (update_or_reschedule_remote_video), so a failed reschedule keeps the
+            # original publishAt in the ledger too.
+            **({} if already_uploaded else {"scheduled_timestamp": publish_at_utc}),
             error_details=None,
         )
-        if updated.get("youtube_video_id"):
+        if already_uploaded:
             res = self.engine.update_or_reschedule_remote_video(
                 ledger_id,
                 publish_at_iso=publish_at_utc,
@@ -240,7 +251,7 @@ class YouTubePublisherService:
         self._update_application_publication(metadata.source_publication_id, res)
         return {"result": res, "item": self.get_upload(ledger_id)}
 
-    def publish_now(self, ledger_id: int, confirm: bool = True) -> Dict:
+    def publish_now(self, ledger_id: int, confirm: bool = False) -> Dict:
         """Immediately publishes a queued or scheduled video publicly upon explicit user confirmation."""
         if confirm is not True:
             raise PermissionError("Explicit user confirmation is required to publish immediately.")
@@ -269,7 +280,7 @@ class YouTubePublisherService:
         self._update_application_publication(metadata.source_publication_id, res)
         return {"result": res, "item": self.get_upload(ledger_id)}
 
-    def cancel_schedule(self, ledger_id: int, confirm: bool = True) -> Dict:
+    def cancel_schedule(self, ledger_id: int, confirm: bool = False) -> Dict:
         """Cancels scheduled release on YouTube (if uploaded) and returns item to Ready to Schedule."""
         if confirm is not True:
             raise PermissionError("Explicit user confirmation is required to cancel schedule.")

@@ -117,6 +117,9 @@ LIVE_DB_AUDIT_TESTS = {
     "test_stage_3_17_deployment.py": {"test_publishing_ledger_reconciliation", "test_existing_private_upload_preserved"},
 }
 MAIN_CHECKOUT_MARKERS = ("D:\\Agents\\CrazzyDocs", "D:/Agents/CrazzyDocs")
+# Reviewed: references the main install path only to *query* machine state read-only
+# (Get-ScheduledTask), so it is safe to run from any checkout.
+READ_ONLY_MAIN_PATH_TESTS = {"test_windows_startup_configuration.py"}
 _IS_MAIN_CHECKOUT = os.path.normcase(str(CHECKOUT_ROOT)) == os.path.normcase("D:\\Agents\\CrazzyDocs")
 
 
@@ -131,7 +134,7 @@ def pytest_collection_modifyitems(config, items):
                     reason="Live production DB audit: blocked by test isolation (run read-only against a snapshot)."
                 ))
                 continue
-        if not _IS_MAIN_CHECKOUT:
+        if not _IS_MAIN_CHECKOUT and fname not in READ_ONLY_MAIN_PATH_TESTS:
             path = str(item.fspath)
             if path not in source_cache:
                 try:
@@ -149,7 +152,9 @@ def _foreign_backend_modules() -> list[str]:
     root = os.path.normcase(str(CHECKOUT_ROOT))
     bad = []
     for name, mod in list(sys.modules.items()):
-        if not (name == "backend" or name.startswith("backend.")):
+        # app.main imports `app.*` (backend/ on sys.path) alongside `backend.app.*`;
+        # both namespaces must come from this checkout.
+        if not (name in ("backend", "app") or name.startswith(("backend.", "app."))):
             continue
         f = getattr(mod, "__file__", None)
         if f and not os.path.normcase(str(Path(f).resolve())).startswith(root):

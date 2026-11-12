@@ -37,6 +37,38 @@ def test_revision_is_stable_and_changes_with_source(tmp_path, monkeypatch):
     assert code_revision.compute_source_revision() == code_revision.compute_source_revision()
 
 
+def test_fingerprint_covers_all_runtime_code():
+    files = {p.relative_to(code_revision.BACKEND_DIR).as_posix() for p in code_revision._source_files()}
+    for required in (
+        "app/scheduler/scheduler.py",
+        "app/scheduler/retry_policy.py",
+        "app/scheduler/daemon_runtime.py",
+        "app/scheduler/reconciliation_service.py",
+        "app/orchestration/crazzydocs_master_orchestrator.py",
+        "app/services/youtube_publishing_engine.py",
+        "app/services/control_center_service.py",
+        "app/main.py",
+        "scripts/run_scheduler_daemon.py",
+        "scripts/startup_manager.py",
+    ):
+        assert required in files, required
+    assert all(f.endswith(".py") for f in files)
+    assert not any("__pycache__" in f for f in files)
+
+
+def test_editing_any_runtime_file_changes_revision(tmp_path, monkeypatch):
+    import shutil
+    src_app = code_revision.APP_DIR
+    app = tmp_path / "backend" / "app"
+    shutil.copytree(src_app / "scheduler", app / "scheduler", ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(code_revision, "APP_DIR", app)
+    monkeypatch.setattr(code_revision, "BACKEND_DIR", tmp_path / "backend")
+    before = code_revision.compute_source_revision()
+    target = app / "scheduler" / "retry_policy.py"
+    target.write_text(target.read_text(encoding="utf-8").replace("DEFAULT_MAX_RETRIES = 3", "DEFAULT_MAX_RETRIES = 4"), encoding="utf-8")
+    assert code_revision.compute_source_revision() != before
+
+
 def test_current_daemon_reports_ok(db, monkeypatch):
     monkeypatch.setattr(code_revision, "current_source_revision", lambda *a, **k: code_revision.LOADED_CODE_REVISION)
     dd.register_daemon_start()
@@ -65,12 +97,22 @@ def test_daemon_without_revision_is_treated_as_stale(db, monkeypatch):
     assert st["daemon"]["state"] == "UNKNOWN_REVISION"
 
 
-def test_restart_waits_for_active_job(db):
-    assert dd.should_exit_for_restart() == (False, "no request")
+@pytest.mark.parametrize("status", ["QUEUED", "RUNNING", "RETRYING"])
+def test_restart_request_rejected_while_job_in_flight(db, status):
     with db() as s:
+        s.add(JobModel(id="cycle_1_20261113_0000", date_str="2026-11-13", status=status, current_stage="RENDERING"))
+        s.commit()
+    with pytest.raises(ValueError, match="Restart rejected.*cycle_1_20261113_0000"):
+        dd.request_daemon_restart(confirm=True, reason="deploy fix")
+    assert dd.pending_restart_request() == {}
+
+
+def test_daemon_rechecks_before_exit_when_job_starts_after_request(db):
+    assert dd.should_exit_for_restart() == (False, "no request")
+    dd.request_daemon_restart(confirm=True, reason="deploy fix")
+    with db() as s:  # a cycle starts rendering after the request was accepted
         s.add(JobModel(id="cycle_1_20261113_0000", date_str="2026-11-13", status="RUNNING", current_stage="RENDERING"))
         s.commit()
-    dd.request_daemon_restart(confirm=True, reason="deploy fix")
     exit_now, why = dd.should_exit_for_restart()
     assert exit_now is False and "cycle_1_20261113_0000" in why
     with db() as s:

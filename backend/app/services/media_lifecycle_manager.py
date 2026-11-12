@@ -166,6 +166,7 @@ class MediaLifecycleManager:
                     cur.execute("SELECT id, status, checkpoint_data_json FROM persistent_jobs")
                     for job_id, status, cp_json in cur.fetchall():
                         paths_in_job = []
+                        preserved = False
                         if cp_json:
                             try:
                                 data = json.loads(cp_json)
@@ -173,16 +174,27 @@ class MediaLifecycleManager:
                                     val = data.get(k)
                                     if val and isinstance(val, str):
                                         paths_in_job.append(normalize_rel_path(val, self.workspace))
+                                # retry_policy keeps rendered videos of failed jobs for a
+                                # manual resume/handoff; they must never be quarantined.
+                                kept = (data.get("cycle_state") or {}).get("preserved_artifacts")
+                                preserved = bool(kept)
+                                if isinstance(kept, dict):
+                                    for val in kept.values():
+                                        if val and isinstance(val, str):
+                                            paths_in_job.append(normalize_rel_path(val, self.workspace))
                             except Exception:
                                 pass
-                        
+
                         for p in paths_in_job:
                             referenced_paths.add(p)
                             if status in ("COMPLETED", "PUBLISHED"):
                                 approved_paths.add(p)
-                            elif status in ("FAILED", "CANCELLED"):
+                            elif status in ("FAILED", "CANCELLED") and not preserved:
                                 failed_paths.add(p)
-                            elif status in ("PENDING", "RUNNING", "READY_FOR_PUBLICATION", "RETRYING"):
+                            elif status in (
+                                "PENDING", "QUEUED", "RUNNING", "READY_FOR_PUBLICATION", "RETRYING",
+                                "RETRY_SCHEDULED", "HANDOFF_PENDING", "FAILED",
+                            ):
                                 unpublished_paths.add(p)
                 except Exception as e:
                     logger.debug("Error querying persistent_jobs: %s", e)
@@ -386,7 +398,26 @@ class MediaLifecycleManager:
                 referenced_by=["publishing_ledger", "approved_registry", "test_fixtures"],
             )
 
-        # 4. Check Duplicates (Category G)
+        # 4. Category D: Unpublished Deliverables in Queue. Checked before the duplicate
+        # rule: a queued / handoff-pending / preserved video must never become a
+        # quarantinable "duplicate" just because identical bytes were scanned first.
+        if rel_path in deps["unpublished_paths"]:
+            if h and seen_hashes is not None and h not in seen_hashes:
+                seen_hashes[h] = rel_path
+            return ClassifiedFile(
+                relative_path=rel_path,
+                absolute_path=abs_path,
+                category=AssetCategory.CATEGORY_D_APPROVED_DELIVERABLES,
+                size_bytes=size_bytes,
+                modified_at=mtime,
+                sha256=h,
+                reason="Pending publication or actively queued in JobModel",
+                is_protected=True,
+                is_quarantinable=False,
+                referenced_by=["persistent_jobs_queue"],
+            )
+
+        # 5. Check Duplicates (Category G)
         if seen_hashes is not None and size_bytes > 0:
             if h in seen_hashes and seen_hashes[h] != rel_path:
                 return ClassifiedFile(
@@ -403,21 +434,6 @@ class MediaLifecycleManager:
                 )
             elif h:
                 seen_hashes[h] = rel_path
-
-        # 5. Category D: Unpublished Deliverables in Queue
-        if rel_path in deps["unpublished_paths"]:
-            return ClassifiedFile(
-                relative_path=rel_path,
-                absolute_path=abs_path,
-                category=AssetCategory.CATEGORY_D_APPROVED_DELIVERABLES,
-                size_bytes=size_bytes,
-                modified_at=mtime,
-                sha256=h,
-                reason="Pending publication or actively queued in JobModel",
-                is_protected=True,
-                is_quarantinable=False,
-                referenced_by=["persistent_jobs_queue"],
-            )
 
         # 6. Category H: Temporary Files
         temp_indicators = [
@@ -710,6 +726,11 @@ class MediaLifecycleManager:
         }
 
         manifest = self._load_quarantine_manifest() if not dry_run else {}
+        # Re-read the database right before moving anything: a classification made
+        # earlier (or passed in by a caller) must not move a file that is now queued,
+        # handoff-pending, preserved for retry, or tied to a YouTube upload.
+        live = self.collect_dependencies()
+        live_protected = live["approved_paths"] | live["unpublished_paths"]
 
         for cf in files_to_quarantine:
             # Boundary & safety checks
@@ -718,6 +739,13 @@ class MediaLifecycleManager:
                 results["skipped_files"].append({
                     "path": cf.relative_path,
                     "reason": f"Protected category {cf.category.value}",
+                })
+                continue
+            if cf.relative_path in live_protected:
+                results["skipped_protected_count"] += 1
+                results["skipped_files"].append({
+                    "path": cf.relative_path,
+                    "reason": "Referenced by a queued, preserved or uploaded production",
                 })
                 continue
 

@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, F
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.execution_context import ExecutionContext, get_current_execution_context
@@ -108,11 +108,34 @@ class SettingsUpdateRequest(BaseModel):
     default_voice: Optional[str] = None
 
 
+_MISSPELT_CONFIRM_FIELDS = ("confirmed", "confirmation", "approve", "approved", "Confirm")
+
+
+class ConfirmedActionRequest(BaseModel):
+    """Base for state-changing requests: `confirm: true` must be sent explicitly.
+
+    A misspelt confirmation field would otherwise be silently ignored by pydantic and
+    surface as a confusing "confirmation required" error; reject it with a 422 that
+    names the expected field instead.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_misspelt_confirm(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            wrong = [k for k in _MISSPELT_CONFIRM_FIELDS if k in data]
+            if wrong:
+                raise ValueError(
+                    f"Unknown confirmation field {wrong[0]!r}: send \"confirm\": true to confirm this action."
+                )
+        return data
+
+
 class OAuthClientConfigRequest(BaseModel):
     client_secrets_json: str = Field(min_length=10, max_length=100_000)
 
 
-class OAuthDisconnectRequest(BaseModel):
+class OAuthDisconnectRequest(ConfirmedActionRequest):
     confirm: bool
 
 
@@ -120,12 +143,12 @@ class UploadQueueRequest(BaseModel):
     publication_id: int = Field(gt=0)
 
 
-class PublishingPolicyRequest(BaseModel):
+class PublishingPolicyRequest(ConfirmedActionRequest):
     mode: Literal["manual_approval", "automatic"]
     confirm: bool
 
 
-class UploadApprovalRequest(BaseModel):
+class UploadApprovalRequest(ConfirmedActionRequest):
     confirm: bool
     publish_at: Optional[str] = None
 
@@ -528,7 +551,7 @@ async def stage_322_approve_upload(
     _: None = Depends(require_local_control),
 ):
     if req.confirm is not True:
-        raise HTTPException(status_code=400, detail="Explicit per-upload approval is required.")
+        raise HTTPException(status_code=400, detail='Explicit per-upload approval is required: send "confirm": true.')
     service = YouTubePublisherService()
     upload = service.get_upload(ledger_id)
     if not upload:
@@ -1502,17 +1525,17 @@ def _redact_log_secrets(text: str) -> str:
 
 
 @app.get("/api/control-center/publication-schedule")
-async def api_get_publication_schedule():
+async def api_get_publication_schedule(_: None = Depends(require_local_control)):
     return control_center_service.get_publication_schedule()
 
 
 @app.get("/api/control-center/publication-recovery")
-async def api_get_publication_recovery():
+async def api_get_publication_recovery(_: None = Depends(require_local_control)):
     return control_center_service.get_publication_recovery_timeline()
 
 
 @app.post("/api/control-center/publication-schedule/preset")
-async def api_preset_publication_schedule(req: PublicationSchedulePresetRequest):
+async def api_preset_publication_schedule(req: PublicationSchedulePresetRequest, _: None = Depends(require_local_control)):
     try:
         spec = control_center_service.preset_publication_schedule(req.preset_name)
         return control_center_service.save_publication_schedule_draft(spec)
@@ -1521,19 +1544,19 @@ async def api_preset_publication_schedule(req: PublicationSchedulePresetRequest)
 
 
 @app.post("/api/control-center/publication-schedule/draft")
-async def api_save_publication_schedule_draft(req: PublicationScheduleSpecRequest):
+async def api_save_publication_schedule_draft(req: PublicationScheduleSpecRequest, _: None = Depends(require_local_control)):
     return control_center_service.save_publication_schedule_draft(req.model_dump())
 
 
 @app.post("/api/control-center/publication-schedule/validate")
-async def api_validate_publication_schedule(req: Optional[PublicationScheduleSpecRequest] = None):
+async def api_validate_publication_schedule(req: Optional[PublicationScheduleSpecRequest] = None, _: None = Depends(require_local_control)):
     if req is not None:
         return control_center_service.validate_saved_publication_schedule_draft(req.model_dump())
     return control_center_service.validate_saved_publication_schedule_draft()
 
 
 @app.post("/api/control-center/publication-schedule/activate")
-async def api_activate_publication_schedule(req: PublicationScheduleActivateRequest):
+async def api_activate_publication_schedule(req: PublicationScheduleActivateRequest, _: None = Depends(require_local_control)):
     try:
         return control_center_service.activate_publication_schedule_draft(
             confirm=req.confirm,
@@ -1544,7 +1567,7 @@ async def api_activate_publication_schedule(req: PublicationScheduleActivateRequ
 
 
 @app.post("/api/control-center/publication-schedule/cancel")
-async def api_cancel_publication_schedule_draft():
+async def api_cancel_publication_schedule_draft(_: None = Depends(require_local_control)):
     control_center_service.cancel_publication_schedule_draft()
     return {"cancelled": True}
 
@@ -1555,7 +1578,7 @@ async def api_get_production_config():
 
 
 @app.post("/api/control-center/production-config")
-async def api_save_production_config(req: ProductionConfigRequest):
+async def api_save_production_config(req: ProductionConfigRequest, _: None = Depends(require_local_control)):
     try:
         data = req.model_dump()
         confirm = bool(data.pop("confirm", True))
@@ -1572,14 +1595,14 @@ async def api_get_storage_config():
 
 
 @app.post("/api/control-center/storage-config/validate")
-async def api_validate_storage_config(req: StorageConfigRequest):
+async def api_validate_storage_config(req: StorageConfigRequest, _: None = Depends(require_local_control)):
     data = req.model_dump()
     data.pop("confirm", None)
     return control_center_service.validate_storage_config(data)
 
 
 @app.post("/api/control-center/storage-config")
-async def api_save_storage_config(req: StorageConfigRequest):
+async def api_save_storage_config(req: StorageConfigRequest, _: None = Depends(require_local_control)):
     try:
         data = req.model_dump()
         confirm = bool(data.pop("confirm", True))
@@ -1589,7 +1612,7 @@ async def api_save_storage_config(req: StorageConfigRequest):
 
 
 @app.post("/api/control-center/storage/open-folder")
-async def api_open_storage_folder(req: OpenFolderRequest):
+async def api_open_storage_folder(req: OpenFolderRequest, _: None = Depends(require_local_control)):
     target = Path(req.path).resolve()
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"Folder does not exist: {target}")
@@ -1725,9 +1748,9 @@ class QueueMetadataUpdateRequest(BaseModel):
     thumbnail_path: Optional[str] = None
 
 
-class QueueScheduleRequest(BaseModel):
+class QueueScheduleRequest(ConfirmedActionRequest):
     scheduled_ist: str
-    confirm: bool = True
+    confirm: bool = False  # must be sent explicitly; an empty body never schedules
     title: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -1735,8 +1758,8 @@ class QueueScheduleRequest(BaseModel):
     thumbnail_path: Optional[str] = None
 
 
-class QueueConfirmRequest(BaseModel):
-    confirm: bool = True
+class QueueConfirmRequest(ConfirmedActionRequest):
+    confirm: bool = False  # must be sent explicitly; an empty body never publishes
 
 
 @app.get("/api/publishing/queue")
@@ -1807,7 +1830,10 @@ async def api_upload_queue_thumbnail(
         raise HTTPException(status_code=400, detail="Thumbnail exceeds YouTube's 2MB limit.")
     with open(dest, "wb") as f:
         f.write(content)
-    item = svc.update_queue_item(ledger_id, thumbnail_path=dest)
+    try:
+        item = svc.update_queue_item(ledger_id, thumbnail_path=dest)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "THUMBNAIL_UPDATED", "thumbnail_path": dest, "item": item}
 
 
@@ -1863,7 +1889,7 @@ async def api_cancel_queue_item_schedule(
 
 
 @app.post("/api/publishing/verify-scheduled")
-async def api_verify_scheduled_publications():
+async def api_verify_scheduled_publications(_: None = Depends(require_local_control)):
     from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
     return youtube_publishing_engine.verify_scheduled_publications()
 

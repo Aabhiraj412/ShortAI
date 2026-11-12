@@ -1576,10 +1576,40 @@ class YouTubePublishingEngine:
         if not vid:
             raise ValueError("Video has not been uploaded to YouTube yet.")
 
+        # A video that is already public must stay public: metadata/thumbnail edits keep
+        # its privacy, and it can no longer be rescheduled or unscheduled (that would
+        # silently unpublish it).
+        already_public = (
+            str(rec.get("visibility") or "").lower() == "public"
+            or rec.get("upload_status") in ("uploaded_public", "published")
+        )
+        if already_public and not make_public_now and (cancel_schedule or publish_at_iso):
+            raise ValueError("This video is already public on YouTube; it cannot be rescheduled or unscheduled.")
+        # Title/description/tags/thumbnail edits send only the snippet, so YouTube keeps
+        # the video's current privacyStatus and publishAt whatever the local ledger says.
+        metadata_only = not (make_public_now or cancel_schedule or publish_at_iso)
+
         service = self.oauth.get_authenticated_service()
         if not service:
-            self.db.set_upload_status(ledger_id, "awaiting_auth", "YouTube OAuth authentication required.")
+            # Record the problem without overwriting the video's lifecycle status.
+            self.db.update_queue_metadata_and_schedule(
+                ledger_id, error_details="YouTube OAuth authentication required."
+            )
             return {"success": False, "status": "awaiting_auth", "error": "YouTube account is not authenticated."}
+
+        if (cancel_schedule or publish_at_iso) and not make_public_now:
+            # The ledger can lag YouTube (a scheduled video goes live at publishAt).
+            # Rescheduling or cancelling a video that is public remotely would unpublish
+            # it, so check YouTube first and refuse when public or unverifiable.
+            try:
+                remote_items = service.videos().list(part="id,status", id=vid).execute().get("items", [])
+                remote_now = (remote_items[0].get("status") or {}).get("privacyStatus") if remote_items else None
+            except Exception as exc:
+                raise ValueError(
+                    "Could not verify the video's current state on YouTube; nothing was changed."
+                ) from exc
+            if remote_now == "public":
+                raise ValueError("This video is already public on YouTube; it cannot be rescheduled or unscheduled.")
 
         meta_dict = json.loads(rec.get("metadata_json") or "{}")
         meta_dict.pop("_schedule_context", None)
@@ -1589,7 +1619,7 @@ class YouTubePublishingEngine:
         category_id = str(meta_dict.get("category_id") or "28")
 
         status_body: Dict[str, Any] = {
-            "privacyStatus": "public" if make_public_now else "private",
+            "privacyStatus": "public" if (make_public_now or already_public) else "private",
             "selfDeclaredMadeForKids": False,
         }
         if publish_at_iso and not make_public_now and not cancel_schedule:
@@ -1598,7 +1628,7 @@ class YouTubePublishingEngine:
                 raise ValueError("Scheduled publication time must be a future timezone-aware timestamp.")
             status_body["publishAt"] = publish_at_iso
 
-        body = {
+        body: Dict[str, Any] = {
             "id": vid,
             "snippet": {
                 "title": title,
@@ -1606,15 +1636,20 @@ class YouTubePublishingEngine:
                 "tags": tags,
                 "categoryId": category_id,
             },
-            "status": status_body,
         }
+        if not metadata_only:
+            body["status"] = status_body
         try:
-            service.videos().update(part="snippet,status", body=body).execute()
+            service.videos().update(part="snippet" if metadata_only else "snippet,status", body=body).execute()
             self.db.add_quota_consumption(50)
         except Exception as exc:
             err_msg = f"YouTube video update failed: {exc}"
             fail_st = "quota_exceeded" if "quota" in str(exc).lower() else "failed"
-            self.db.set_upload_status(ledger_id, fail_st, err_msg)
+            # Nothing changed on YouTube, so keep the ledger's status, visibility and
+            # schedule; only record the error. (Setting upload_status='failed' here
+            # used to make an already-uploaded video eligible for re-approval.)
+            self.db.update_queue_metadata_and_schedule(ledger_id, error_details=err_msg)
+            self.db.update_upload_state(ledger_id, last_error=err_msg)
             return {"success": False, "video_id": vid, "status": fail_st, "error": err_msg}
 
         thumb_to_use = thumbnail_path or rec.get("thumbnail_path")
@@ -1658,7 +1693,7 @@ class YouTubePublishingEngine:
             new_sched = publish_at_iso
         else:
             new_status = rec.get("upload_status") or "pending_queue"
-            new_vis = "private"
+            new_vis = rec.get("visibility") or ("public" if already_public else "private")
             new_sched = rec.get("scheduled_timestamp")
 
         self.db.update_queue_metadata_and_schedule(
