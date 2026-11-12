@@ -125,8 +125,11 @@ def test_schedule_propagation_and_existing_upload_retention():
     safe = YouTubePublisherService._safe_publication(record)
     assert safe["scheduled_ist_display"] == "2026-11-12 15:00 IST"
     assert safe["scheduled_utc_publish_at"] == "2026-11-12T09:30:00Z"
-    assert safe["slot_id"] == "pub_custom_1"
-    assert safe["schedule_version"] == 3
+    # Publication slots no longer exist; a legacy row's slot context is preserved
+    # verbatim and read-only, never as live slot fields.
+    assert "slot_id" not in safe
+    assert safe["legacy_schedule_context"]["slot_id"] == "pub_custom_1"
+    assert safe["legacy_schedule_context"]["schedule_version"] == 3
     assert safe["youtube_privacy_status"] == "private"
     assert safe["youtube_scheduled_state"] == "PUBLICATION_SCHEDULED"
 

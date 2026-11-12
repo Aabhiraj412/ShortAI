@@ -40,7 +40,8 @@ from googleapiclient.http import MediaFileUpload
 logger = logging.getLogger(__name__)
 
 from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE_ROOT
-DB_PATH = os.path.join(WORKSPACE_ROOT, "backend", "studio.db")
+from backend.app.core.paths import DATABASE_PATH as _DATABASE_PATH
+DB_PATH = str(_DATABASE_PATH)
 DEFAULT_CLIENT_SECRETS = settings.YOUTUBE_CLIENT_SECRETS_FILE
 DEFAULT_TOKEN_FILE = settings.YOUTUBE_TOKEN_FILE
 
@@ -551,6 +552,18 @@ class PublishingDatabase:
                                 existing_id, existing_title, record.topic_title,
                             )
                             return existing_id
+
+                # Same rendered bytes already in the ledger in any state (approved,
+                # scheduled, uploaded...): a queue-handoff retry must return that row.
+                if record.video_hash:
+                    cur.execute(
+                        "SELECT id FROM publishing_ledger WHERE video_hash = ? ORDER BY id ASC LIMIT 1",
+                        (record.video_hash,),
+                    )
+                    same_bytes = cur.fetchone()
+                    if same_bytes:
+                        logger.info("[PUBLISHING IDEMPOTENCY] Video hash already queued as #%d", same_bytes[0])
+                        return same_bytes[0]
 
                 # Check already published records
                 cur.execute("""

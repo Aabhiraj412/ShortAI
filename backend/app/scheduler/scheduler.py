@@ -45,6 +45,7 @@ from backend.app.scheduler.reconciliation_service import (
 from backend.app.database.db import SessionLocal, JobModel
 from backend.app.services.control_center_service import get_operating_mode, production_capacity
 from backend.app.services.lifecycle_events import record_lifecycle_event
+from backend.app.scheduler import retry_policy
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +132,10 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
         job_id,
     )
     logger.info(
-        "Current IST: %s | Start: %s | Target Pub: %s",
+        "Current IST: %s | Start: %s | Recovery deadline: %s",
         now_ist.isoformat(),
         cycle_start.isoformat(),
-        target_pub.isoformat(),
+        (cycle_start + timedelta(hours=cycle.recovery_window_hours)).isoformat(),
     )
 
     if now_ist < cycle_start:
@@ -165,6 +166,34 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                     "reason": "RECOVERY_WINDOW_EXPIRED",
                     "cycle_id": cycle_id,
                 }
+            elif existing.status in ("FAILED", "BLOCKED_QC"):
+                # Terminal per retry_policy: permanent error, retries exhausted, or a
+                # post-render failure whose video must not be regenerated.
+                return {
+                    "status": "SKIPPED",
+                    "job_id": job_id,
+                    "reason": "TERMINAL_FAILURE",
+                    "cycle_id": cycle_id,
+                    "error": existing.error_details,
+                }
+            elif existing.status == retry_policy.STATUS_HANDOFF_PENDING:
+                # The video is rendered and QC-passed; only the queue handoff is
+                # outstanding (dispatch_eligible_recoveries). Never regenerate.
+                return {
+                    "status": "DEFERRED",
+                    "job_id": job_id,
+                    "reason": "QUEUE_HANDOFF_PENDING",
+                    "cycle_id": cycle_id,
+                }
+            elif existing.status == retry_policy.STATUS_RETRY_SCHEDULED and not retry_policy.is_retry_due(existing):
+                due = retry_policy.next_retry_at(existing)
+                return {
+                    "status": "DEFERRED",
+                    "job_id": job_id,
+                    "reason": "RETRY_BACKOFF",
+                    "cycle_id": cycle_id,
+                    "next_retry_at_utc": due.isoformat() + "Z" if due else None,
+                }
             elif existing.status == "RUNNING":
                 if (
                     existing.heartbeat_at is None
@@ -180,9 +209,20 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                             job_id,
                             existing.heartbeat_at,
                         )
-                        existing.retry_count = (existing.retry_count or 0) + 1
-                        existing.status = "RETRYING"
+                        decision = retry_policy.record_failure(
+                            existing,
+                            error_type="WorkerStalled",
+                            message=f"No worker heartbeat since {existing.heartbeat_at}",
+                        )
                         db_session.commit()
+                        if decision["terminal"] or not retry_policy.is_retry_due(existing):
+                            return {
+                                "status": decision["status"],
+                                "job_id": job_id,
+                                "reason": "WORKER_STALLED",
+                                "cycle_id": cycle_id,
+                                "retry": decision,
+                            }
                     else:
                         msg = f"Job {job_id} is currently actively RUNNING. Skipping duplicate trigger."
                         logger.info("[SCHEDULER] %s", msg)
@@ -273,7 +313,7 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
     with SessionLocal() as db_session:
         production_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
         is_recovery = production_job is not None and (
-            production_job.status in ("RETRYING", "FAILED", "WAITING_FOR_INTERNET", "INTERRUPTED", "PAUSED", "QUEUED")
+            production_job.status in ("RETRYING", "RETRY_SCHEDULED", "WAITING_FOR_INTERNET", "INTERRUPTED", "PAUSED", "QUEUED")
             or (
                 production_job.status == "RUNNING"
                 and production_job.heartbeat_at is None
@@ -321,42 +361,9 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
         record_lifecycle_event("CYCLE_RECOVERED", "RECOVERY_PENDING", cycle_id=cycle_id, job_id=job_id)
     record_lifecycle_event("CYCLE_JOB_ENQUEUED", "QUEUED", cycle_id=cycle_id, job_id=job_id)
 
-    # 2. Deadline Check (SLA Enforcement)
-    if cycle.is_deadline_exceeded(cycle_start, now_ist):
-        logger.error(
-            "[SCHEDULER] Cycle %s generation exceeded deadline (Start: %s, Current: %s).",
-            cycle_id,
-            cycle_start.isoformat(),
-            now_ist.isoformat(),
-        )
-        with SessionLocal() as db_session:
-            missed_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-            if not missed_job:
-                missed_job = JobModel(
-                    id=job_id,
-                    date_str=date_str,
-                    status="MISSED",
-                    current_stage="DEADLINE_EXCEEDED",
-                    error_details="Triggered after target publication SLA deadline",
-                )
-                db_session.add(missed_job)
-            else:
-                missed_job.status = "MISSED"
-                missed_job.error_details = "Triggered after target publication SLA deadline"
-            db_session.commit()
-        missed_res = {
-            "status": "MISSED",
-            "job_id": job_id,
-            "error": "DEADLINE_EXCEEDED",
-            "cycle_id": cycle_id,
-        }
-        try:
-            email_monitoring_service.send_cycle_summary_report(
-                cycle_id=cycle_id, job_id=job_id, result=missed_res, test_now_ist=now_ist
-            )
-        except Exception as ne:
-            logger.warning("[SCHEDULER] Could not send deadline summary notification: %s", ne)
-        return missed_res
+    # 2. (Removed) Publication SLA deadline check. Production is bounded only by its
+    # recovery window, checked above; it never waits for or is cancelled by a
+    # publication time. Legacy MISSED rows stay untouched.
 
     # 3. Network Connectivity Check
     net_ready, net_reason, _ = network_connectivity_service.is_environment_ready_for_cycle()
@@ -519,6 +526,8 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                     if completed_job.status in ("FAILED", "BLOCKED_QC")
                     else "FINALIZING"
                 )
+                if cycle_status == "COMPLETED":
+                    retry_policy.clear_failure_state(completed_job)
                 record_cycle_state(
                     completed_job,
                     cycle,
@@ -551,28 +560,41 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
             job_id=job_id,
             error_details=str(e),
         )
+        decision: Dict = {"status": "FAILED", "terminal": True, "classification": "UNKNOWN"}
         with SessionLocal() as db_session:
             failed_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
             if failed_job:
-                if failed_job.status != "BLOCKED_QC":
-                    failed_job.status = "FAILED"
-                failed_job.error_details = failed_job.error_details or str(e)
+                if failed_job.status == "BLOCKED_QC":
+                    decision = {"status": "BLOCKED_QC", "terminal": True, "classification": "QC_BLOCKED"}
+                else:
+                    decision = retry_policy.record_failure(failed_job, e)
+                logger.warning(
+                    "[SCHEDULER] Job %s failure classified %s (%s): %s",
+                    job_id,
+                    decision.get("classification"),
+                    decision.get("error_type"),
+                    decision.get("summary"),
+                )
                 record_cycle_state(
                     failed_job,
                     cycle,
                     cycle_start,
                     target_pub,
-                    "FAILED",
+                    "FAILED" if decision["terminal"] else "RETRY_SCHEDULED",
                     datetime.now(IST_TZ),
-                    str(e),
+                    failed_job.error_details,
                 )
                 db_session.commit()
         fail_res = {
-            "status": "FAILED",
+            "status": decision["status"],
             "job_id": job_id,
             "error": str(e),
             "cycle_id": cycle_id,
+            "retry": decision,
         }
+        if not decision["terminal"]:
+            # A retry is scheduled; only the terminal outcome gets a failure email.
+            return fail_res
         try:
             email_monitoring_service.send_cycle_summary_report(
                 cycle_id=cycle_id, job_id=job_id, result=fail_res, test_now_ist=now_ist
@@ -596,16 +618,8 @@ async def run_cycle_publishing(cycle_id: str, test_ist_now: Optional[datetime] =
         cycle.name if cycle else cycle_id,
         now_ist.isoformat(),
     )
-    from backend.app.services.control_center_service import (
-        is_automatic_publishing_authorized,
-    )
-    operating_mode = get_operating_mode()
-    auto_ok, _ = is_automatic_publishing_authorized()
-    is_auto_public = (
-        getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
-        or (operating_mode == "PRODUCTION" and auto_ok)
-    )
-    res = master_orchestrator.process_publishing_queue(execute_upload=is_auto_public)
+    # Publication is user-controlled: the background job never uploads.
+    res = master_orchestrator.process_publishing_queue(execute_upload=False)
     try:
         from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
         youtube_publishing_engine.verify_scheduled_publications()
@@ -653,7 +667,7 @@ async def dispatch_eligible_recoveries(
             db_session.query(JobModel)
             .filter(
                 JobModel.status.in_(
-                    ["QUEUED", "RETRYING", "INTERRUPTED", "PAUSED", "WAITING_FOR_INTERNET", "RUNNING"]
+                    ["QUEUED", "RETRYING", "RETRY_SCHEDULED", "INTERRUPTED", "PAUSED", "WAITING_FOR_INTERNET", "RUNNING"]
                 )
             )
             .order_by(JobModel.created_at.asc())
@@ -663,7 +677,29 @@ async def dispatch_eligible_recoveries(
             (j.id, j.date_str, j.status, j.heartbeat_at, j.recovery_reason)
             for j in candidates
             if not (j.id or "").startswith(("test_", "mock_"))
+            # Backoff: a scheduled retry is not eligible until next_retry_at_utc.
+            and (j.status != retry_policy.STATUS_RETRY_SCHEDULED or retry_policy.is_retry_due(j))
         ]
+        handoff_ids = [
+            j.id
+            for j in db_session.query(JobModel).filter(JobModel.status == retry_policy.STATUS_HANDOFF_PENDING).all()
+            if retry_policy.is_retry_due(j)
+        ]
+
+    # Queue handoffs first: cheap, no rendering, and not bound by recovery windows
+    # because the video already exists.
+    handoffs: List[Dict] = []
+    for job_id in handoff_ids:
+        try:
+            ledger_id = await asyncio.to_thread(master_orchestrator.complete_queue_handoff, job_id)
+            handoffs.append({"job_id": job_id, "ledger_id": ledger_id, "status": "COMPLETED"})
+        except Exception as exc:
+            with SessionLocal() as db_session:
+                job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                decision = retry_policy.record_failure(job, exc) if job else {"status": "FAILED"}
+                db_session.commit()
+            logger.warning("[SCHEDULER] Queue handoff retry for %s failed: %s", job_id, decision.get("summary"))
+            handoffs.append({"job_id": job_id, "status": decision["status"], "error": str(exc)})
 
     for job_id, date_str, status, heartbeat_at, recovery_reason in candidate_ids:
         if status == "RUNNING":
@@ -736,10 +772,11 @@ async def dispatch_eligible_recoveries(
 
         with SessionLocal() as db_session:
             job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+            # Resuming after an interruption or network wait is not a failed attempt,
+            # so retry_count is only incremented by retry_policy.record_failure.
             if job and job.status in ("INTERRUPTED", "PAUSED", "WAITING_FOR_INTERNET"):
                 job.status = "RETRYING"
                 job.recovery_reason = "CHECKPOINT_RESUMED"
-                job.retry_count = (job.retry_count or 0) + 1
                 db_session.commit()
 
         result = await run_cycle_generation(cycle.cycle_id, test_ist_now=now_ist)
@@ -751,6 +788,7 @@ async def dispatch_eligible_recoveries(
         "dispatched": dispatched,
         "expired": expired,
         "waiting_for_internet": waiting,
+        "queue_handoffs": handoffs,
     }
 
 
@@ -937,6 +975,7 @@ def get_scheduler_status() -> Dict:
                 "next_run": pub_next,
                 "publishing_mode": settings.PUBLISHING_MODE,
             },
+            "recovery_duration_minutes": int(round(cycle.recovery_window_hours * 60)),
             "window_hours": cycle.window_hours,
             "pub_rollover_days": cycle.pub_rollover_days,
         })

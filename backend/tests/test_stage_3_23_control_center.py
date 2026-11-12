@@ -66,15 +66,18 @@ def test_schedule_draft_is_not_activated_until_validated_and_confirmed(
     activated_result = control.activate_schedule_draft(confirm=True)
 
     assert activated_result["active_schedule"]["profile_name"] == "CUSTOM"
-    assert activated[0].cycles[0].pub_rollover_days == 1
-    assert activated[0].cycles[0].window_hours == 6
+    assert activated[0].cycles[0].pub_rollover_days == 1  # legacy field preserved
+    # Production window = recovery window (default 240 min), not the gap to a
+    # publication time.
+    assert activated[0].cycles[0].window_hours == 4
+    assert activated[0].cycles[0].recovery_window_hours == 4
     control.restore_active_schedule_profile()
     assert len(activated) == 2
     saved = isolated_settings().get(StudioSettingModel, control.ACTIVE_PROFILE_KEY)
     assert json.loads(saved.value)["profile_name"] == "CUSTOM"
 
 
-def test_schedule_validation_rejects_short_gap_and_overlapping_slots(isolated_settings):
+def test_schedule_validation_ignores_publication_gap_but_rejects_duplicate_starts(isolated_settings):
     short_gap = {
         "profile_name": "CUSTOM",
         "timezone_name": "Asia/Kolkata",
@@ -89,8 +92,8 @@ def test_schedule_validation_rejects_short_gap_and_overlapping_slots(isolated_se
         }],
     }
     control.save_schedule_draft(short_gap)
-    with pytest.raises(ValueError, match="six hours"):
-        control.validate_saved_schedule_draft()
+    # A publication time no longer constrains production.
+    assert control.validate_saved_schedule_draft()["valid"] is True
 
     conflict = {
         "profile_name": "CUSTOM",
@@ -108,7 +111,7 @@ def test_schedule_validation_rejects_short_gap_and_overlapping_slots(isolated_se
             },
         ],
     }
-    with pytest.raises(ValueError, match="conflicting target"):
+    with pytest.raises(ValueError, match="duplicate or conflicting production start times"):
         control.validate_schedule(conflict)
 
 

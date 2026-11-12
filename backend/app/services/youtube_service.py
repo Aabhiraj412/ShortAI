@@ -122,14 +122,11 @@ class YouTubePublisherService:
         queued = self.engine.db.get_publication(ledger_id)
         if not queued:
             raise ValueError(f"Publishing ledger record {ledger_id} was not found.")
-        from backend.app.services.control_center_service import is_automatic_publishing_authorized
-        auto_authorized, _ = is_automatic_publishing_authorized()
         target_publish_at = publish_at_iso or queued.get("scheduled_timestamp")
-        target_visibility = str(queued.get("visibility") or "private").lower()
-        if target_publish_at:
-            target_visibility = "private"
-        if target_visibility != "private" and not auto_authorized:
-            raise PermissionError("Stage 3.22 only permits private uploads.")
+        if str(queued.get("visibility") or "private").lower() != "private" and not target_publish_at:
+            raise PermissionError(
+                "Approval uploads are private only. Use Publish Now or pick a publication time."
+            )
         if queued["upload_status"] not in (
             "pending_queue", "upload_interrupted", "failed", "awaiting_auth"
         ):
@@ -144,10 +141,10 @@ class YouTubePublisherService:
             topic_title=approved["topic_title"],
             metadata=metadata,
             thumbnail_path=approved["thumbnail_path"],
-            visibility=target_visibility if (auto_authorized and not target_publish_at) else "private",
+            visibility="private",
             ledger_id=ledger_id,
             publish_at_iso=target_publish_at,
-            allow_public_bypass=bool(auto_authorized and target_visibility != "private" and not target_publish_at),
+            allow_public_bypass=False,
         )
         self._update_application_publication(metadata.source_publication_id, result)
         return result
@@ -328,11 +325,7 @@ class YouTubePublisherService:
             up_state.get("verification_status"),
             record.get("error_details"),
         )
-        policy = get_publishing_policy()
-        requires_manual = (
-            policy != "automatic"
-            and lifecycle_state == "PENDING_QUEUE"
-        )
+        requires_manual = lifecycle_state == "PENDING_QUEUE"
         sched_ctx = metadata.get("_schedule_context") or {}
         sched_utc = record.get("scheduled_timestamp")
         sched_ist = None
@@ -369,6 +362,11 @@ class YouTubePublisherService:
             "scheduled_ist_display": sched_ist or "Not Scheduled",
             "scheduled_ist_input": sched_ist_input or "",
             "production_cycle_id": sched_ctx.get("production_cycle_id"),
+            # Older rows carry publication-slot context (slot_id, schedule_version).
+            # Slots no longer drive anything; the stored context is shown read-only.
+            "legacy_schedule_context": {
+                k: v for k, v in sched_ctx.items() if k not in ("production_cycle_id", "production_schedule_version", "publishing_mode")
+            } or None,
             "upload_timestamp": record.get("upload_timestamp"),
             "error": record.get("error_details") or None,
             "upload_state": up_state,

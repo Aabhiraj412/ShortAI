@@ -94,16 +94,19 @@ def test_07_reject_below_two_hours_and_08_above_four_hours(isolated_prod_db):
         control.validate_schedule(too_long)
 
 
-def test_09_enforce_two_hour_publication_buffer(isolated_prod_db):
-    bad = {
+def test_09_no_publication_buffer_is_required(isolated_prod_db):
+    # Publication is user-controlled per video; production schedules carry no
+    # publication buffer. A legacy publish time is kept but not validated against.
+    spec = {
         "profile_name": "CUSTOM",
         "timezone_name": "Asia/Kolkata",
         "cycles": [
             {"cycle_id": "c1", "name": "Short Buffer", "start_time": "06:00", "recovery_duration_minutes": 120, "target_publish_time": "09:59", "active_weekdays": [0], "next_day": False, "enabled": True},
         ],
     }
-    with pytest.raises(ValueError, match="120 minutes after recovery_deadline"):
-        control.validate_schedule(bad)
+    res = control.validate_schedule(spec)
+    assert res["valid"] is True
+    assert res["cycles"][0]["recovery_duration_minutes"] == 120
 
 
 def test_10_midnight_crossing_cycles(isolated_prod_db):
@@ -117,9 +120,11 @@ def test_10_midnight_crossing_cycles(isolated_prod_db):
     res = control.validate_schedule(spec)
     assert res["valid"] is True
     preview = res["preview_next_cycles"][0]
+    assert preview["production_start_ist"].endswith("22:00 IST")
     assert preview["recovery_deadline_ist"].endswith("02:00 IST")
-    assert preview["target_publish_ist"].endswith("04:00 IST")
-    assert preview["finalization_buffer_minutes"] == 120
+    # The preview describes production only; no publication fields.
+    assert "target_publish_ist" not in preview
+    assert "finalization_buffer_minutes" not in preview
 
 
 def test_11_overlapping_recovery_windows_and_12_duplicate_cycles_rejected(isolated_prod_db):

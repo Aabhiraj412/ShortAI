@@ -310,6 +310,11 @@
 </style>
 </head>
 <body>
+<div id="staleCodeBanner" role="alert" style="display:none;background:var(--err);color:#fff;padding:10px 16px;font-weight:600;">
+  <span id="staleCodeText">STALE CODE</span>
+  <button type="button" id="staleCodeRestartBtn" style="margin-left:12px;" onclick="requestControlledRestart()">Request controlled restart</button>
+  <span id="staleCodeRestartState" style="margin-left:8px;font-weight:400;"></span>
+</div>
 <div class="app-shell">
   <!-- TOP STATUS BAR -->
   <header class="topbar">
@@ -2214,11 +2219,51 @@ async function refreshAll() {
   ]);
 }
 
+// Deployment diagnostics: warn whenever a running process executes code that no
+// longer matches the source on disk (scheduler daemon or this dashboard).
+async function refreshDeployment() {
+  const banner = document.getElementById("staleCodeBanner");
+  try {
+    const d = await apiJson("/api/control-center/deployment");
+    if (d.status === "OK") { banner.style.display = "none"; return; }
+    document.getElementById("staleCodeText").textContent =
+      (d.status === "STALE_CODE" ? "STALE CODE — " : d.status + " — ") + (d.warnings || []).join(" ");
+    const r = d.restart || {};
+    document.getElementById("staleCodeRestartState").textContent = r.requested
+      ? (r.safe ? "Restart requested; daemon will exit at its next check." :
+         "Restart requested; waiting for " + (r.blocking_jobs || []).map(j => j.job_id).join(", ") + " to finish.")
+      : "";
+    banner.style.display = "block";
+  } catch (err) {
+    banner.style.display = "none";
+  }
+}
+
+async function requestControlledRestart() {
+  const ok = await askConfirm(
+    "Controlled scheduler restart",
+    "The scheduler daemon will exit only when no production job is queued or running, then the startup monitor relaunches it with the current code. Continue?"
+  );
+  if (!ok) return;
+  try {
+    await apiJson("/api/control-center/deployment/restart", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true, reason: "Dashboard: stale code" })
+    });
+    showToast("Controlled restart requested.");
+    refreshDeployment();
+  } catch (err) {
+    showToast("Restart request failed: " + err.message, true);
+  }
+}
+
 refreshAll();
+refreshDeployment();
 setInterval(() => {
   refreshOverviewAndHealth();
   refreshPipeline();
 }, 8000);
+setInterval(refreshDeployment, 30000);
 </script>
 </body>
 </html>

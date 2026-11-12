@@ -21,6 +21,29 @@ from backend.app.services.youtube_publishing_engine import (
     ui_queue_status,
 )
 from backend.app.services.youtube_service import YouTubePublisherService, parse_ist_to_utc_iso
+from backend.app.core.paths import PRODUCTION_DATABASE_PATH
+from backend.app.database.db import Base
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings_db(tmp_path, monkeypatch):
+    """
+    Every test here gets its own SQLite file for studio_settings / persistent_jobs.
+    YouTubePublisherService reads the publishing policy through control.SessionLocal,
+    which previously pointed at backend/studio.db.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    db_file = tmp_path / "settings.db"
+    engine = create_engine(f"sqlite:///{db_file}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(control, "SessionLocal", factory)
+    monkeypatch.setattr(sched_mod, "SessionLocal", factory)
+    assert db_file.resolve() != PRODUCTION_DATABASE_PATH.resolve()
+    yield db_file
+    engine.dispose()
 
 
 def _make_dummy_media(tmp_dir: str):
@@ -99,7 +122,11 @@ def test_scheduler_reloads_when_db_revision_changes():
         sched_mod._last_db_revision_seen = None
 
 
-def test_user_controlled_schedule_reschedule_cancel_and_publish_now():
+def test_user_controlled_schedule_reschedule_cancel_and_publish_now(isolated_settings_db):
+    # A legacy 'automatic' value in settings must not change anything: scheduling is
+    # always private + publishAt, and only explicit publish_now makes a video public.
+    control._write_settings({control.PUBLISHING_POLICY_KEY: "automatic"})
+    assert control.get_publishing_policy() == "manual_approval"
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         db_path = os.path.join(tmp, "test_pub.db")
         vpath, tpath = _make_dummy_media(tmp)
@@ -147,6 +174,9 @@ def test_user_controlled_schedule_reschedule_cancel_and_publish_now():
         assert res_sched["item"]["ui_status"] == "Scheduled"
         assert res_sched["item"]["youtube_privacy_status"] == "private"
         assert mock_yt.videos.return_value.insert.call_count == 1
+        insert_body = mock_yt.videos.return_value.insert.call_args.kwargs["body"]
+        assert insert_body["status"]["privacyStatus"] == "private"
+        assert insert_body["status"]["publishAt"].endswith("Z")
 
         # 2. Reschedule existing video (must NOT re-upload via insert!)
         future_ist_2 = (datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=3)).strftime("%Y-%m-%dT%H:%M")

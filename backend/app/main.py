@@ -739,20 +739,17 @@ async def control_center_set_concurrency(
 
 @app.get("/api/control-center/publishing")
 async def control_center_publishing_status(_: None = Depends(require_local_control)):
-    policy = control_center_service.get_publishing_policy()
     readiness = control_center_service.evaluate_publishing_readiness()
-    auto_enabled = bool(policy == "automatic" and readiness["publishing_capable"])
+    stored = control_center_service.get_stored_publishing_policy()
     return {
-        "mode": policy,
-        "automatic_enabled": auto_enabled,
+        "mode": control_center_service.get_publishing_policy(),
+        "stored_mode": stored,
+        "legacy_automatic_ignored": stored in control_center_service.LEGACY_PUBLISHING_POLICIES,
+        "automatic_enabled": False,
         "autonomous_ready": readiness["autonomous_ready"],
         "readiness": readiness,
-        "reason": (
-            "Automatic publishing active under Stage 3.23 readiness gates."
-            if auto_enabled
-            else ("; ".join(readiness["blockers"]) or "Manual approval active.")
-        ),
-        "allowed_upload_privacy": ["private", "unlisted", "public"] if auto_enabled else ["private", "unlisted"],
+        "reason": "Publishing is user-controlled: each video needs a user-selected publication time.",
+        "allowed_upload_privacy": ["private", "unlisted"],
     }
 
 
@@ -763,6 +760,31 @@ async def control_center_update_publishing_policy(
 ):
     try:
         return control_center_service.set_publishing_policy(req.mode, req.confirm)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class DeploymentRestartRequest(BaseModel):
+    confirm: bool = False
+    reason: str = ""
+
+
+@app.get("/api/control-center/deployment")
+async def control_center_deployment_status(_: None = Depends(require_local_control)):
+    """PIDs, start times, loaded vs on-disk code revision (STALE_CODE), sync, heartbeats."""
+    from backend.app.services import deployment_diagnostics
+    return await asyncio.to_thread(deployment_diagnostics.get_deployment_status)
+
+
+@app.post("/api/control-center/deployment/restart")
+async def control_center_request_daemon_restart(
+    req: DeploymentRestartRequest,
+    _: None = Depends(require_local_control),
+):
+    """Requests a controlled scheduler restart; the daemon exits only at a safe point."""
+    from backend.app.services import deployment_diagnostics
+    try:
+        return deployment_diagnostics.request_daemon_restart(req.confirm, req.reason)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

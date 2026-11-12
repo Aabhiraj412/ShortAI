@@ -30,7 +30,10 @@ HISTORY_KEY = "control_center.change_history"
 MAX_CONCURRENCY_KEY = "control_center.production_concurrency"
 PRODUCTION_CONTROL_KEY = "control_center.production.control_state"
 PUBLISHING_POLICY_KEY = "control_center.publishing.policy"
-PUBLISHING_POLICIES = {"manual_approval", "automatic"}
+# Only user-controlled publishing exists. "automatic" is a legacy stored value that
+# is read as manual_approval and can no longer be selected.
+PUBLISHING_POLICIES = {"manual_approval"}
+LEGACY_PUBLISHING_POLICIES = {"automatic"}
 MAX_HISTORY = 500
 
 
@@ -230,19 +233,14 @@ def compute_upcoming_production_cycles(
                 continue
             try:
                 start_min = _time_minutes(str(c.get("start_time") or ""), "start_time")
-                target_min = _time_minutes(str(c.get("target_publish_time") or ""), "target_publish_time")
             except ValueError:
                 continue
             rec_dur = int(c.get("recovery_duration_minutes", 240))
-            next_day = bool(c.get("next_day", False))
-            gap = target_min - start_min + (1440 if next_day else 0)
             start_dt = datetime(day_date.year, day_date.month, day_date.day, start_min // 60, start_min % 60, tzinfo=tz)
             rec_deadline_dt = start_dt + timedelta(minutes=rec_dur)
-            target_pub_dt = start_dt + timedelta(minutes=gap)
-            if target_pub_dt <= now:
+            if rec_deadline_dt <= now:
                 continue
             rem_sec = int(max(0, (start_dt - now).total_seconds()))
-            buf_min = max(0, int((target_pub_dt - rec_deadline_dt).total_seconds() // 60))
             candidates.append((
                 start_dt,
                 {
@@ -256,10 +254,6 @@ def compute_upcoming_production_cycles(
                     "recovery_start_ist": start_dt.strftime("%Y-%m-%d %H:%M IST"),
                     "recovery_deadline_ist": rec_deadline_dt.strftime("%Y-%m-%d %H:%M IST"),
                     "recovery_deadline_utc": rec_deadline_dt.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "finalization_buffer_minutes": buf_min,
-                    "target_publish_ist": target_pub_dt.strftime("%Y-%m-%d %H:%M IST"),
-                    "target_publish_utc": target_pub_dt.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "next_day": next_day,
                     "countdown_seconds": rem_sec,
                     "countdown_label": f"Starts in {_format_remaining(rem_sec)}" if start_dt > now else "In Window",
                 },
@@ -324,10 +318,8 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
         errors.append("SINGLE_DAILY must contain exactly one enabled cycle.")
 
     ids: set[str] = set()
-    prod_windows: list[tuple[int, int, str]] = []
     rec_windows: list[tuple[int, int, str]] = []
     start_slots: set[tuple[int, int]] = set()
-    publish_slots: set[tuple[int, int]] = set()
     normalized_all: list[dict[str, Any]] = []
 
     if not errors:
@@ -344,10 +336,18 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
             ids.add(cycle_id)
             try:
                 start = _time_minutes(cycle.get("start_time"), f"{cycle_id}.start_time")
-                target = _time_minutes(cycle.get("target_publish_time"), f"{cycle_id}.target_publish_time")
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
+            # Legacy: production no longer has a publication target. A stored value is
+            # preserved verbatim (keeps old revisions stable) but has no effect.
+            legacy_target = cycle.get("target_publish_time")
+            if legacy_target not in (None, ""):
+                try:
+                    _time_minutes(legacy_target, f"{cycle_id}.target_publish_time")
+                except ValueError:
+                    warnings.append(f"{cycle_id}: ignoring unreadable legacy target_publish_time.")
+                    legacy_target = None
 
             raw_rec = cycle.get("recovery_duration_minutes", 240)
             if type(raw_rec) is bool:
@@ -362,27 +362,9 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
                 errors.append(f"{cycle_id}.recovery_duration_minutes must be between 120 and 240 minutes (got {rec_dur}).")
                 continue
 
-            next_day = cycle.get("next_day")
+            next_day = cycle.get("next_day", False)
             if not isinstance(next_day, bool):
                 errors.append(f"{cycle_id}.next_day must be a boolean.")
-                continue
-
-            gap = target - start + (1440 if next_day else 0)
-            min_required_gap = rec_dur + 120
-            if gap < min_required_gap:
-                if rec_dur == 240 and gap < 360:
-                    errors.append(
-                        f"{cycle_id} must have at least six hours before target publishing "
-                        f"(target_publish_time >= recovery_deadline + 120 minutes)."
-                    )
-                else:
-                    errors.append(
-                        f"{cycle_id}: target_publish_time must be at least 120 minutes after recovery_deadline "
-                        f"(required >= {min_required_gap}m from start, got {gap}m)."
-                    )
-                continue
-            if gap > 1440:
-                errors.append(f"{cycle_id} publishing target cannot exceed 24 hours after start.")
                 continue
 
             weekdays = cycle.get("active_weekdays", [0, 1, 2, 3, 4, 5, 6])
@@ -397,32 +379,28 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
 
             if is_enabled:
                 for day in weekdays:
-                    publish_day = (day + int(start + gap >= 1440)) % 7
-                    slot = (publish_day, target)
-                    if slot in publish_slots:
-                        errors.append("Enabled cycles have conflicting target publishing slots.")
-                        break
-                    publish_slots.add(slot)
                     if (day, start) in start_slots:
                         errors.append(f"Enabled cycles have duplicate or conflicting production start times ({cycle['start_time']}).")
                         break
                     start_slots.add((day, start))
                     start_abs = day * 1440 + start
-                    prod_windows.append((start_abs, start_abs + gap, cycle_id))
+                    # A production window is exactly its recovery window.
                     rec_windows.append((start_abs, start_abs + rec_dur, cycle_id))
             else:
                 warnings.append(f"Cycle '{name.strip()}' ({cycle_id}) is disabled and will be skipped.")
 
-            normalized_all.append({
+            normalized = {
                 "cycle_id": cycle_id.strip(),
                 "name": name.strip(),
                 "start_time": cycle["start_time"],
                 "recovery_duration_minutes": rec_dur,
-                "target_publish_time": cycle["target_publish_time"],
                 "active_weekdays": sorted(weekdays),
                 "next_day": next_day,
                 "enabled": is_enabled,
-            })
+            }
+            if legacy_target not in (None, ""):
+                normalized["target_publish_time"] = legacy_target
+            normalized_all.append(normalized)
 
     if not errors:
         week = 7 * 1440
@@ -432,18 +410,6 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
                     continue
                 if any(start < other_end + shift and other_start + shift < end for shift in (-week, 0, week)):
                     errors.append(f"Recovery windows overlap: {cycle_id} and {other_id}.")
-                    break
-            if errors:
-                break
-
-    if not errors:
-        week = 7 * 1440
-        for index, (start, end, cycle_id) in enumerate(prod_windows):
-            for other_start, other_end, other_id in prod_windows[index + 1:]:
-                if cycle_id == other_id and start == other_start:
-                    continue
-                if any(start < other_end + shift and other_start + shift < end for shift in (-week, 0, week)):
-                    errors.append(f"Production windows overlap: {cycle_id} and {other_id}.")
                     break
             if errors:
                 break
@@ -548,9 +514,15 @@ def _profile_from_spec(spec: dict[str, Any]) -> ScheduleProfile:
         if not item.get("enabled", True):
             continue
         start = _time_minutes(item["start_time"], "start_time")
-        target = _time_minutes(item["target_publish_time"], "target_publish_time")
-        gap = target - start + (1440 if item["next_day"] else 0)
         rec_dur = int(item.get("recovery_duration_minutes", 240))
+        # Production is bounded only by its recovery window. The legacy target fields
+        # of ProductionCycle are informational; default them to the recovery deadline.
+        if item.get("target_publish_time"):
+            target = _time_minutes(item["target_publish_time"], "target_publish_time")
+            rollover = int(bool(item.get("next_day", False)))
+        else:
+            target = (start + rec_dur) % 1440
+            rollover = int(start + rec_dur >= 1440)
         cycles.append(ProductionCycle(
             cycle_id=item["cycle_id"],
             name=item["name"],
@@ -558,9 +530,9 @@ def _profile_from_spec(spec: dict[str, Any]) -> ScheduleProfile:
             start_min_ist=start % 60,
             target_pub_hour_ist=target // 60,
             target_pub_min_ist=target % 60,
-            pub_rollover_days=int(item["next_day"]),
-            window_hours=gap / 60,
-            recovery_window_hours=min(rec_dur / 60.0, gap / 60.0),
+            pub_rollover_days=rollover,
+            window_hours=rec_dur / 60.0,
+            recovery_window_hours=rec_dur / 60.0,
             active_weekdays=tuple(item["active_weekdays"]),
         ))
     return ScheduleProfile(
@@ -631,12 +603,18 @@ def cancel_schedule_draft() -> None:
     })
 
 
+def get_stored_publishing_policy() -> str:
+    """Raw persisted policy value, for diagnostics only. Never use it to gate uploads."""
+    return (_read_setting(PUBLISHING_POLICY_KEY) or "manual_approval").strip().lower()
+
+
 def get_publishing_policy() -> str:
-    """Returns persisted Stage 3.23 Control Center publishing policy ('manual_approval' or 'automatic')."""
-    raw = (_read_setting(PUBLISHING_POLICY_KEY) or "manual_approval").strip().lower()
-    if raw not in PUBLISHING_POLICIES:
-        return "manual_approval"
-    return raw
+    """
+    Effective publishing policy. Always 'manual_approval': QC-approved videos wait in the
+    Publishing Queue until the user picks a publication time. A legacy stored 'automatic'
+    value is preserved in studio_settings but has no effect.
+    """
+    return "manual_approval"
 
 
 def evaluate_publishing_readiness() -> dict[str, Any]:
@@ -733,41 +711,35 @@ def evaluate_publishing_readiness() -> dict[str, Any]:
 
 def is_automatic_publishing_authorized() -> tuple[bool, dict[str, Any]]:
     """
-    Returns True only when persisted policy is 'automatic' AND all autonomous readiness gates pass.
+    Automatic public release is permanently disabled. Kept for API compatibility;
+    always returns False so no caller can publish without a user-selected time.
     """
-    policy = get_publishing_policy()
-    readiness = evaluate_publishing_readiness()
-    if policy != "automatic":
-        return False, {"policy": policy, "reason": "Publishing policy is manual_approval.", **readiness}
-    if not readiness["autonomous_ready"]:
-        return False, {
-            "policy": policy,
-            "reason": "; ".join(readiness["blockers"]) or "Readiness gate failed.",
-            **readiness,
-        }
-    return True, {"policy": policy, "reason": "All Stage 3.23 readiness gates passed.", **readiness}
+    return False, {
+        "policy": "manual_approval",
+        "stored_policy": get_stored_publishing_policy(),
+        "reason": "Automatic publishing is disabled. Every video needs a user-selected publication time.",
+    }
 
 
 def set_publishing_policy(policy: str, confirm: bool) -> dict[str, Any]:
-    """Updates persisted Control Center publishing policy with explicit confirmation & gate verification."""
+    """Persists the publishing policy. Only 'manual_approval' is accepted."""
     if confirm is not True:
         raise ValueError("Explicit confirmation is required to change publishing policy.")
     normalized = (policy or "").strip().lower()
+    if normalized in LEGACY_PUBLISHING_POLICIES:
+        raise ValueError(
+            "Automatic publishing has been removed. Videos enter the Publishing Queue and "
+            "need a user-selected publication time."
+        )
     if normalized not in PUBLISHING_POLICIES:
         raise ValueError(f"Unsupported publishing policy: {policy}")
-    readiness = evaluate_publishing_readiness()
-    if normalized == "automatic" and not readiness["publishing_capable"]:
-        raise ValueError(
-            "Cannot enable automatic publishing: " + "; ".join(readiness["blockers"])
-        )
-    previous = get_publishing_policy()
+    previous = get_stored_publishing_policy()
     _write_settings({PUBLISHING_POLICY_KEY: normalized})
     record_change("publishing_policy", previous, normalized)
     return {
         "mode": normalized,
         "previous_mode": previous,
-        "automatic_enabled": bool(normalized == "automatic" and readiness["publishing_capable"]),
-        "readiness": readiness,
+        "automatic_enabled": False,
     }
 
 

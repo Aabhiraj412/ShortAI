@@ -360,9 +360,11 @@ class StartupReconciler:
                             "reason": "RECOVERY_WINDOW_EXPIRED",
                         })
                     else:
+                        # Resuming is not a new failed attempt; retry_count only grows
+                        # in retry_policy.record_failure. An already-RETRYING job seen
+                        # again on the next 45 s pass must not be counted again.
                         r_job.status = "RETRYING"
                         r_job.recovery_reason = "CHECKPOINT_RESUMED"
-                        r_job.retry_count = (r_job.retry_count or 0) + 1
                         if cycle is not None and cycle_start is not None and target_publication is not None:
                             record_cycle_state(
                                 r_job,
@@ -386,8 +388,12 @@ class StartupReconciler:
                 if job and job.status in ("COMPLETED", "PUBLISHED"):
                     continue
 
-                # Terminal cycles are never recovered or backfilled.
-                if job and job.status in ("MISSED", "RECOVERY_WINDOW_EXPIRED"):
+                # Terminal cycles are never recovered or backfilled. FAILED is terminal
+                # (retry_policy decided not to retry), and RETRY_SCHEDULED jobs are
+                # dispatched by the scheduler only once their backoff has elapsed.
+                # Previously FAILED jobs were reset to RUNNING here every ~45 s,
+                # which produced the unbounded retry storm of cycle_4_20261112_1730.
+                if job and job.status in ("MISSED", "RECOVERY_WINDOW_EXPIRED", "FAILED", "BLOCKED_QC", "RETRY_SCHEDULED", "HANDOFF_PENDING"):
                     continue
 
                 # If cycle is in the future

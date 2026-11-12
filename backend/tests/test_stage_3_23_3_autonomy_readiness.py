@@ -109,17 +109,26 @@ def test_publishing_policy_requires_verified_readiness_gate(isolated_cc, monkeyp
             "channel_info": {"title": "CrazzyDocs", "custom_url": "@crazzydocs"},
         }
         monkeypatch.setattr(control, "evaluate_publishing_readiness", lambda: ready)
-        res_ok = client.put(
+        # Automatic public release was removed: even with every readiness gate
+        # passing it cannot be enabled.
+        res_still_blocked = client.put(
             "/api/control-center/publishing/policy",
             json={"mode": "automatic", "confirm": True},
         )
-        assert res_ok.status_code == 200
-        assert res_ok.json()["mode"] == "automatic"
-        assert res_ok.json()["automatic_enabled"] is True
+        assert res_still_blocked.status_code == 409
+        assert "removed" in res_still_blocked.json()["detail"]
+
+        res_manual = client.put(
+            "/api/control-center/publishing/policy",
+            json={"mode": "manual_approval", "confirm": True},
+        )
+        assert res_manual.status_code == 200
+        assert res_manual.json()["automatic_enabled"] is False
 
         status_res = client.get("/api/control-center/publishing")
         assert status_res.status_code == 200
-        assert status_res.json()["mode"] == "automatic"
+        assert status_res.json()["mode"] == "manual_approval"
+        assert status_res.json()["automatic_enabled"] is False
         assert status_res.json()["autonomous_ready"] is True
 
 
@@ -141,7 +150,7 @@ async def test_resource_guard_defers_cycle_on_high_load(isolated_cc, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_cycle_publishing_respects_automatic_authorization(isolated_cc, monkeypatch):
+async def test_cycle_publishing_never_uploads_even_if_authorized(isolated_cc, monkeypatch):
     monkeypatch.setattr(scheduler_mod, "get_operating_mode", lambda: "IDLE")
     with patch.object(
         scheduler_mod.master_orchestrator, "process_publishing_queue", return_value={"status": "withheld_safety_gate"}
@@ -156,4 +165,4 @@ async def test_cycle_publishing_respects_automatic_authorization(isolated_cc, mo
         scheduler_mod.master_orchestrator, "process_publishing_queue", return_value={"status": "queue_empty"}
     ) as mock_proc:
         await scheduler_mod.run_cycle_publishing("cycle_1")
-        mock_proc.assert_called_once_with(execute_upload=True)
+        mock_proc.assert_called_once_with(execute_upload=False)

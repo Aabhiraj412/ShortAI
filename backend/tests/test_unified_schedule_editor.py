@@ -95,8 +95,11 @@ def test_01_default_four_cycles_daily_unified_state(isolated_unified_db):
 
 
 def test_02_one_cycle_custom_schedule(isolated_unified_db):
+    # Production scheduling is decoupled from publication: activating a production
+    # schedule must not activate, require or derive any publication slot.
     prod = _one_cycle_prod_spec()
     pub = _matching_pub_spec_for_one_cycle()
+    pub_active_before = control.get_control_center_state()["publication_schedule"]["active"]
     res = control.activate_unified_schedule(
         confirm=True,
         prod_spec=prod,
@@ -104,9 +107,15 @@ def test_02_one_cycle_custom_schedule(isolated_unified_db):
         sync_scheduler_fn=_sync_active_profile_to_db,
     )
     assert res["status"] == "ACTIVE"
+    assert res["is_synchronized"] is True
     assert res["state"]["active_schedule_name"] == "CUSTOM"
-    assert len(res["state"]["production"]["active"]["cycles"]) == 1
-    assert res["state"]["mappings"][0]["mapping_mode"] == "inherited"
+    cycles = res["state"]["production"]["active"]["cycles"]
+    assert [c["cycle_id"] for c in cycles] == ["solo_1"]
+    assert cycles[0]["start_time"] == "10:00"
+    assert res["publication_result"] is None
+    pub_active_after = control.get_control_center_state()["publication_schedule"]["active"]
+    assert pub_active_after == pub_active_before
+    assert all(s.get("slot_id") != "solo_1" for s in pub_active_after.get("slots") or [])
 
 
 def test_03_five_cycle_custom_and_04_add_remove_cycles(isolated_unified_db):
@@ -137,12 +146,25 @@ def test_05_prod_recovery_boundaries_120_and_240(isolated_unified_db):
         control.validate_schedule(bad_max)
 
 
-def test_06_two_hour_publication_buffer_enforced(isolated_unified_db):
+def test_06_production_schedule_has_no_publication_constraint(isolated_unified_db):
+    # Production is decoupled from publication: a publication time is neither required
+    # nor constrained, and a legacy value never shortens the recovery window.
     base = _one_cycle_prod_spec()["cycles"][0]
-    # 10:00 + 180m = 13:00 recovery deadline; 14:30 is only 90m after deadline (< 120m buffer)
-    bad = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "target_publish_time": "14:30"}]}
-    with pytest.raises(ValueError, match="at least 120 minutes after recovery_deadline"):
-        control.validate_schedule(bad)
+    legacy_close = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "target_publish_time": "14:30"}]}
+    res = control.validate_schedule(legacy_close)
+    assert res["valid"] is True
+    assert res["cycles"][0]["target_publish_time"] == "14:30"  # preserved verbatim
+
+    no_target = {k: v for k, v in base.items() if k not in ("target_publish_time", "next_day")}
+    res2 = control.validate_schedule({"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [no_target]})
+    assert res2["valid"] is True
+    assert "target_publish_time" not in res2["cycles"][0]
+    assert res2["preview_next_cycles"], "cycles without a publication time must still be scheduled"
+    assert "target_publish_ist" not in res2["preview_next_cycles"][0]
+
+    profile = control._profile_from_spec({**res2, "cycles": res2["cycles"]})
+    assert profile.cycles[0].recovery_window_hours == 3.0  # 180 min, not clipped
+    assert profile.cycles[0].window_hours == 3.0
 
 
 def test_07_pub_prep_and_recovery_validation_and_overlap_policy(isolated_unified_db):
@@ -380,6 +402,9 @@ def test_20_unified_api_endpoints_and_failed_activation_reporting(isolated_unifi
 
 
 def test_21_unified_draft_validate_missing_and_duplicate_mapping(isolated_unified_db):
+    # Publication slots are user-controlled and no longer part of production
+    # validation: missing or duplicate slot mappings must not invalidate a valid
+    # production schedule, while an invalid production schedule still fails.
     prod = _one_cycle_prod_spec()
     pub_missing = {
         "preset_name": "CUSTOM",
@@ -389,8 +414,17 @@ def test_21_unified_draft_validate_missing_and_duplicate_mapping(isolated_unifie
         "slots": [],
     }
     res_missing = control.validate_unified_schedule(prod_spec=prod, pub_spec=pub_missing)
-    assert res_missing["valid"] is False
-    assert any("missing publication slot mapping" in e.lower() for e in res_missing["errors"])
+    assert res_missing["valid"] is True
+    assert res_missing["errors"] == []
+    assert res_missing["publication_validation"] is None
+    assert res_missing["mappings"] == []
+    assert res_missing["production_validation"]["cycle_count"] == 1
+
+    bad_prod = _one_cycle_prod_spec()
+    bad_prod["cycles"][0]["recovery_duration_minutes"] = 60
+    res_bad = control.validate_unified_schedule(prod_spec=bad_prod, pub_spec=pub_missing)
+    assert res_bad["valid"] is False
+    assert any("between 120 and 240" in e for e in res_bad["errors"])
 
     pub_dup = {
         "preset_name": "CUSTOM",
@@ -403,8 +437,9 @@ def test_21_unified_draft_validate_missing_and_duplicate_mapping(isolated_unifie
         ],
     }
     res_dup = control.validate_unified_schedule(prod_spec=prod, pub_spec=pub_dup)
-    assert res_dup["valid"] is False
-    assert any("duplicate publication slot assignment" in e.lower() for e in res_dup["errors"])
+    assert res_dup["valid"] is True
+    assert res_dup["errors"] == []
+    assert res_dup["publication_validation"] is None
 
     with TestClient(main_module.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as client:
         pub_ok = {
@@ -423,4 +458,4 @@ def test_21_unified_draft_validate_missing_and_duplicate_mapping(isolated_unifie
         r_val = client.post("/api/control-center/unified-schedule/validate", json={"confirm": False, "production_spec": prod, "publication_spec": pub_ok})
         assert r_val.status_code == 200
         assert r_val.json()["valid"] is True
-        assert any("valid publication mappings" in s.lower() for s in r_val.json()["successes"])
+        assert r_val.json()["successes"] == ["All production cycles and recovery windows are valid."]

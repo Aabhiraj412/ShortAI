@@ -90,7 +90,8 @@ from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE
 VIDEO_DIR = os.path.join(WORKSPACE, "media", "video")
 THUMB_DIR = os.path.join(WORKSPACE, "media", "thumbnails")
 AUDIT_DIR = os.path.join(WORKSPACE, "media", "audit")
-FFMPEG_EXE = os.path.join(WORKSPACE, "tools", "ffmpeg", "bin", "ffmpeg.exe")
+from backend.app.core.paths import get_ffmpeg_path as _get_ffmpeg_path
+FFMPEG_EXE = _get_ffmpeg_path()
 
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
@@ -1147,15 +1148,25 @@ class CrazzyDocsMasterOrchestrator:
             elapsed = time.perf_counter() - t_start
             completion_time_ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
 
+            # Production completes only after the Publishing Queue entry exists
+            # (complete_queue_handoff). Other contexts have no queue and complete here.
+            requires_queue_handoff = (
+                execution_context == ExecutionContext.PRODUCTION
+                and not job_id.startswith(("test_", "mock_"))
+            )
             if persist_to_db:
-                logger.info("[STAGE 12] Recording publication state in database...")
+                logger.info("[STAGE 12] Recording production state in database...")
                 with SessionLocal() as db_session:
                     job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
                     if job:
-                        job.status = "COMPLETED"
-                        job.current_stage = "COMPLETED"
+                        if requires_queue_handoff:
+                            job.current_stage = "PUBLISHING_QUEUE_HANDOFF"
+                            job.progress_pct = 95.0
+                        else:
+                            job.status = "COMPLETED"
+                            job.current_stage = "COMPLETED"
+                            job.progress_pct = 100.0
                         job.topic_title = selected_topic.title
-                        job.progress_pct = 100.0
                         completed_checkpoint = json.loads(job.checkpoint_data_json or "{}")
                         completed_checkpoint.update({
                             "video_path": final_video_path,
@@ -1175,7 +1186,8 @@ class CrazzyDocsMasterOrchestrator:
                             "winning_thumbnail": winning_headline,
                         })
                         job.checkpoint_data_json = json.dumps(completed_checkpoint)
-                        job.completed_at = datetime.utcnow()
+                        if not requires_queue_handoff:
+                            job.completed_at = datetime.utcnow()
                         db_session.commit()
             else:
                 logger.info("[STAGE 12] VALIDATION context: skipping studio.db JobModel mutation; checkpoint saved in workspace reports.")
@@ -1242,19 +1254,13 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 14 (pre-notification): YouTube Publishing Queue Enqueueing
             # -------------------------------------------------------------
-            from backend.app.services.control_center_service import is_automatic_publishing_authorized
-            auto_authorized, _ = is_automatic_publishing_authorized()
-            is_auto_public = (getattr(settings, "PUBLISHING_MODE", "") == "automatic_public") or auto_authorized
-            target_visibility = "public" if is_auto_public else "private"
-            publishing_status = f"enqueued_{target_visibility}"
+            # QC-approved videos only ever enter the queue as private. Publication
+            # always needs a user-selected time (youtube_service.edit_and_schedule).
+            publishing_status = "enqueued_private"
 
-            if execution_context == ExecutionContext.PRODUCTION and not job_id.startswith("test_") and not job_id.startswith("mock_"):
+            if requires_queue_handoff:
                 logger.info("[STAGE 14] Enqueueing to YouTube Publishing Queue in PRODUCTION context...")
                 from backend.app.scheduler.schedule_profiles import get_active_profile
-                from backend.app.services.control_center_service import (
-                    compute_next_publication_slot,
-                    is_automatic_publishing_authorized,
-                )
                 active_prod_prof = get_active_profile()
                 prod_cycle_id = "_".join(job_id.split("_")[:2]) if "_" in job_id else job_id
                 matched_cycle = next((c for c in active_prod_prof.cycles if job_id.startswith(c.cycle_id + "_")), None)
@@ -1267,51 +1273,28 @@ class CrazzyDocsMasterOrchestrator:
                     "production_schedule_version": prod_sched_ver,
                     "publishing_mode": "user_controlled_schedule",
                 }
-                if persist_to_db:
-                    self._save_checkpoint(
-                        job_id,
-                        "STAGE_14_PUBLISHING_QUEUE",
-                        meta_payload["_schedule_context"],
-                    )
                 try:
                     from backend.app.services.lifecycle_events import record_lifecycle_event
                     record_lifecycle_event("VIDEO_GENERATED", "QC_PENDING", cycle_id=prod_cycle_id, job_id=job_id, details={"video_path": final_video_path})
                     record_lifecycle_event("QC_PASSED", "QC_PASSED", cycle_id=prod_cycle_id, job_id=job_id)
                 except Exception:
                     pass
-                pub_record = PublicationRecord(
-                    id=None,
-                    topic_title=selected_topic.title,
-                    video_path=final_video_path,
-                    thumbnail_path=thumb_path,
-                    metadata_json=json.dumps(meta_payload),
-                    youtube_video_id=None,
-                    upload_status="pending_queue",
-                    visibility="private",
-                    video_hash=compute_file_sha256(final_video_path),
-                    upload_timestamp=None,
-                    scheduled_timestamp=None,
-                )
-                ledger_id = self.publishing_engine.db.record_publication(pub_record, execution_context=execution_context)
+                # Persist everything the handoff needs first, so a failed queue insert
+                # can be retried on its own without regenerating the video.
+                handoff = {
+                    "cycle_id": prod_cycle_id,
+                    "topic_title": selected_topic.title,
+                    "video_path": final_video_path,
+                    "thumbnail_path": thumb_path,
+                    "metadata_json": json.dumps(meta_payload),
+                    "video_hash": compute_file_sha256(final_video_path),
+                }
+                if persist_to_db:
+                    self._update_checkpoint(job_id, "PUBLISHING_QUEUE_HANDOFF", 95.0, {"queue_handoff": handoff})
+                    ledger_id = self.complete_queue_handoff(job_id)
+                else:
+                    ledger_id = self._insert_queue_entry(handoff)
                 publishing_status = "queued_for_user_scheduling"
-                try:
-                    from backend.app.services.lifecycle_events import record_lifecycle_event
-                    record_lifecycle_event(
-                        "PUBLISHING_QUEUE_ENTRY_CREATED",
-                        "COMPLETED",
-                        cycle_id=prod_cycle_id,
-                        job_id=job_id,
-                        details={"ledger_id": ledger_id},
-                    )
-                    record_lifecycle_event(
-                        "PRODUCTION_CYCLE_COMPLETED",
-                        "COMPLETED",
-                        cycle_id=prod_cycle_id,
-                        job_id=job_id,
-                        details={"ledger_id": ledger_id, "video_path": final_video_path},
-                    )
-                except Exception:
-                    pass
             else:
                 publishing_status = (
                     "suppressed_validation_execution"
@@ -1440,53 +1423,107 @@ class CrazzyDocsMasterOrchestrator:
                         job.error_details = str(e)
                         db_session.commit()
 
-            # Dispatch failure alert
-            self.notifier.send_failure(
-                topic="Autonomous Generation",
-                stage="orchestration_pipeline",
-                error_summary=str(e),
-                job_id=job_id,
-                manual_intervention_required=True,
-                execution_context=execution_context,
-            )
+            # Scheduled runs: the scheduler applies retry_policy and sends one canonical
+            # report for the terminal outcome only, so no per-attempt failure email here.
+            if not suppress_orchestrator_completion_email.get():
+                self.notifier.send_failure(
+                    topic="Autonomous Generation",
+                    stage="orchestration_pipeline",
+                    error_summary=str(e),
+                    job_id=job_id,
+                    manual_intervention_required=True,
+                    execution_context=execution_context,
+                )
             raise e
+
+    def _insert_queue_entry(self, handoff: Dict) -> int:
+        """Idempotent Publishing Queue insert (private, no publication time)."""
+        record = PublicationRecord(
+            id=None,
+            topic_title=handoff["topic_title"],
+            video_path=handoff["video_path"],
+            thumbnail_path=handoff.get("thumbnail_path"),
+            metadata_json=handoff["metadata_json"],
+            youtube_video_id=None,
+            upload_status="pending_queue",
+            visibility="private",
+            video_hash=handoff["video_hash"],
+            upload_timestamp=None,
+            scheduled_timestamp=None,
+        )
+        return self.publishing_engine.db.record_publication(record, execution_context=ExecutionContext.PRODUCTION)
+
+    def complete_queue_handoff(self, job_id: str) -> int:
+        """
+        Production completion boundary:
+        VIDEO_GENERATED -> QC_PASSED -> PUBLISHING_QUEUE_ENTRY_CREATED -> PRODUCTION_CYCLE_COMPLETED.
+
+        Reads the queue_handoff payload saved in the job checkpoint, inserts the queue
+        entry idempotently (same video hash returns the existing ledger id), then marks
+        the job COMPLETED. Never renders, uploads, or waits for the user. Safe to call
+        again after a failure: the recovery loop does exactly that for HANDOFF_PENDING.
+        """
+        from backend.app.scheduler import retry_policy
+        from backend.app.services.lifecycle_events import record_lifecycle_event
+
+        with SessionLocal() as db_session:
+            job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+            if job is None:
+                raise ValueError(f"Job {job_id} not found for queue handoff.")
+            cp = json.loads(job.checkpoint_data_json or "{}")
+            handoff = cp.get("queue_handoff")
+            if not handoff:
+                raise ValueError(f"Job {job_id} has no queue_handoff checkpoint.")
+            if cp.get("queue_ledger_id") and job.status == "COMPLETED":
+                return int(cp["queue_ledger_id"])
+        if not os.path.isfile(handoff["video_path"]):
+            raise FileNotFoundError(f"Rendered video missing for queue handoff: {handoff['video_path']}")
+        if compute_file_sha256(handoff["video_path"]) != handoff["video_hash"]:
+            raise ValueError("Rendered video changed after QC; refusing to queue it.")
+
+        ledger_id = self._insert_queue_entry(handoff)
+        cycle_id = handoff.get("cycle_id")
+        record_lifecycle_event(
+            "PUBLISHING_QUEUE_ENTRY_CREATED", "COMPLETED",
+            cycle_id=cycle_id, job_id=job_id, details={"ledger_id": ledger_id},
+        )
+        with SessionLocal() as db_session:
+            job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+            cp = json.loads(job.checkpoint_data_json or "{}")
+            cp["queue_ledger_id"] = ledger_id
+            job.checkpoint_data_json = json.dumps(cp)
+            job.status = "COMPLETED"
+            job.current_stage = "COMPLETED"
+            job.progress_pct = 100.0
+            job.completed_at = job.completed_at or datetime.utcnow()
+            retry_policy.clear_failure_state(job)
+            db_session.commit()
+        record_lifecycle_event(
+            "PRODUCTION_CYCLE_COMPLETED", "COMPLETED",
+            cycle_id=cycle_id, job_id=job_id,
+            details={"ledger_id": ledger_id, "video_path": handoff["video_path"]},
+        )
+        logger.info("[STAGE 14] Job %s completed: Publishing Queue entry #%s created.", job_id, ledger_id)
+        return ledger_id
 
     def process_publishing_queue(self, execute_upload: bool = False) -> Dict:
         """
-        Executes Stage 14 independently according to the publishing schedule.
-        Decoupled from generation. Enforces settings.PUBLISHING_MODE.
+        Background publishing-queue check. Never publishes on its own: with
+        execute_upload=True it only uploads items the user already approved AND gave a
+        future publication time, always as private with YouTube publishAt.
         """
         logger.info("[PUBLISHING QUEUE] Checking enqueued publications...")
         quota_used = self.publishing_engine.db.get_quota_used_today()
         logger.info("Daily YouTube quota consumed: %d units", quota_used)
 
-        from backend.app.services.control_center_service import (
-            get_publishing_policy,
-            is_automatic_publishing_authorized,
-        )
-        auto_authorized, auto_info = is_automatic_publishing_authorized()
-        active_policy = (
-            "automatic_public"
-            if getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
-            else get_publishing_policy()
-        )
-        is_auto_public = (getattr(settings, "PUBLISHING_MODE", "") == "automatic_public") or auto_authorized
-        should_upload = execute_upload and is_auto_public
-
-        if not should_upload:
-            logger.info("Publishing mode is '%s'. Upload withheld at safety gate.", active_policy)
+        if not execute_upload:
+            logger.info("Publishing is user-controlled. Background upload withheld.")
             return {
                 "status": "withheld_safety_gate",
-                "publishing_mode": active_policy,
+                "publishing_mode": "manual_approval",
                 "quota_used": quota_used,
-                "message": (
-                    "Videos remain staged safely for manual approval."
-                    if active_policy == "manual_approval"
-                    else f"Automatic upload withheld: {auto_info.get('reason')}"
-                ),
+                "message": "Videos remain in the Publishing Queue until the user schedules or publishes them.",
             }
-
-        target_visibility = "public" if is_auto_public else "private"
 
         # Only process items that have an explicit user-scheduled future timestamp
         conn = sqlite3.connect(self.publishing_engine.db.db_path)
