@@ -5,15 +5,32 @@ Records UTC & Asia/Kolkata timestamps, cycle/job IDs, execution state, and error
 from datetime import datetime, timezone
 import json
 import logging
+import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from backend.app.core.config import settings
+from backend.app.core.paths import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 IST_TZ = ZoneInfo("Asia/Kolkata")
-DB_PATH = settings.DATABASE_URL.replace("sqlite:///", "")
+DB_PATH = str(DATABASE_PATH)
+
+
+def _is_test_context() -> bool:
+    return (
+        os.getenv("CRAZZYDOCS_EXECUTION_CONTEXT", "").upper() == "TEST"
+        or os.getenv("CRAZZYDOCS_TEST_MODE") == "1"
+    )
+
+
+def _resolve_db(db_path: Optional[str]) -> Optional[str]:
+    """An explicit db_path wins. Without one, tests never touch the production DB."""
+    if db_path:
+        return db_path
+    if _is_test_context():
+        return None
+    return DB_PATH
 
 ALLOWED_EVENT_TYPES = {
     "CYCLE_DUE",
@@ -64,31 +81,32 @@ def record_lifecycle_event(
     now_ist = now_utc.astimezone(IST_TZ)
     ts_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     ts_ist = now_ist.isoformat()
-    target_db = db_path or DB_PATH
-    try:
-        conn = sqlite3.connect(target_db, timeout=15.0)
+    target_db = _resolve_db(db_path)
+    if target_db is not None:
         try:
-            with conn:
-                _ensure_table(conn)
-                conn.execute(
-                    """INSERT INTO production_lifecycle_events
-                       (timestamp_utc, timestamp_ist, cycle_id, job_id, event_type, execution_state, details_json, error_details)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        ts_utc,
-                        ts_ist,
-                        cycle_id,
-                        job_id,
-                        event_type,
-                        execution_state,
-                        json.dumps(details or {}, default=str),
-                        error_details,
-                    ),
-                )
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.debug("[LIFECYCLE_EVENT] Failed to persist %s: %s", event_type, exc)
+            conn = sqlite3.connect(target_db, timeout=15.0)
+            try:
+                with conn:
+                    _ensure_table(conn)
+                    conn.execute(
+                        """INSERT INTO production_lifecycle_events
+                           (timestamp_utc, timestamp_ist, cycle_id, job_id, event_type, execution_state, details_json, error_details)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            ts_utc,
+                            ts_ist,
+                            cycle_id,
+                            job_id,
+                            event_type,
+                            execution_state,
+                            json.dumps(details or {}, default=str),
+                            error_details,
+                        ),
+                    )
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.warning("[LIFECYCLE_EVENT] Failed to persist %s: %s", event_type, exc)
 
     return {
         "timestamp_utc": ts_utc,
@@ -108,7 +126,9 @@ def list_lifecycle_events(
     job_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    target_db = db_path or DB_PATH
+    target_db = _resolve_db(db_path)
+    if target_db is None:
+        return []
     try:
         conn = sqlite3.connect(target_db, timeout=15.0)
         try:
