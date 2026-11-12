@@ -75,7 +75,7 @@ class NotificationManager:
     ):
         self.alert_log_path = alert_log_path
         self.cooldown_seconds = cooldown_seconds
-        self.db_path = db_path or os.path.join(WORKSPACE_ROOT, "backend", "studio.db")
+        self.db_path = db_path or str(__import__("backend.app.core.paths", fromlist=["DATABASE_PATH"]).DATABASE_PATH)
         self._recent_events: Dict[str, float] = {}
         self.last_email_receipt: Dict[str, Any] = {}
         os.makedirs(os.path.dirname(self.alert_log_path), exist_ok=True)

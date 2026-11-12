@@ -237,11 +237,12 @@ def test_checkpoint_resumption_skips_completed_stages(clean_test_db):
             shutil.rmtree(test_dir, ignore_errors=True)
         if os.path.exists(test_tmp_dir):
             shutil.rmtree(test_tmp_dir, ignore_errors=True)
-        shutil.rmtree(r"D:\Agents\CrazzyDocs\media\audit", ignore_errors=True)
-        shutil.rmtree(r"D:\Agents\CrazzyDocs\media\thumbnails", ignore_errors=True)
-        # Clean test ledger entry and job record so clean production slate is preserved
+        # Clean the test ledger entry and job record from the per-session test DB.
+        # (Previously this deleted rows from the live studio.db and removed the whole
+        # main-checkout media/audit and media/thumbnails folders.)
         import sqlite3
-        conn = sqlite3.connect(r"D:\Agents\CrazzyDocs\backend\studio.db")
+        from backend.app.core.paths import DATABASE_PATH
+        conn = sqlite3.connect(str(DATABASE_PATH))
         cur = conn.cursor()
         cur.execute("DELETE FROM publishing_ledger WHERE topic_title = 'Tsutomu Yamaguchi Resumed Story'")
         cur.execute("DELETE FROM persistent_jobs WHERE id = ?", (job_id,))

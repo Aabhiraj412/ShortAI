@@ -22,7 +22,8 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE
-DEFAULT_DB_PATH = os.path.join(WORKSPACE, "backend", "studio.db")
+from backend.app.core.paths import DATABASE_PATH as _DATABASE_PATH
+DEFAULT_DB_PATH = str(_DATABASE_PATH)
 QUARANTINE_DIR = os.path.join(WORKSPACE, "media", "quarantine")
 QUARANTINE_MANIFEST_PATH = os.path.join(QUARANTINE_DIR, "manifest.json")
 REPORT_PATH = os.path.join(WORKSPACE, "logs", "storage_audit_report.json")

@@ -24,7 +24,8 @@ from backend.app.content.validation_topic_history import (
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = r"D:\Agents\CrazzyDocs\backend\studio.db"
+from backend.app.core.paths import DATABASE_PATH as _DATABASE_PATH
+DB_PATH = str(_DATABASE_PATH)
 HISTORY_JSON_PATH = r"D:\Agents\CrazzyDocs\backend\app\content\topic_history.json"
 
 

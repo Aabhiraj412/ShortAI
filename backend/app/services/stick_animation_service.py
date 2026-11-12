@@ -16,7 +16,8 @@ from PIL import Image, ImageDraw, ImageFont
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE_DIR = r"D:\Agents\CrazzyDocs"
+from backend.app.core.paths import PROJECT_ROOT_STR as _PROJECT_ROOT_STR
+BASE_DIR = _PROJECT_ROOT_STR
 MEDIA_VIDEO_DIR = os.path.join(BASE_DIR, "media", "video")
 THUMB_DIR = os.path.join(BASE_DIR, "thumbnails", "output")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")

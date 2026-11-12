@@ -29,7 +29,8 @@ from backend.app.branding.outro_generator import (
 logger = logging.getLogger(__name__)
 
 FFMPEG_DEFAULT_PATH = r"D:\Agents\CrazzyDocs\tools\ffmpeg\bin\ffmpeg.exe"
-WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
+from backend.app.core.paths import PROJECT_ROOT_STR as _PROJECT_ROOT_STR
+WORKSPACE_ROOT = _PROJECT_ROOT_STR
 VESNA_IMG_DIR = os.path.join(WORKSPACE_ROOT, "media", "images", "vesna_vulovic")
 OUTRO_DIR = os.path.join(WORKSPACE_ROOT, "Youtube Channel Src")
 

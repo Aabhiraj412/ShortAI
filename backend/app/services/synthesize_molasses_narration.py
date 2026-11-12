@@ -14,8 +14,8 @@ import sys
 from backend.app.services.tts_service import generate_narration_bundle
 from backend.app.rendering.styles.style_system import VisualStyle
 
-WORKSPACE_ROOT = r"D:\Agents\CrazzyDocs"
-
+from backend.app.core.paths import PROJECT_ROOT_STR as _PROJECT_ROOT_STR
+WORKSPACE_ROOT = _PROJECT_ROOT_STR
 SCRIPT_TEXT = (
     "[Curious] In January 1919, a two-million-gallon wave of molasses swallowed downtown Boston. "
     "[Suspenseful] The fifty-foot steel tank leaked constantly. "

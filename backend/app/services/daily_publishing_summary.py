@@ -41,7 +41,8 @@ from backend.app.services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(WORKSPACE, "backend", "studio.db")
+from backend.app.core.paths import DATABASE_PATH as _DATABASE_PATH
+DB_PATH = str(_DATABASE_PATH)
 
 
 @dataclass

@@ -25,7 +25,10 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 APP_DIR = BACKEND_DIR / "app"
 MEDIA_DIR = PROJECT_ROOT / "media"
 ASSETS_DIR = PROJECT_ROOT / "assets"
-TOOLS_DIR = PROJECT_ROOT / "tools"
+# CRAZZYDOCS_TOOLS_DIR lets a checkout without the (gitignored) portable binaries,
+# e.g. a git worktree under test, use another checkout's tools read-only.
+_ENV_TOOLS = os.getenv("CRAZZYDOCS_TOOLS_DIR")
+TOOLS_DIR = Path(_ENV_TOOLS).resolve() if _ENV_TOOLS and os.path.isdir(_ENV_TOOLS) else PROJECT_ROOT / "tools"
 DOCS_DIR = PROJECT_ROOT / "docs"
 LOGS_DIR = PROJECT_ROOT / "logs"
 CACHE_DIR = PROJECT_ROOT / "cache"
@@ -43,7 +46,13 @@ MEDIA_SOURCE_DIR = MEDIA_DIR / "source"
 BRANDING_DIR = MEDIA_SOURCE_DIR / "branding"
 
 # Database and Secrets
-DATABASE_PATH = BACKEND_DIR / "studio.db"
+# The canonical production database location for this checkout.
+PRODUCTION_DATABASE_PATH = BACKEND_DIR / "studio.db"
+# CRAZZYDOCS_DATABASE_PATH redirects every app module to another SQLite file.
+# The test suite sets it (tests/conftest.py) before any app import so tests can
+# never open the production database.
+_ENV_DB = os.getenv("CRAZZYDOCS_DATABASE_PATH")
+DATABASE_PATH = Path(_ENV_DB).resolve() if _ENV_DB else PRODUCTION_DATABASE_PATH
 DATABASE_BACKUPS_DIR = BACKEND_DIR / "backups"
 CLIENT_SECRETS_PATH = BACKEND_DIR / "client_secrets.json"
 TOKEN_PATH = BACKEND_DIR / "token.json"

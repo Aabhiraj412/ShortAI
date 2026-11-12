@@ -357,11 +357,11 @@ def test_master_orchestrator_runs_vesna_through_integrity_gate():
         test_tmp_dir = os.path.join(WORKSPACE, "media", "_test_tmp")
         if os.path.exists(test_tmp_dir):
             shutil.rmtree(test_tmp_dir, ignore_errors=True)
-        shutil.rmtree(os.path.join(WORKSPACE, "media", "audit"), ignore_errors=True)
-        shutil.rmtree(os.path.join(WORKSPACE, "media", "thumbnails"), ignore_errors=True)
-        # Clean test ledger entry so clean production slate is preserved
+        # Clean the test ledger entry from the per-session test DB (previously the live
+        # studio.db) without deleting whole shared media folders.
         import sqlite3
-        conn = sqlite3.connect(os.path.join(WORKSPACE, "backend", "studio.db"))
+        from backend.app.core.paths import DATABASE_PATH
+        conn = sqlite3.connect(str(DATABASE_PATH))
         cur = conn.cursor()
         cur.execute("DELETE FROM publishing_ledger WHERE video_path LIKE '%test_vesna_integrity_run%'")
         conn.commit()

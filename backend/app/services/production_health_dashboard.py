@@ -38,7 +38,8 @@ from backend.app.services.network_connectivity_service import network_connectivi
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(WORKSPACE, "backend", "studio.db")
+from backend.app.core.paths import DATABASE_PATH as _DATABASE_PATH
+DB_PATH = str(_DATABASE_PATH)
 LOCK_PATH = os.path.join(WORKSPACE, "backend", "studio_scheduler.lock")
 
 

@@ -69,7 +69,8 @@ def _detached_flags() -> int:
 
 def verify_sqlite_database(db_path: Optional[Path] = None) -> bool:
     """Validates SQLite DB existence and PRAGMA integrity_check == 'ok'."""
-    target = db_path or (PROJECT_ROOT / "backend" / "studio.db")
+    from backend.app.core.paths import DATABASE_PATH
+    target = db_path or DATABASE_PATH
     if not target.exists():
         logger.error("[STARTUP] SQLite database missing at %s", target)
         return False

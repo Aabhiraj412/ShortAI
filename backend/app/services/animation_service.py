@@ -21,7 +21,8 @@ from PIL import Image, ImageDraw, ImageFont
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE_DIR = r"D:\Agents\CrazzyDocs"
+from backend.app.core.paths import PROJECT_ROOT_STR as _PROJECT_ROOT_STR
+BASE_DIR = _PROJECT_ROOT_STR
 SPRITES_DIR = os.path.join(BASE_DIR, "assets", "characters", "host", "sprites")
 if not os.path.exists(SPRITES_DIR):
     SPRITES_DIR = os.path.join(BASE_DIR, "archive", "legacy_assets", "characters", "host", "sprites")

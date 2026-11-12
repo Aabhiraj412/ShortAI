@@ -8,8 +8,8 @@ from typing import Generator
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
-from backend.app.core.paths import PROJECT_ROOT_STR as BASE_DIR
-DB_PATH = os.path.join(BASE_DIR, "backend", "studio.db")
+from backend.app.core.paths import DATABASE_PATH
+DB_PATH = str(DATABASE_PATH)
 SQLITE_URL = f"sqlite:///{DB_PATH}"
 
 Base = declarative_base()
