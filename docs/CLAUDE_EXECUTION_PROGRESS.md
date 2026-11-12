@@ -182,9 +182,9 @@ The earlier figure of 191 dropped to 173 after making `dashboard_browser` (8) an
 | `702c610` | Lifecycle events: DB path import fix |
 | `e0affb4` | Test isolation from the production DB and checkout |
 | `e8e7084` | User-controlled publishing, bounded retries, queue-handoff completion, stale-code diagnostics |
-| *(audit commit)* | Audit fixes 1–8 above, `daemon_runtime` refactor, guarded routes, retention ordering, the 5 audit test modules and this report |
+| `c818940` | Audit fixes 1–8 above, `daemon_runtime` refactor, guarded routes, retention ordering, the 5 audit test modules and this report |
 
-**Changed files.** Run `git diff --stat 21e6fd8..HEAD` for the full list. In brief:
+**Changed files.** 52 files changed against `21e6fd8` (3694 insertions, 525 deletions); run `git diff --stat 21e6fd8..HEAD` for the full list. In brief:
 - **Application code**: `main.py`, `control_center_service`, `youtube_service`, `youtube_publishing_engine`, the orchestrator, `scheduler`, `reconciliation_service`, `media_lifecycle_manager`, `lifecycle_events` and `paths`/`db` repointing (about 10 modules).
 - **New modules**: `retry_policy`, `daemon_runtime`, `code_revision`, `deployment_diagnostics`.
 - **Other**: `dashboard.html`, `run_scheduler_daemon.py`, `startup_manager.py`, plus tests.
