@@ -31,6 +31,7 @@ from backend.app.content.creative_production_policy import (
 from backend.app.content.curiosity_topic_engine import CuriosityTopicEngine, ScoredTopic
 from backend.app.content.topic_ledger import TopicLedger
 from backend.app.core.execution_context import ExecutionContext
+from backend.app.content.visual_diversity_policy import compute_asset_sha256
 from backend.app.media.attribution_generator import AttributionGenerator
 from backend.app.media.downloader import AssetDownloader
 from backend.app.media.license_verifier import LicenseVerifier
@@ -425,20 +426,37 @@ def test_storyboard_priority_abcd_reuse_limits_and_integrity_parity(tmp_path):
     # Strict Priority A, B, C, D presence & non-overlapping counts
     assert summary["authentic_images_acquired"] == 3
     assert summary["existing_animations_acquired"] == 1
-    assert summary["priority_a_photo_beats"] >= 3
+    assert summary["priority_a_photo_beats"] == 2
     assert summary["priority_b_existing_anim_beats"] == 1
     assert summary["priority_c_animated_authentic_beats"] >= 1
     assert summary["priority_d_generated_image_beats"] >= 1
-    assert summary["max_source_photo_reuse"] <= 2
+    assert summary["unique_photographic_assets"] == 3
+    assert summary["reused_source_images"] == 0
+    assert summary["max_source_photo_reuse"] == 1
+    acquired_photo_hashes = {compute_asset_sha256(a.local_path) for a in assets[:3]}
+    used_photo_hashes = {
+        beat["source_image_sha256"]
+        for beat in beats
+        if beat.get("source_image_sha256")
+    }
+    assert used_photo_hashes == acquired_photo_hashes
+    assert len(used_photo_hashes) == 3
+
+    style_distribution = summary["visual_style_distribution"]
+    assert len([count for count in style_distribution.values() if count > 0]) >= 2
+    assert sum(style_distribution.values()) == len(beats)
 
     # Required per-beat Visual Director schema + selective AI disclosure
     for b in beats:
         for key in (
             "beat_id", "narrative_purpose", "required_asset_type",
             "search_keywords", "preferred_acquisition_method", "license",
-            "animation_instructions", "transition",
+            "animation_instructions", "transition", "visual_style",
+            "style_selection_rationale", "style_transition_rationale",
         ):
             assert key in b
+        assert b["style_selection_rationale"].strip()
+        assert b["style_transition_rationale"].strip()
         if b["sourcing_priority"] == "D_selective_generated":
             assert b["illustrative_reconstruction"] is True
         else:

@@ -66,8 +66,7 @@ def test_install_valid_client_secrets(tmp_path):
     assert os.path.exists(str(secrets_path))
 
     # Verify content
-    with open(str(secrets_path), "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = mgr._load_client_config()
     assert data["installed"]["client_id"] == "mock_client_id_12345.apps.googleusercontent.com"
 
 
@@ -139,7 +138,7 @@ def test_channel_identity_extraction(tmp_path):
     mock_channels.list.return_value = mock_list_req
     mock_service.channels.return_value = mock_channels
 
-    with patch("backend.app.services.youtube_publishing_engine.Credentials.from_authorized_user_file") as mock_creds_load:
+    with patch.object(mgr, "_load_credentials") as mock_creds_load:
         mock_creds = MagicMock()
         mock_creds.valid = True
         mock_creds_load.return_value = mock_creds
@@ -181,6 +180,7 @@ def test_thumbnail_eligibility_restriction_handling(test_db, tmp_path):
     status_mock.progress.return_value = 1.0
     mock_req.next_chunk.side_effect = [(status_mock, {"id": "yt_vid_success_123"})]
     mock_service.videos().insert.return_value = mock_req
+    mock_service.videos().list.return_value.execute.return_value = {"items": [{"id": "yt_vid_success_123"}]}
 
     # Thumbnail upload fails with 403 forbidden
     resp = Response({"status": "403", "reason": "Forbidden"})
@@ -204,7 +204,7 @@ def test_thumbnail_eligibility_restriction_handling(test_db, tmp_path):
     assert res["video_id"] == "yt_vid_success_123"
     assert res["thumbnail_uploaded"] is False
     assert res["thumbnail_status"] == "eligibility_restricted"
-    assert "videoCustomThumbnailBlocked" in res["thumbnail_error"]
+    assert "HTTP 403" in res["thumbnail_error"]
     assert res["thumbnail_local_path"] == str(dummy_thumb)
     assert os.path.exists(str(dummy_thumb)), "Local thumbnail file must be preserved on disk!"
 
@@ -245,6 +245,7 @@ def test_duplicate_rejection_and_quota(test_db, tmp_path):
     status_mock.progress.return_value = 1.0
     mock_req.next_chunk.side_effect = [(status_mock, {"id": "yt_first_upload_001"})]
     mock_service.videos().insert.return_value = mock_req
+    mock_service.videos().list.return_value.execute.return_value = {"items": [{"id": "yt_first_upload_001"}]}
 
     engine = YouTubePublishingEngine(oauth_manager=mock_oauth, db=test_db)
     meta = MetadataGenerator.generate_shorts_metadata("Unique Run 1", "Hook", "Science", [])

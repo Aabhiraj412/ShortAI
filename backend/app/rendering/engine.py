@@ -90,7 +90,8 @@ class HybridVisualEngine:
                 "-movflags", "+faststart",
                 seg_mp4,
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            from backend.app.core.process_utils import hidden_subprocess_kwargs
+            res = subprocess.run(cmd, capture_output=True, text=True, **hidden_subprocess_kwargs())
             if res.returncode != 0 or not os.path.isfile(seg_mp4):
                 return SegmentResult(
                     scene_id=beat.id,

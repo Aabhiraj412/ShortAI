@@ -26,6 +26,7 @@ from app.services.stick_animation_service import render_stick_animation
 from app.services.animation_service import render_animation, MUSIC_DIR
 from app.services.qc_service import QualityControlEngine
 from app.services.youtube_service import YouTubePublisherService
+from backend.app.services.control_center_service import get_operating_mode, production_capacity
 
 # Pipeline Stages in sequential order
 STAGES = [
@@ -153,6 +154,20 @@ class PersistentJobManager:
             job = session.query(JobModel).filter_by(id=job_id).first()
             if not job:
                 return {"status": "error", "error": f"Job {job_id} not found."}
+
+        operating_mode = get_operating_mode()
+        if operating_mode != "PRODUCTION":
+            return {
+                "status": "deferred",
+                "job_id": job_id,
+                "reason": f"Operating mode is {operating_mode}.",
+            }
+        if not production_capacity(excluding_job_id=job_id)["available"]:
+            return {
+                "status": "deferred",
+                "job_id": job_id,
+                "reason": "Configured production concurrency limit is reached.",
+            }
                 
         self.mark_status(job_id, "RUNNING")
         print(f"\n============================================================", flush=True)
@@ -298,21 +313,10 @@ class PersistentJobManager:
                 j = session.query(JobModel).filter_by(id=job_id).first()
                 mode = j.publishing_mode if j else "MANUAL_APPROVAL"
                 
-            if mode == "AUTOMATIC_PUBLISH":
-                print("[PUBLISHING] Attempting YouTube upload...", flush=True)
-                up_ok, vid_id, up_err = self.youtube_service.upload_video(
-                    video_path=video_path,
-                    title=seo["youtube_title"],
-                    description=seo["description"],
-                    tags=seo["tags"],
-                    category_id=seo.get("category_id", "28")
+            if str(mode).upper() == "AUTOMATIC_PUBLISH":
+                raise PermissionError(
+                    "Automatic publishing is disabled; productions require explicit manual approval."
                 )
-                if up_ok:
-                    self.youtube_service.upload_thumbnail(vid_id, thumb_path)
-                    with SessionLocal() as session:
-                        j = session.query(JobModel).filter_by(id=job_id).first()
-                        j.youtube_video_id = vid_id
-                        session.commit()
             else:
                 print(f"[PUBLISHING] Preserved for {mode}. Upload postponed.", flush=True)
                 

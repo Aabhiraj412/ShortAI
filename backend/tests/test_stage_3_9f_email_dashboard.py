@@ -118,7 +118,7 @@ def test_success_email_builder():
         attribution_manifest_path="media/images/yamaguchi/attribution_manifest.json",
         thumbnail_base64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
     )
-    qc = QCDetails()
+    qc = QCDetails(thumbnail_validation="PASSED (10-Point Score: 9.76/10)")
     pub = PublishingDetails(target_pub_timestamp="06:00 IST")
 
     subject, plain_body, html_body = service.build_success_email(

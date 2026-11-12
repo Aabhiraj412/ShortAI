@@ -23,6 +23,14 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+
+PROJECT_ROOT_HINT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT_HINT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT_HINT))
+
+from backend.app.core.process_utils import install_windows_hidden_subprocess_defaults
+
+install_windows_hidden_subprocess_defaults()
 from typing import Any, Dict
 
 # pythonw.exe execution guard: sys.stdout and sys.stderr are None in windowless mode

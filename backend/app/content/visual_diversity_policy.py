@@ -1,9 +1,9 @@
 """
 Visual Diversity, Image Repetition Control & Storyboard Audit Policy.
-Phase 5, Stage 3.21J Standard.
+Phase 5, Stage 3.21N Standard.
 
 Enforces:
-- Maximum reuse of any single image asset <= 2 times per video.
+- Prefer a single use of each source photograph; permit justified reuse only within policy limits.
 - Canonical identity tracking via content SHA-256 hash and canonical source asset ID
   (ignoring filename differences and crop/zoom/recolor variations).
 - Meaningful visual diversity target (>= 12 distinct visual assets for 18-25 beat Shorts).
@@ -13,14 +13,21 @@ Enforces:
 
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import lru_cache
 import hashlib
+import math
 import os
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import unquote, urlsplit
+
+from PIL import Image, ImageOps, ImageStat
 
 from backend.app.content.creative_identity_policy import PROHIBITED_CHARACTER_TOKENS
 
 MAX_IMAGE_REUSE = 2
+PREFERRED_IMAGE_REUSE = 1
+MAX_PERCEPTUAL_HASH_DISTANCE = 6
 MIN_DISTINCT_ASSETS_FULL_SHORT = 12
 PREFERRED_DISTINCT_ASSETS_FULL_SHORT = 15
 
@@ -77,6 +84,122 @@ def compute_asset_sha256(filepath: Optional[str]) -> str:
     return h.hexdigest()
 
 
+def normalize_source_identity(value: Optional[str]) -> str:
+    """Canonicalizes source URLs and IDs so filename or URL variants do not evade deduplication."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    if parsed.scheme and parsed.netloc:
+        path = unquote(parsed.path)
+        path = re.sub(r"/thumb/", "/", path, flags=re.IGNORECASE)
+        path = re.sub(r"(\.(?:jpe?g|png|gif|webp|svg))/.+$", r"\1", path, flags=re.IGNORECASE)
+        return f"url:{parsed.netloc.lower()}{path}"
+    return re.sub(r"(_zoom|_crop|_pan|_tint|_flip)[0-9a-zA-Z_]*$", "", raw.lower())
+
+
+_DCT_COSINES = tuple(
+    tuple(math.cos((2 * sample + 1) * frequency * math.pi / 64.0) for sample in range(32))
+    for frequency in range(8)
+)
+
+
+def _perceptual_hash(image: Image.Image) -> int:
+    gray = ImageOps.fit(
+        image.convert("L"),
+        (32, 32),
+        method=Image.Resampling.LANCZOS,
+    )
+    pixels = list(gray.tobytes())
+    coefficients: List[float] = []
+    for v in range(8):
+        for u in range(8):
+            total = 0.0
+            for y in range(32):
+                row_offset = y * 32
+                y_factor = _DCT_COSINES[v][y]
+                for x in range(32):
+                    total += pixels[row_offset + x] * _DCT_COSINES[u][x] * y_factor
+            coefficients.append(total)
+    median = sorted(coefficients[1:])[len(coefficients[1:]) // 2]
+    bits = 0
+    for coefficient in coefficients[1:]:
+        bits = (bits << 1) | int(coefficient > median)
+    return bits
+
+
+@lru_cache(maxsize=256)
+def _cached_image_fingerprints(path: str, file_size: int, modified_ns: int) -> Tuple[int, ...]:
+    del file_size, modified_ns
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+    width, height = image.size
+    hashes: List[int] = []
+    for scale in (1.0, 0.82, 0.64):
+        crop_width = max(1, int(width * scale))
+        crop_height = max(1, int(height * scale))
+        positions = ((0.0, 0.0),) if scale == 1.0 else (
+            (0.0, 0.0), (0.5, 0.0), (1.0, 0.0),
+            (0.0, 0.5), (0.5, 0.5), (1.0, 0.5),
+            (0.0, 1.0), (0.5, 1.0), (1.0, 1.0),
+        )
+        for x_fraction, y_fraction in positions:
+            left = int((width - crop_width) * x_fraction)
+            top = int((height - crop_height) * y_fraction)
+            crop = image.crop((left, top, left + crop_width, top + crop_height))
+            hashes.append(_perceptual_hash(crop))
+    return tuple(hashes)
+
+
+def compute_image_perceptual_hashes(filepath: Optional[str]) -> Tuple[int, ...]:
+    """Returns full-frame and multi-scale crop hashes for resize, tint, and crop detection."""
+    if not filepath or not os.path.isfile(filepath):
+        return ()
+    path = os.path.abspath(filepath)
+    stat = os.stat(path)
+    return _cached_image_fingerprints(path, stat.st_size, stat.st_mtime_ns)
+
+
+@lru_cache(maxsize=256)
+def _cached_image_texture(path: str, file_size: int, modified_ns: int) -> float:
+    del file_size, modified_ns
+    with Image.open(path) as source:
+        gray = ImageOps.fit(source.convert("L"), (32, 32), method=Image.Resampling.LANCZOS)
+    return ImageStat.Stat(gray).stddev[0]
+
+
+def find_image_duplicate_reason(
+    first_path: Optional[str],
+    second_path: Optional[str],
+    *,
+    first_source_identity: Optional[str] = None,
+    second_source_identity: Optional[str] = None,
+    max_hash_distance: int = MAX_PERCEPTUAL_HASH_DISTANCE,
+) -> Optional[str]:
+    """Returns why two image assets represent the same source, or None when no match is found."""
+    first_identity = normalize_source_identity(first_source_identity)
+    second_identity = normalize_source_identity(second_source_identity)
+    if first_identity and first_identity == second_identity:
+        return "source_identity"
+    first_sha = compute_asset_sha256(first_path)
+    second_sha = compute_asset_sha256(second_path)
+    if first_sha and first_sha == second_sha:
+        return "sha256"
+    first_hashes = compute_image_perceptual_hashes(first_path)
+    second_hashes = compute_image_perceptual_hashes(second_path)
+    if first_hashes and second_hashes:
+        first_stat = os.stat(first_path)
+        second_stat = os.stat(second_path)
+        first_texture = _cached_image_texture(os.path.abspath(first_path), first_stat.st_size, first_stat.st_mtime_ns)
+        second_texture = _cached_image_texture(os.path.abspath(second_path), second_stat.st_size, second_stat.st_mtime_ns)
+        if first_texture < 3.0 and second_texture < 3.0:
+            return None
+        distance = min((a ^ b).bit_count() for a in first_hashes for b in second_hashes)
+        if distance <= max_hash_distance:
+            return f"perceptual_hash:{distance}"
+    return None
+
+
 def resolve_canonical_asset_key(beat: Dict[str, Any]) -> str:
     """
     Resolves canonical asset identity using SHA-256 content hash first,
@@ -116,12 +239,21 @@ class DiversityAuditResult:
     unique_animations: int
     max_reuse_observed: int
     reuse_counts: Dict[str, int] = field(default_factory=dict)
+    unique_photographic_assets: int = 0
+    unique_video_assets: int = 0
+    unique_maps: int = 0
+    unique_diagrams: int = 0
+    generated_images: int = 0
+    animations: int = 0
+    reused_source_images: int = 0
+    near_duplicate_groups: int = 0
+    max_source_image_reuse: int = 0
     violations: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
 
 class VisualDiversityValidator:
-    """Validates storyboard allocations against Stage 3.21J visual diversity and persistence rules."""
+    """Validates storyboard allocations against Stage 3.21N source-image diversity rules."""
 
     @staticmethod
     def validate_storyboard(
@@ -150,7 +282,12 @@ class VisualDiversityValidator:
         asset_counts: Counter = Counter()
         image_keys: Set[str] = set()
         animation_keys: Set[str] = set()
+        video_keys: Set[str] = set()
+        map_keys: Set[str] = set()
+        diagram_keys: Set[str] = set()
+        generated_keys: Set[str] = set()
         all_keys: Set[str] = set()
+        source_image_records: List[Dict[str, Any]] = []
         prev_image_key: Optional[str] = None
 
         topic_tokens = {
@@ -237,6 +374,8 @@ class VisualDiversityValidator:
             if vtype in IMAGE_VISUAL_TYPES or (vtype not in ANIMATION_VISUAL_TYPES and asset_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))):
                 asset_counts[canonical_key] += 1
                 image_keys.add(canonical_key)
+                if vtype == "generated_image":
+                    generated_keys.add(canonical_key)
                 if prev_image_key == canonical_key:
                     warnings.append(f"[{beat_id}] Consecutive image repeat for {canonical_key}.")
                 prev_image_key = canonical_key
@@ -244,7 +383,43 @@ class VisualDiversityValidator:
                 asset_counts[canonical_key] += 1
                 if vtype in ANIMATION_VISUAL_TYPES:
                     animation_keys.add(canonical_key)
+                    video_keys.add(canonical_key)
                 prev_image_key = None
+
+            if "map" in vtype or "map" in str(beat.get("required_asset_type") or "").lower():
+                map_keys.add(canonical_key)
+            if "diagram" in vtype or "diagram" in str(beat.get("required_asset_type") or "").lower():
+                diagram_keys.add(canonical_key)
+
+            is_source_photo = (
+                vtype in {"historical_photo", "documentary_image"}
+                or bool(beat.get("source_image_sha256"))
+                or str(beat.get("sourcing_priority") or "").startswith(("A_", "C_"))
+            )
+            if is_source_photo:
+                source_path = (
+                    beat.get("source_asset_path")
+                    or beat.get("source_image_path")
+                    or (asset_path if vtype in {"historical_photo", "documentary_image"} else "")
+                )
+                source_identity = (
+                    beat.get("source_image_identity")
+                    or beat.get("original_source_id")
+                    or beat.get("source_asset_id")
+                    or beat.get("source_url")
+                    or beat.get("source_image_sha256")
+                    or beat.get("canonical_asset_id")
+                    or ""
+                )
+                if not source_identity and source_path:
+                    source_identity = compute_asset_sha256(source_path)
+                source_image_records.append({
+                    "beat_id": beat_id,
+                    "beat": beat,
+                    "path": source_path,
+                    "identity": source_identity,
+                    "sha256": beat.get("source_image_sha256") or compute_asset_sha256(source_path),
+                })
 
         max_reuse = max(asset_counts.values()) if asset_counts else 0
         # Enforce max_image_reuse strictly on every asset (images <= 2, and flag > max_image_reuse)
@@ -253,6 +428,64 @@ class VisualDiversityValidator:
                 violations.append(
                     f"Image/Asset repetition policy violation: canonical asset '{key}' used {cnt} times (maximum allowed: {max_image_reuse})."
                 )
+
+        parent = list(range(len(source_image_records)))
+
+        def find_root(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(first: int, second: int) -> None:
+            first_root, second_root = find_root(first), find_root(second)
+            if first_root != second_root:
+                parent[second_root] = first_root
+
+        near_duplicate_pairs: Set[Tuple[int, int]] = set()
+        for first_idx, first in enumerate(source_image_records):
+            for second_idx in range(first_idx + 1, len(source_image_records)):
+                second = source_image_records[second_idx]
+                reason = find_image_duplicate_reason(
+                    first["path"],
+                    second["path"],
+                    first_source_identity=first["identity"],
+                    second_source_identity=second["identity"],
+                )
+                if reason:
+                    union(first_idx, second_idx)
+                    if reason.startswith("perceptual_hash:") and first["sha256"] != second["sha256"]:
+                        near_duplicate_pairs.add((first_idx, second_idx))
+
+        source_image_groups: Dict[int, List[int]] = {}
+        for index in range(len(source_image_records)):
+            source_image_groups.setdefault(find_root(index), []).append(index)
+
+        reused_source_images = 0
+        max_source_image_reuse = 0
+        near_duplicate_roots = {
+            find_root(first_idx)
+            for first_idx, _ in near_duplicate_pairs
+        }
+        for root, indices in source_image_groups.items():
+            occurrence_count = len(indices)
+            max_source_image_reuse = max(max_source_image_reuse, occurrence_count)
+            reused_source_images += max(0, occurrence_count - 1)
+            if occurrence_count > max_image_reuse:
+                violations.append(
+                    f"Source photograph group is used {occurrence_count} times (maximum allowed: {max_image_reuse})."
+                )
+            for repeated_idx in indices[1:]:
+                repeated = source_image_records[repeated_idx]
+                beat = repeated["beat"]
+                if occurrence_count > 1 and not (
+                    str(beat.get("reuse_reason") or "").strip()
+                    and str(beat.get("narrative_purpose") or "").strip()
+                    and beat.get("reuse_alternatives_exhausted") is True
+                ):
+                    violations.append(
+                        f"[{repeated['beat_id']}] Reused source photograph needs a narrative reason and confirmation that relevant alternatives were exhausted."
+                    )
 
         content_beats = [b for b in beats if (b.get("visual_type") or "").lower() != "outro"]
         target_min = min_distinct_assets
@@ -269,8 +502,17 @@ class VisualDiversityValidator:
             distinct_assets=len(all_keys),
             unique_images=len(image_keys),
             unique_animations=len(animation_keys),
-            max_reuse_observed=max_reuse,
+            max_reuse_observed=max(max_reuse, max_source_image_reuse),
             reuse_counts=dict(asset_counts),
+            unique_photographic_assets=len(source_image_groups),
+            unique_video_assets=len(video_keys),
+            unique_maps=len(map_keys),
+            unique_diagrams=len(diagram_keys),
+            generated_images=len(generated_keys),
+            animations=len(animation_keys),
+            reused_source_images=reused_source_images,
+            near_duplicate_groups=len(near_duplicate_roots),
+            max_source_image_reuse=max_source_image_reuse,
             violations=violations,
             warnings=warnings,
         )

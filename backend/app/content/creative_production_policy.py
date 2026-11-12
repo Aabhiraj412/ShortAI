@@ -74,6 +74,7 @@ class VisualAcquisitionPolicy:
         "C_ANIMATED_AUTHENTIC",
         "D_SELECTIVE_AI_GENERATION",
     )
+    preferred_image_reuse: int = 1
     max_image_reuse: int = 2
     min_distinct_assets: int = 12
     min_authentic_or_open_anim_when_available: int = 4
@@ -495,7 +496,7 @@ class CreativeProductionPolicy:
 
     def to_summary_dict(self) -> Dict[str, Any]:
         return {
-            "policy_version": "3.21M",
+            "policy_version": "3.21N",
             "supported_categories_count": len(self.categories),
             "supported_categories": [c.display_name for c in self.categories.values()],
             "scoring_weights": self.scoring_weights.normalized(),

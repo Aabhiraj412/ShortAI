@@ -33,8 +33,10 @@ from backend.app.database.db import (
     SessionLocal,
     JobModel,
     PersistentNotificationModel,
+    ensure_notification_ledger_schema,
 )
 from backend.app.scheduler.schedule_profiles import IST_TZ, get_active_profile
+from backend.app.services.email_monitoring_service import email_monitoring_service
 from backend.app.services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,9 @@ class DailySummaryReport:
     recovered_cycles: int
     storage_consumed_mb: float
     disk_free_gb: float
+    videos_uploaded_private: int = 0
+    videos_awaiting_approval: int = 0
+    videos_scheduled: int = 0
     qc_blocked_details: List[Dict[str, str]] = field(default_factory=list)
     errors_requiring_attention: List[Dict[str, str]] = field(default_factory=list)
     production_titles: List[str] = field(default_factory=list)
@@ -82,7 +87,11 @@ class DailyPublishingSummaryService:
         production_titles = []
 
         with SessionLocal() as db_session:
-            jobs = db_session.query(JobModel).filter(JobModel.date_str == cur_date).all()
+            all_jobs = db_session.query(JobModel).filter(JobModel.date_str == cur_date).all()
+            jobs = [
+                j for j in all_jobs
+                if not str(j.id or "").startswith(("test_", "mock_"))
+            ]
             productions_attempted = len(jobs)
 
             for job in jobs:
@@ -112,20 +121,33 @@ class DailyPublishingSummaryService:
                         "details": job.error_details or "Stage exception",
                     })
 
-        # Videos successfully published publicly
+        # Videos uploaded / awaiting approval / scheduled from real publishing_ledger
         videos_published_public = 0
+        videos_uploaded_private = 0
+        videos_awaiting_approval = 0
+        videos_scheduled = 0
         if os.path.exists(self.db_path):
             conn = sqlite3.connect(self.db_path)
             try:
                 cur = conn.cursor()
                 cur.execute("""
-                    SELECT count(*) FROM publishing_ledger
-                    WHERE visibility = 'public'
-                      AND upload_status IN ('uploaded_public', 'published')
-                      AND upload_timestamp LIKE ?
+                    SELECT upload_status, visibility, COUNT(*) FROM publishing_ledger
+                    WHERE (video_path NOT LIKE '%test_%' OR video_path IS NULL)
+                      AND (upload_timestamp LIKE ? OR upload_timestamp IS NULL)
+                    GROUP BY upload_status, visibility
                 """, (f"{cur_date}%",))
-                row = cur.fetchone()
-                videos_published_public = row[0] if row else 0
+                for up_st, vis, cnt in cur.fetchall():
+                    st_l = str(up_st or "").lower()
+                    vis_l = str(vis or "").lower()
+                    n = int(cnt or 0)
+                    if vis_l == "public" and st_l in ("uploaded_public", "published"):
+                        videos_published_public += n
+                    elif st_l in ("uploaded_private", "private_draft"):
+                        videos_uploaded_private += n
+                    elif st_l in ("scheduled", "scheduled_publish"):
+                        videos_scheduled += n
+                    elif st_l == "pending_queue":
+                        videos_awaiting_approval += n
             except Exception as e:
                 logger.warning("Could not query publishing ledger: %s", e)
             finally:
@@ -154,6 +176,9 @@ class DailyPublishingSummaryService:
             recovered_cycles=recovered_cycles,
             storage_consumed_mb=storage_consumed_mb,
             disk_free_gb=disk_free_gb,
+            videos_uploaded_private=videos_uploaded_private,
+            videos_awaiting_approval=videos_awaiting_approval,
+            videos_scheduled=videos_scheduled,
             qc_blocked_details=qc_blocked_details,
             errors_requiring_attention=errors_requiring_attention,
             production_titles=production_titles,
@@ -219,21 +244,13 @@ class DailyPublishingSummaryService:
         force: bool = False,
     ) -> Dict[str, Any]:
         """
-        Compiles and dispatches the daily summary email with strict idempotency.
-        Returns dispatch status dictionary.
+        Compiles and dispatches the daily summary email with strict idempotency,
+        transactional claim lock, and DELIVERY_UNKNOWN timeout safety.
         """
         cur_date = date_str or datetime.now(IST_TZ).strftime("%Y-%m-%d")
         idempotency_key = f"daily_publishing_summary_{cur_date}"
         recip = recipient or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL") or "aabhiraj321@gmail.com"
-
-        # Check deduplication in database
-        with SessionLocal() as db_session:
-            existing = db_session.query(PersistentNotificationModel).filter(
-                PersistentNotificationModel.idempotency_key == idempotency_key
-            ).first()
-            if existing and existing.status == "SENT" and not force:
-                logger.info("[DAILY_SUMMARY] Summary already sent for %s. Suppressing duplicate.", cur_date)
-                return {"status": "DUPLICATE_SUPPRESSED", "idempotency_key": idempotency_key, "date": cur_date}
+        notif_job_id = f"daily_summary_{cur_date}"
 
         report = self.compile_daily_summary(date_str=cur_date)
         subject = f"CrazzyDocs | Daily Publishing Summary | {cur_date}"
@@ -243,67 +260,74 @@ class DailyPublishingSummaryService:
             f"Productions Attempted: {report.productions_attempted}\n"
             f"Productions Completed: {report.productions_completed}\n"
             f"Videos Publicly Published: {report.videos_published_public}\n"
+            f"Videos Uploaded Private: {report.videos_uploaded_private}\n"
+            f"Videos Awaiting Approval: {report.videos_awaiting_approval}\n"
+            f"Videos Scheduled: {report.videos_scheduled}\n"
             f"Videos Blocked by QC: {report.videos_blocked_qc}\n"
             f"Missed Cycles: {report.missed_cycles}\n"
             f"Recovered Cycles: {report.recovered_cycles}\n"
             f"Media Footprint: {report.storage_consumed_mb} MB (Free: {report.disk_free_gb} GB)\n"
         )
 
-        notif_id = f"notif_summary_{cur_date}"
         with SessionLocal() as db_session:
-            record = db_session.query(PersistentNotificationModel).filter(
-                PersistentNotificationModel.idempotency_key == idempotency_key
-            ).first()
-            if not record:
-                record = PersistentNotificationModel(
-                    id=notif_id,
-                    job_id=f"summary_{cur_date}",
-                    cycle_id="daily_summary",
-                    idempotency_key=idempotency_key,
-                    notification_type="email",
-                    recipient=recip,
-                    subject=subject,
-                    body_plain=plain_body,
-                    body_html=html_body,
-                    status="PENDING",
-                    created_at=datetime.utcnow(),
-                    attempt_count=0,
-                )
-                db_session.add(record)
-                db_session.commit()
-
-        # Attempt send via notification_service
-        email_sent = False
-        last_error = None
-        try:
-            email_sent = notification_service.notify_email(
-                subject=subject,
-                body_text=plain_body,
-                body_html=html_body,
+            claimed, suppressed = email_monitoring_service._claim_notification_slot(
+                db_session,
+                idempotency_key=idempotency_key,
+                job_id=notif_job_id,
+                cycle_id="daily_summary",
+                notification_type="DAILY_SUMMARY",
                 recipient=recip,
+                subject=subject,
+                body_plain=plain_body,
+                body_html=html_body,
+                force=force,
             )
-        except Exception as e:
-            last_error = str(e)
-            logger.warning("[DAILY_SUMMARY] SMTP send failed: %s", e)
+            if suppressed is not None:
+                suppressed.setdefault("date", cur_date)
+                return suppressed
+            claimed_id = claimed.id
+
+        outcome = email_monitoring_service._execute_smtp_with_state(
+            subject=subject,
+            body_text=plain_body,
+            body_html=html_body,
+            recipient=recip,
+            max_retries=2,
+        )
+        email_sent = bool(outcome["email_sent"])
+        delivery_state = outcome["delivery_state"]
 
         # Update persistent notification record
         with SessionLocal() as db_session:
             rec = db_session.query(PersistentNotificationModel).filter(
-                PersistentNotificationModel.idempotency_key == idempotency_key
+                PersistentNotificationModel.id == claimed_id
             ).first()
             if rec:
                 rec.attempt_count = (rec.attempt_count or 0) + 1
+                rec.delivery_state = delivery_state
+                rec.error_category = outcome.get("error_category")
+                rec.provider_response = outcome.get("provider_response")
+                rec.updated_at = datetime.utcnow()
                 if email_sent:
                     rec.status = "SENT"
                     rec.sent_at = datetime.utcnow()
                     rec.last_error = None
+                elif delivery_state == "DELIVERY_UNKNOWN":
+                    rec.status = "DELIVERY_UNKNOWN"
+                    rec.last_error = outcome.get("last_error")
                 else:
                     rec.status = "FAILED"
-                    rec.last_error = last_error or "SMTP delivery failed or unconfigured"
+                    rec.last_error = outcome.get("last_error") or "SMTP delivery failed or unconfigured"
                 db_session.commit()
 
+        ret_status = (
+            "SENT"
+            if email_sent
+            else ("DELIVERY_UNKNOWN" if delivery_state == "DELIVERY_UNKNOWN" else "SAVED_LOCAL_PENDING")
+        )
         return {
-            "status": "SENT" if email_sent else "SAVED_LOCAL_PENDING",
+            "status": ret_status,
+            "delivery_state": delivery_state,
             "date": cur_date,
             "idempotency_key": idempotency_key,
             "email_sent": email_sent,

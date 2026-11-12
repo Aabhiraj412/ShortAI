@@ -1,6 +1,6 @@
 """
 Documentary Script, Media Acquisition & 20-Beat Visual Choreography Builder.
-Phase 5, Stage 3.21I Standard.
+Phase 5, Stage 3.21N Standard.
 
 Coordinates:
 1. Structured 5-stage factual script composition (50-58s Shorts pacing) from verified research.
@@ -11,6 +11,7 @@ Coordinates:
 
 import asyncio
 from dataclasses import asdict
+from backend.app.core.async_helpers import run_coro_sync
 import json
 import logging
 import os
@@ -23,12 +24,15 @@ from backend.app.content.creative_production_policy import (
     CategorySpec,
     get_creative_production_policy,
 )
+from backend.app.content.creative_identity_policy import AdaptiveVisualStyleSelector
 from backend.app.content.curiosity_topic_engine import ScoredTopic
 from backend.app.content.visual_diversity_policy import (
-    MAX_IMAGE_REUSE,
     MIN_DISTINCT_ASSETS_FULL_SHORT,
+    PREFERRED_IMAGE_REUSE,
     VisualDiversityValidator,
     compute_asset_sha256,
+    find_image_duplicate_reason,
+    normalize_source_identity,
 )
 from backend.app.core.execution_context import ExecutionContext
 from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE_ROOT
@@ -40,6 +44,12 @@ from backend.app.media.models import AttributionManifest, MediaAsset
 from backend.app.orchestration.production_workspace import ProductionWorkspace, compute_file_sha256
 from backend.app.rendering.engines.vesna_fast_renderer import VisualBeatConfig
 from backend.app.rendering.explainer_animation_engine import ExplainerAnimationEngine
+from backend.app.rendering.creative_direction import (
+    CreativeDirection,
+    FilmDirector,
+    audit_composition_diversity,
+)
+from backend.app.rendering.style_treatments import draw_visual_style_treatment
 from backend.app.rendering.types import SceneBeat, StoryboardPlan, TransitionType, VisualModality
 from backend.app.services.expressive_tts_engine import ExpressiveTTSEngine, NarrationSegment
 
@@ -182,20 +192,42 @@ def compose_structured_script(
         {"id": "seg_05_payoff", "stage": "PAYOFF", "arc_phase": stage_tags[4], "emotion": "closing", "text": sec_payoff},
     ]
 
-    # Trim gently if total word count > 124 so spoken audio + 2.0s outro never crosses 58.0s
+    # Trim gently if total word count > 126 so spoken audio + 2.0s outro never crosses 58.0s
     total_words = sum(len(s["text"].split()) for s in sections)
-    if total_words > 124 and extra_fact:
+    if total_words > 126 and extra_fact:
         sections[4]["text"] = closing
         total_words = sum(len(s["text"].split()) for s in sections)
 
-    # Pad cleanly from extra verified facts if too short (< 104 words)
-    fact_idx = 4
-    while total_words < 104 and fact_idx < len(facts):
-        candidate_sent = facts[fact_idx]
-        fact_idx += 1
-        target_sec = sections[2] if (fact_idx % 2 == 1) else sections[3]
-        target_sec["text"] = f"{target_sec['text']} {candidate_sent}".strip()
+    # Pad cleanly from any remaining unused verified facts first, then grounded analytical context (116-126 words)
+    unused_facts = [
+        cand for cand in facts
+        if re.sub(r"\W+", " ", cand.lower()).strip() not in used_norms
+        and not any(re.sub(r"\W+", " ", cand.lower()).strip()[:35] == u[:35] for u in used_norms)
+    ]
+    pad_idx = 0
+    for cand in unused_facts:
+        if total_words >= 116:
+            break
+        target_sec = sections[2] if (pad_idx % 2 == 0) else sections[3]
+        target_sec["text"] = f"{target_sec['text']} {cand}".strip()
+        pad_idx += 1
         total_words = sum(len(s["text"].split()) for s in sections)
+
+    if total_words < 116:
+        entities = [str(e).strip() for e in (getattr(topic, "key_entities", None) or []) if str(e).strip() and len(str(e).strip()) > 2]
+        entity_note = ", ".join(entities[:3]) if entities else title_anchor
+        analytical_bridges = [
+            f"Across {cat_spec.display_name}, historians and researchers point to {entity_note} when explaining why {title_anchor} endured.",
+            f"Looking closer at each stage of {arc_step2} reveals how small institutional decisions compounded over time.",
+            f"Rather than fading quietly, those {arc_step3} patterns reshaped public perspective and left a lasting record for future observers.",
+        ]
+        for bridge in analytical_bridges:
+            if total_words >= 116:
+                break
+            target_sec = sections[2] if (pad_idx % 2 == 0) else sections[3]
+            target_sec["text"] = f"{target_sec['text']} {bridge}".strip()
+            pad_idx += 1
+            total_words = sum(len(s["text"].split()) for s in sections)
 
     full_script = " ".join(s["text"] for s in sections).strip()
     return {
@@ -250,7 +282,7 @@ def synthesize_and_probe_narration(
             out.append(done)
         return out
 
-    synthesized = asyncio.run(_run_all())
+    synthesized = run_coro_sync(_run_all())
 
     os.makedirs(prod_ws.audio_dir, exist_ok=True)
     combined_mp3 = os.path.join(prod_ws.audio_dir, f"voiceover_{prod_ws.production_id}.mp3")
@@ -259,10 +291,11 @@ def synthesize_and_probe_narration(
     # Probe cumulative timings cleanly
     total_voice_dur = tts_engine.probe_duration(combined_mp3)
     # Keep narrative window comfortably inside 48.8s - 55.6s so +2.0s outro hits 50.8s - 57.6s
-    if 42.0 <= total_voice_dur < 48.8:
+    if 38.0 <= total_voice_dur < 48.8:
         pad_sec = round(49.2 - total_voice_dur, 3)
         padded_mp3 = os.path.join(prod_ws.audio_dir, f"voiceover_{prod_ws.production_id}_padded.mp3")
         from backend.app.core.paths import FFMPEG_DEFAULT_PATH
+        from backend.app.core.process_utils import hidden_subprocess_kwargs
         import subprocess
         res = subprocess.run(
             [
@@ -271,6 +304,7 @@ def synthesize_and_probe_narration(
                 "-c:a", "libmp3lame", "-b:a", "192k", padded_mp3,
             ],
             capture_output=True, text=True, check=False,
+            **hidden_subprocess_kwargs(),
         )
         if res.returncode == 0 and os.path.isfile(padded_mp3):
             os.replace(padded_mp3, combined_mp3)
@@ -279,6 +313,7 @@ def synthesize_and_probe_narration(
         tempo = min(1.28, max(1.01, round(total_voice_dur / 54.4, 4)))
         tempo_mp3 = os.path.join(prod_ws.audio_dir, f"voiceover_{prod_ws.production_id}_tempo.mp3")
         from backend.app.core.paths import FFMPEG_DEFAULT_PATH
+        from backend.app.core.process_utils import hidden_subprocess_kwargs
         import subprocess
         res = subprocess.run(
             [
@@ -287,6 +322,7 @@ def synthesize_and_probe_narration(
                 "-c:a", "libmp3lame", "-b:a", "192k", tempo_mp3,
             ],
             capture_output=True, text=True, check=False,
+            **hidden_subprocess_kwargs(),
         )
         if res.returncode == 0 and os.path.isfile(tempo_mp3):
             os.replace(tempo_mp3, combined_mp3)
@@ -428,7 +464,7 @@ def acquire_isolated_topic_assets(
 
     engine_stats: Dict[str, Any] = {}
     if len(acquired) < max_assets:
-        extra_acquired, _ = asyncio.run(
+        extra_acquired, _ = run_coro_sync(
             acq_engine.acquire_scene_assets(
                 topic_title=topic.title,
                 category=topic.category,
@@ -529,12 +565,25 @@ def _render_documentary_plate(
     layout_mode: str,
     primary_img_path: Optional[str],
     secondary_img_path: Optional[str] = None,
+    visual_style: str = "documentary",
 ) -> str:
     """
     Renders a sharp 1080x1920 vertical documentary composition plate for a single visual beat.
     Respects 9:16 YouTube Shorts safe zones (top >= 220px, bottom subtitle clear >= 340px).
     """
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    # Production styles select an independent composition here. These branches
+    # intentionally replace the old universal progress/header/frame/callout grid.
+    if visual_style in {
+        "documentary", "pop_info", "data_story", "chalk_talk",
+        "creator_motion_graphics", "cinematic_explainer", "map_based_storytelling",
+    }:
+        return _render_direction_plate(
+            out_path, width, height, beat_idx, total_beats, stage_label,
+            callout_text, stat_text, topic_title, accent_color, layout_mode,
+            primary_img_path, secondary_img_path, visual_style,
+        )
 
     # 1. Backdrop
     if primary_img_path and os.path.isfile(primary_img_path):
@@ -637,8 +686,248 @@ def _render_documentary_plate(
         draw.text((pad_x + 42, y_cursor), line, font=font_head, fill=(250, 252, 255), anchor="lm")
         y_cursor += 62
 
+    draw_visual_style_treatment(
+        canvas,
+        visual_style,
+        stage_label=stage_label,
+        callout_text=callout_text,
+        stat_text=stat_text,
+        accent_color=accent_color,
+        beat_idx=beat_idx,
+        total_beats=total_beats,
+    )
     canvas.save(out_path, format="PNG")
     return out_path
+
+
+def _render_direction_plate(
+    out_path: str,
+    width: int,
+    height: int,
+    beat_idx: int,
+    total_beats: int,
+    stage_label: str,
+    callout_text: str,
+    stat_text: str,
+    topic_title: str,
+    accent_color: Tuple[int, int, int],
+    layout_mode: str,
+    primary_img_path: Optional[str],
+    secondary_img_path: Optional[str],
+    visual_style: str,
+) -> str:
+    """Render direction-specific compositions with layout variants across beats."""
+    palette = {
+        "documentary": ((12, 16, 21), (245, 242, 232), (222, 181, 105)),
+        "pop_info": ((248, 241, 220), (26, 43, 43), (232, 93, 74)),
+        "data_story": ((12, 20, 31), (236, 241, 245), (32, 201, 151)),
+        "chalk_talk": ((31, 57, 47), (244, 240, 222), (244, 211, 94)),
+        "creator_motion_graphics": ((11, 11, 14), (245, 242, 234), (255, 214, 10)),
+        "cinematic_explainer": ((7, 10, 16), (246, 241, 229), (197, 163, 111)),
+        "map_based_storytelling": ((18, 29, 33), (238, 239, 224), (84, 203, 183)),
+    }
+    bg, fg, accent = palette[visual_style]
+    canvas = Image.new("RGB", (width, height), bg)
+    draw = ImageDraw.Draw(canvas)
+    headline = (callout_text or topic_title).strip().upper()
+    words = headline.split()
+    headline_font = _load_font(["impact.ttf", "arialbd.ttf"], 74)
+    sub_font = _load_font(["arial.ttf", "segoeui.ttf"], 30)
+    label_font = _load_font(["arialbd.ttf", "segoeuib.ttf"], 24)
+    variant = beat_idx % 3
+
+    def place_image(box: Tuple[int, int, int, int], path: Optional[str], radius: int = 0) -> None:
+        if not path or not os.path.isfile(path):
+            return
+        with Image.open(path) as source:
+            source = source.convert("RGB")
+            x0, y0, x1, y1 = box
+            scale = max((x1 - x0) / source.width, (y1 - y0) / source.height)
+            resized = source.resize((int(source.width * scale), int(source.height * scale)), Image.Resampling.LANCZOS)
+            crop = resized.crop(((resized.width - (x1-x0))//2, (resized.height - (y1-y0))//2,
+                                 (resized.width + (x1-x0))//2, (resized.height + (y1-y0))//2))
+            if radius:
+                mask = Image.new("L", crop.size, 0)
+                ImageDraw.Draw(mask).rounded_rectangle((0, 0, crop.width-1, crop.height-1), radius, fill=255)
+                canvas.paste(crop, (x0, y0), mask)
+            else:
+                canvas.paste(crop, (x0, y0))
+
+    def multiline(text: str, box: Tuple[int, int, int, int], font=headline_font, fill=fg, spacing=14) -> None:
+        x0, y0, x1, y1 = box
+        lines = _wrap_text_lines(draw, text, font, x1 - x0)
+        lines = lines[:4]
+        line_h = font.size + spacing if hasattr(font, "size") else 86
+        y = y0 + max(0, ((y1-y0) - line_h * len(lines))//2)
+        for line in lines:
+            draw.text((x0, y), line, font=font, fill=fill)
+            y += line_h
+
+    # Documentary: full-bleed evidence and a restrained caption strip.
+    if visual_style == "documentary":
+        place_image((0, 0, width, height), primary_img_path)
+        if primary_img_path and os.path.isfile(primary_img_path):
+            shade = Image.new("RGBA", (width, height), (0,0,0,0))
+            sd = ImageDraw.Draw(shade)
+            sd.rectangle((0, height-520, width, height), fill=(0,0,0,175))
+            canvas = Image.alpha_composite(canvas.convert("RGBA"), shade).convert("RGB")
+            draw = ImageDraw.Draw(canvas)
+        draw.rectangle((0, 0, width, 12), fill=accent)
+        draw.text((72, height-440), f"{stage_label.upper()}  /  {beat_idx+1:02d}", font=label_font, fill=accent)
+        multiline(headline, (72, height-390, width-72, height-140), headline_font)
+
+    # Pop Info: warm editorial cards, varying between stat hero, image split, and type burst.
+    elif visual_style == "pop_info":
+        margin = 72
+        draw.ellipse((width-360, -140, width+110, 330), fill=(255, 216, 107))
+        draw.text((margin, 90), "QUICK TAKE", font=label_font, fill=accent)
+        if variant == 0:
+            draw.rounded_rectangle((margin, 250, width-margin, 920), 42, fill=(255,255,250))
+            draw.text((margin+40, 300), (stat_text or "KEY FACT")[:18].upper(), font=_load_font(["impact.ttf", "arialbd.ttf"], 112), fill=accent)
+            place_image((margin, 1010, width-margin, 1480), primary_img_path, 34)
+            multiline(headline, (margin, 1510, width-margin, 1810), _load_font(["impact.ttf","arialbd.ttf"], 60))
+        elif variant == 1:
+            place_image((width//2, 220, width-50, 1110), primary_img_path, 36)
+            draw.rounded_rectangle((50, 540, width//2+90, 1250), 38, fill=(255,255,250))
+            multiline(headline, (85, 600, width//2+50, 1190), _load_font(["impact.ttf","arialbd.ttf"], 66), fill=fg)
+            draw.text((80, 1420), (stat_text or "THE NUMBER").upper()[:22], font=_load_font(["impact.ttf","arialbd.ttf"], 76), fill=accent)
+        else:
+            draw.text((42, 310), words[0] if words else "FACT", font=_load_font(["impact.ttf","arialbd.ttf"], 160), fill=accent)
+            multiline(" ".join(words[1:]) or headline, (55, 550, width-60, 1090), _load_font(["impact.ttf","arialbd.ttf"], 78))
+            place_image((130, 1190, width-130, 1780), primary_img_path, 44)
+
+    # Data Story: chart/table geometry and numeric evidence dominate the frame.
+    elif visual_style == "data_story":
+        margin = 86
+        for y in range(360, 1280, 115):
+            draw.line((margin, y, width-margin, y), fill=(53,69,82), width=2)
+        draw.text((margin, 110), "EVIDENCE / " + stage_label.upper(), font=label_font, fill=accent)
+        if variant == 0:
+            values = [34, 61, 48, 82, 57]
+            base = 1260
+            for i, value in enumerate(values):
+                x = margin + 40 + i*174
+                top = base - value*8
+                draw.rounded_rectangle((x, top, x+100, base), 14, fill=accent if i == beat_idx%5 else (72,112,111))
+            draw.line((margin, base, width-margin, base), fill=fg, width=3)
+            draw.text((margin, 1370), (stat_text or "MEASURED RESULT").upper()[:28], font=label_font, fill=accent)
+        elif variant == 1:
+            draw.text((margin, 470), (stat_text or "49").upper()[:14], font=_load_font(["arialbd.ttf","impact.ttf"], 180), fill=accent)
+            draw.text((margin, 700), "VERIFIED SIGNAL", font=label_font, fill=fg)
+            draw.rectangle((margin, 890, width-margin, 910), fill=(53,69,82))
+            draw.rectangle((margin, 890, margin+int((width-2*margin)*0.72), 910), fill=accent)
+        else:
+            for i in range(4):
+                x = margin + i*220
+                draw.ellipse((x, 620, x+36, 656), fill=accent if i <= beat_idx%4 else (80,94,106))
+                if i < 3: draw.line((x+36,638,x+220,638), fill=(80,94,106), width=5)
+                draw.text((x-8, 700), f"0{i+1}", font=label_font, fill=fg)
+        multiline(headline, (margin, 1450, width-margin, 1800), _load_font(["arialbd.ttf","impact.ttf"], 58))
+
+    # Chalk Talk: slate, progressive mechanism drawing, arrows and labels.
+    elif visual_style == "chalk_talk":
+        import random
+        margin = 92
+        random.seed(beat_idx + 211)
+        for y in range(90, height, 140):
+            draw.line((0,y,width,y), fill=(255,255,255,10), width=1)
+        draw.text((margin, 110), "FIELD NOTES  /  " + stage_label.upper(), font=label_font, fill=accent)
+        labels = [w.upper() for w in words[:3]] or ["INPUT", "PROCESS", "RESULT"]
+        if variant == 0:
+            boxes = [(margin, 450, width-margin, 650), (margin, 820, width-margin, 1020), (margin, 1190, width-margin, 1390)]
+            for i, box in enumerate(boxes):
+                draw.rounded_rectangle(box, 18, outline=fg, width=3)
+                draw.text((box[0]+24, box[1]+34), labels[min(i,len(labels)-1)], font=label_font, fill=accent)
+                if i < 2:
+                    x = width//2
+                    draw.line((x, box[3], x, boxes[i+1][1]-20), fill=fg, width=4)
+                    draw.polygon([(x-12,boxes[i+1][1]-32),(x+12,boxes[i+1][1]-32),(x,boxes[i+1][1]-12)], fill=fg)
+        elif variant == 1:
+            for i, label in enumerate(labels):
+                x = margin + i*290
+                draw.ellipse((x, 690, x+180, 870), outline=accent, width=5)
+                draw.text((x+12, 930), label[:14], font=label_font, fill=fg)
+                if i < len(labels)-1: draw.line((x+180,780,x+280,780), fill=fg, width=4)
+            draw.text((margin, 520), "CAUSE  →  EFFECT", font=_load_font(["arialbd.ttf"], 40), fill=fg)
+        else:
+            draw.text((margin, 570), "A  +  B   →   C", font=_load_font(["arialbd.ttf"], 78), fill=fg)
+            draw.line((margin, 700, width-margin, 700), fill=accent, width=3)
+            multiline(headline, (margin, 790, width-margin, 1350), _load_font(["arialbd.ttf","impact.ttf"], 66), fill=fg)
+        multiline(headline, (margin, 1480, width-margin, 1810), _load_font(["arialbd.ttf","impact.ttf"], 54), fill=fg)
+
+    # Creator Motion: layered offset planes and cropped kinetic typography.
+    elif visual_style == "creator_motion_graphics":
+        draw.polygon([(0,180),(width,0),(width,340),(0,520)], fill=(28,28,34))
+        draw.rectangle((0, height-480, width, height), fill=(22,22,27))
+        draw.text((64, 85), "CREATOR CUT  /  " + stage_label.upper(), font=label_font, fill=accent)
+        if variant == 0:
+            place_image((180, 300, width-70, 1070), primary_img_path)
+            draw.rectangle((60, 900, width-60, 1190), fill=accent)
+            multiline(headline, (86, 920, width-80, 1170), _load_font(["impact.ttf"], 80), fill=(12,12,14))
+        elif variant == 1:
+            for i, word in enumerate(words[:4]):
+                x = 54 + (i%2)*270
+                y = 420 + (i//2)*270
+                draw.text((x+12,y+16), word.upper(), font=_load_font(["impact.ttf"], 78), fill=(239,75,73))
+                draw.text((x,y), word.upper(), font=_load_font(["impact.ttf"], 78), fill=fg)
+            place_image((100, 1050, width-100, 1640), primary_img_path, 8)
+        else:
+            place_image((60, 360, width-60, 1300), primary_img_path)
+            draw.rectangle((0, 1340, width, 1450), fill=(239,75,73))
+            draw.text((70, 1370), (stat_text or "THE REVEAL").upper()[:24], font=label_font, fill=fg)
+            multiline(headline, (68, 1510, width-64, 1810), _load_font(["impact.ttf"], 68))
+
+    # Cinematic Explainer: atmospheric full-frame image, negative space and letterbox framing.
+    elif visual_style == "cinematic_explainer":
+        place_image((0, 0, width, height), primary_img_path)
+        if primary_img_path and os.path.isfile(primary_img_path):
+            tint = Image.new("RGBA", (width,height), (7,10,16,90))
+            canvas = Image.alpha_composite(canvas.convert("RGBA"), tint).convert("RGB")
+            draw = ImageDraw.Draw(canvas)
+        draw.rectangle((0,0,width,180), fill=(0,0,0))
+        draw.rectangle((0,height-180,width,height), fill=(0,0,0))
+        draw.text((82, height-570), f"{topic_title[:38].upper()}  /  {stage_label.upper()}", font=label_font, fill=accent)
+        multiline(headline, (82,height-500,width-82,height-240), _load_font(["arialbd.ttf","impact.ttf"], 64))
+        if variant == 1:
+            draw.rectangle((78, 300, 88, 790), fill=accent)
+            draw.text((112, 330), "CHAPTER  " + str(beat_idx+1).zfill(2), font=label_font, fill=fg)
+
+    # Map story: geographical canvas with route, location markers and movement cue.
+    else:
+        place_image((30, 260, width-30, 1450), primary_img_path, 10)
+        draw.rectangle((0,0,width,250), fill=(18,29,33))
+        draw.text((70, 82), "PLACE / MOVEMENT", font=label_font, fill=accent)
+        draw.text((70, 125), stage_label.upper(), font=label_font, fill=fg)
+        points = [(150,1050),(350,890),(520,960),(700,690),(920,610)]
+        for a,b in zip(points, points[1:]):
+            draw.line((a[0],a[1],b[0],b[1]), fill=accent, width=7)
+        for x,y in points[:max(2, min(len(points), beat_idx%5+2))]:
+            r=17
+            draw.ellipse((x-r,y-r,x+r,y+r), fill=accent, outline=fg, width=4)
+        draw.rectangle((0,1480,width,height), fill=(18,29,33))
+        multiline(headline, (64,1510,width-64,1810), _load_font(["arialbd.ttf","impact.ttf"], 58))
+
+    canvas.save(out_path, format="PNG")
+    return out_path
+
+
+def _choose_scene_layout(visual_style: str, stage_label: str, beat_idx: int) -> str:
+    """Select a repeatable layout variant from the narrative position and direction."""
+    variants = {
+        "documentary": ("full_bleed_evidence", "archival_caption", "evidence_detail"),
+        "pop_info": ("hero_stat_card", "editorial_split", "kinetic_type_burst"),
+        "data_story": ("chart_canvas", "metric_progress", "evidence_timeline"),
+        "chalk_talk": ("mechanism_flow", "relationship_diagram", "equation_board"),
+        "creator_motion_graphics": ("layered_photo_mask", "offset_kinetic_type", "reveal_banner"),
+        "cinematic_explainer": ("immersive_full_frame", "chapter_reveal", "negative_space_title"),
+        "map_based_storytelling": ("animated_route", "location_focus", "territory_sequence"),
+    }
+    options = variants.get(visual_style, variants["documentary"])
+    stage_key = re.sub(r"[^a-z]+", "_", (stage_label or "").lower()).strip("_")
+    # Hooks open with a clear focal layout; later beats rotate through the direction's
+    # editorial grammar without random assignment.
+    offset = 0 if stage_key in {"hook", "question"} else 1
+    return options[(beat_idx + offset) % len(options)]
 
 
 def _write_aligned_ass_subtitles(
@@ -773,14 +1062,15 @@ def build_20_beat_storyboard(
     *,
     script_full_text: str = "",
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
-    max_image_reuse: int = MAX_IMAGE_REUSE,
+    max_image_reuse: int = PREFERRED_IMAGE_REUSE,
     execution_context: ExecutionContext = ExecutionContext.VALIDATION,
+    creative_direction: Optional[str] = None,
 ) -> Tuple[StoryboardPlan, List[VisualBeatConfig], str]:
     """
     Generates a 20-beat multi-modal 1080x1920 documentary storyboard synced to voiceover timings.
 
-    Stage 3.21M Visual Director Hierarchy (shared identically across VALIDATION & PRODUCTION):
-    - Priority A: Authentic existing photographs, archival documents & scientific diagrams (<= max_image_reuse).
+    Stage 3.21N Visual Director Hierarchy (shared identically across VALIDATION & PRODUCTION):
+    - Priority A: Authentic existing photographs, archival documents & scientific diagrams (prefer one use per source).
     - Priority B: Existing open-source GIF/WebM/MP4 animations adapted via FFmpeg into documentary 30 FPS portrait clips.
     - Priority C: Animated authentic composites (route lines, pulsing beacons, timelines, metrics over authentic assets).
     - Priority D: Selective procedural/conceptual illustrations (explicitly tagged illustrative_reconstruction=True).
@@ -788,7 +1078,7 @@ def build_20_beat_storyboard(
     """
     policy = get_creative_production_policy(execution_context)
     cat_spec = policy.get_category(getattr(topic, "category", "science"))
-    effective_max_reuse = min(max_image_reuse, policy.visual_policy.max_image_reuse)
+    effective_max_reuse = min(max_image_reuse, policy.visual_policy.preferred_image_reuse)
 
     plates_dir = os.path.join(prod_ws.assets_dir, "plates")
     os.makedirs(plates_dir, exist_ok=True)
@@ -799,26 +1089,42 @@ def build_20_beat_storyboard(
     # Partition acquired assets into Priority A (photos/diagrams) and Priority B (open animations)
     unique_photos: List[Dict[str, Any]] = []
     unique_animations: List[Dict[str, Any]] = []
-    seen_hashes: set = set()
+    seen_animation_hashes: set = set()
     for asset in acquired_assets:
         if not asset.local_path or not os.path.isfile(asset.local_path):
             continue
         sha = compute_asset_sha256(asset.local_path)
-        if not sha or sha in seen_hashes:
+        if not sha:
             continue
-        seen_hashes.add(sha)
         entry = {
             "asset": asset,
             "path": asset.local_path,
             "sha256": sha,
             "canonical_id": getattr(asset, "asset_id", None) or getattr(asset, "id", None) or sha[:16],
+            "source_identity": normalize_source_identity(
+                getattr(asset, "source_url", None) or getattr(asset, "asset_id", None) or getattr(asset, "id", None)
+            ),
         }
         is_anim = getattr(asset, "asset_type", "") == "existing_animation" or asset.local_path.lower().endswith(
             (".gif", ".webm", ".mp4")
         )
         if is_anim:
+            if sha in seen_animation_hashes:
+                continue
+            seen_animation_hashes.add(sha)
             unique_animations.append(entry)
         else:
+            duplicate = any(
+                find_image_duplicate_reason(
+                    existing["path"],
+                    entry["path"],
+                    first_source_identity=existing["source_identity"],
+                    second_source_identity=entry["source_identity"],
+                )
+                for existing in unique_photos
+            )
+            if duplicate:
+                continue
             unique_photos.append(entry)
 
     # Pre-flatten the 20 timing subdivisions across the 5 script sections
@@ -859,10 +1165,25 @@ def build_20_beat_storyboard(
 
     actual_total_beats = len(flat_beats)
     combined_script = script_full_text or " ".join(full_script_parts)
+    # A treatment is created before visual selection.  Existing callers retain their
+    # adaptive style behavior; callers opting into a direction get an inspectable
+    # composition/camera/transition contract carried into the storyboard metadata.
+    treatment = None
+    if creative_direction:
+        try:
+            direction = CreativeDirection(creative_direction)
+        except ValueError as exc:
+            raise ValueError(f"Unknown creative direction: {creative_direction}") from exc
+        treatment = FilmDirector().direct(
+            title=topic.title,
+            category=cat_spec.display_name,
+            direction=direction,
+            narration_segments=[beat["seg_text"] for beat in flat_beats],
+            scene_seconds=[beat["beat_dur"] for beat in flat_beats],
+        )
 
-    # Plan slots following Priority A -> Priority B -> Priority C -> Priority D
-    # Use at most 1 static slot per unique photo initially so every photo retains reuse budget for Priority C composites
-    photo_target = min(len(unique_photos), 8) if unique_photos else 0
+    # Split distinct acquired photos between still documentary beats and animated authentic composites.
+    photo_target = min(4, (len(unique_photos) + 1) // 2) if unique_photos else 0
     photo_slot_set = set(_spread_photo_indices(actual_total_beats, photo_target))
 
     open_slots_after_a = [i for i in range(actual_total_beats) if i not in photo_slot_set]
@@ -873,8 +1194,8 @@ def build_20_beat_storyboard(
 
     open_slots_after_b = [i for i in open_slots_after_a if i not in anim_b_slot_set]
     # Priority C (animated overlays composited onto authentic acquired images within max reuse budget)
-    remaining_photo_budget = max(0, len(unique_photos) * effective_max_reuse - len(photo_slot_set))
-    priority_c_target = min(remaining_photo_budget, len(open_slots_after_b), 4 if len(unique_photos) >= 3 else 2)
+    remaining_photo_budget = max(0, len(unique_photos) - len(photo_slot_set))
+    priority_c_target = min(remaining_photo_budget, len(open_slots_after_b), 4 if len(unique_photos) >= 2 else 0)
     priority_c_step = max(1, len(open_slots_after_b) // max(1, priority_c_target)) if priority_c_target > 0 else 1
     priority_c_slot_set = set(open_slots_after_b[::priority_c_step][:priority_c_target]) if priority_c_target > 0 else set()
 
@@ -917,6 +1238,8 @@ def build_20_beat_storyboard(
     priority_c_beats = 0
     priority_d_bespoke_beats = 0
     b_cursor = 0
+    previous_visual_style: Optional[str] = None
+    visual_style_counts: Dict[str, int] = {}
 
     for beat_info in flat_beats:
         idx = beat_info["idx"]
@@ -932,6 +1255,33 @@ def build_20_beat_storyboard(
         beat_dur = beat_info["beat_dur"]
         accent = accents[sec_idx % len(accents)]
         z0, z1, pdx, pdy = motions[idx % len(motions)]
+        planned_asset_type = (
+            "authentic_photo" if idx in photo_slot_set
+            else "existing_animation" if idx in anim_b_slot_set
+            else "generated_illustration" if idx in gen_slot_set
+            else "bespoke_diagram"
+        )
+        style_selection = AdaptiveVisualStyleSelector.select(
+            category=cat_spec.display_name,
+            stage=stage_label,
+            narrative_purpose=narrative_purpose,
+            segment_text=seg_text,
+            asset_type=planned_asset_type,
+            previous_style=previous_visual_style,
+        )
+        visual_style = style_selection.visual_style.value
+        scene_layout = _choose_scene_layout(visual_style, stage_label, idx)
+        treatment_scene = treatment.scenes[idx] if treatment else None
+        if treatment_scene:
+            # The family comes from the selected director, not an image asset label.
+            scene_layout = treatment_scene.composition_family
+        previous_visual_style = visual_style
+        visual_style_counts[visual_style] = visual_style_counts.get(visual_style, 0) + 1
+        source_img_sha: Optional[str] = None
+        source_img_path: Optional[str] = None
+        source_img_identity: Optional[str] = None
+        source_video_sha: Optional[str] = None
+        beat_source_url: Optional[str] = None
 
         slug = re.sub(r"[^a-z0-9]+", "_", callout.lower()).strip("_")[:24] or f"beat_{idx + 1}"
         plate_path = os.path.join(plates_dir, f"plate_{idx + 1:02d}_{stage_label.lower()}.png")
@@ -947,13 +1297,7 @@ def build_20_beat_storyboard(
             chosen_asset = chosen["asset"]
 
             img1 = chosen["path"]
-            img2 = None
             layout_mode = "focal_photo"
-            if len(unique_photos) >= 2 and idx % 4 == 3:
-                other = next((x for x in unique_photos if x["sha256"] != photo_sha), None)
-                if other:
-                    img2 = other["path"]
-                    layout_mode = "split_dual"
 
             _render_documentary_plate(
                 out_path=plate_path,
@@ -968,7 +1312,7 @@ def build_20_beat_storyboard(
                 accent_color=accent,
                 layout_mode=layout_mode,
                 primary_img_path=img1,
-                secondary_img_path=img2,
+                visual_style=visual_style,
             )
 
             visual_type = "documentary_image"
@@ -986,7 +1330,10 @@ def build_20_beat_storyboard(
             beat_license_url = chosen_asset.license_url
             beat_creator = chosen_asset.creator
             beat_provider = chosen_asset.source_repository
+            beat_source_url = chosen_asset.source_url
             source_img_sha = photo_sha
+            source_img_path = chosen["path"]
+            source_img_identity = chosen["source_identity"] or chosen["canonical_id"]
             illustrative_flag = False
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
@@ -1012,6 +1359,7 @@ def build_20_beat_storyboard(
                 accent_color=accent,
                 source_credit=f"{anim_asset.source_repository} / {anim_asset.creator}",
                 fps=30.0,
+                visual_style=visual_style,
             )
             animated_count += 1
             priority_b_beats += 1
@@ -1043,6 +1391,7 @@ def build_20_beat_storyboard(
                 layout_mode="stat_card",
                 primary_img_path=None,
                 secondary_img_path=None,
+                visual_style=visual_style,
             )
             canonical_path = anim_mp4_path
             canonical_hash = compute_asset_sha256(anim_mp4_path)
@@ -1057,7 +1406,11 @@ def build_20_beat_storyboard(
             beat_license_url = anim_asset.license_url
             beat_creator = anim_asset.creator
             beat_provider = anim_asset.source_repository
-            source_img_sha = anim_item["sha256"]
+            beat_source_url = anim_asset.source_url
+            source_img_sha = None
+            source_img_path = None
+            source_img_identity = None
+            source_video_sha = anim_item["sha256"]
             illustrative_flag = False
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
@@ -1091,6 +1444,7 @@ def build_20_beat_storyboard(
                 coordinates=coords,
                 fps=30.0,
                 background_image_path=chosen["path"],
+                visual_style=visual_style,
             )
             animated_count += 1
             priority_c_beats += 1
@@ -1122,6 +1476,7 @@ def build_20_beat_storyboard(
                 layout_mode="focal_photo",
                 primary_img_path=chosen["path"],
                 secondary_img_path=None,
+                visual_style=visual_style,
             )
             canonical_path = anim_mp4_path
             canonical_hash = compute_asset_sha256(anim_mp4_path)
@@ -1136,7 +1491,10 @@ def build_20_beat_storyboard(
             beat_license_url = chosen_asset.license_url
             beat_creator = chosen_asset.creator
             beat_provider = f"{chosen_asset.source_repository} + Overlay"
+            beat_source_url = chosen_asset.source_url
             source_img_sha = photo_sha
+            source_img_path = chosen["path"]
+            source_img_identity = chosen["source_identity"] or chosen["canonical_id"]
             illustrative_flag = False
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
@@ -1159,6 +1517,7 @@ def build_20_beat_storyboard(
                 variant=generated_count,
                 category=cat_spec.display_name,
                 illustrative_label="ILLUSTRATIVE RECONSTRUCTION",
+                visual_style=visual_style,
             )
             generated_count += 1
             prod_ws.register_artifact(
@@ -1191,7 +1550,11 @@ def build_20_beat_storyboard(
             beat_license_url = "local://generated"
             beat_creator = "CrazzyDocs Analytical Illustration Generator"
             beat_provider = "Local Conceptual Synthesizer"
+            beat_source_url = "local://generated"
             source_img_sha = None
+            source_img_path = None
+            source_img_identity = None
+            source_video_sha = None
             illustrative_flag = True
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
@@ -1227,6 +1590,7 @@ def build_20_beat_storyboard(
                 accent_color=accent,
                 coordinates=coords,
                 fps=30.0,
+                visual_style=visual_style,
             )
             animated_count += 1
             priority_d_bespoke_beats += 1
@@ -1258,6 +1622,7 @@ def build_20_beat_storyboard(
                 layout_mode="stat_card",
                 primary_img_path=None,
                 secondary_img_path=None,
+                visual_style=visual_style,
             )
             canonical_path = anim_mp4_path
             canonical_hash = compute_asset_sha256(anim_mp4_path)
@@ -1272,7 +1637,11 @@ def build_20_beat_storyboard(
             beat_license_url = "local://animation"
             beat_creator = "CrazzyDocs Explainer Animation Engine"
             beat_provider = "Local Explainer Engine"
+            beat_source_url = "local://animation"
             source_img_sha = None
+            source_img_path = None
+            source_img_identity = None
+            source_video_sha = None
             illustrative_flag = False
             asset_key = f"sha256:{canonical_hash}"
             asset_reuse_tracker[asset_key] = asset_reuse_tracker.get(asset_key, 0) + 1
@@ -1295,6 +1664,15 @@ def build_20_beat_storyboard(
             "asset_path": canonical_path,
             "asset_hash": canonical_hash,
             "asset_id": canonical_id,
+            "visual_style": visual_style,
+            "scene_layout": scene_layout,
+            "composer_id": ("legacy_treatment_adapter" if treatment_scene else "legacy_adaptive_composer"),
+            "creative_direction": treatment.direction.value if treatment else None,
+            "composition_family": treatment_scene.composition_family if treatment_scene else scene_layout,
+            "camera_move": treatment_scene.camera_move if treatment_scene else "ken_burns_or_procedural",
+            "animation_technique": treatment_scene.animation_technique if treatment_scene else anim_instr,
+            "style_selection_rationale": style_selection.rationale,
+            "style_transition_rationale": style_selection.transition_rationale,
             "zoom_start": z0,
             "zoom_end": z1,
             "pan_dx": pdx,
@@ -1346,7 +1724,11 @@ def build_20_beat_storyboard(
             "license_url": beat_license_url,
             "creator": beat_creator,
             "source_provider": beat_provider,
+            "source_url": beat_source_url,
             "source_image_sha256": source_img_sha,
+            "source_image_path": source_img_path,
+            "source_image_identity": source_img_identity,
+            "source_video_sha256": source_video_sha,
             "illustrative_reconstruction": illustrative_flag,
             "animation_instructions": anim_instr,
             "visual_description": visual_desc,
@@ -1357,6 +1739,18 @@ def build_20_beat_storyboard(
             "animation_path": anim_mp4_path,
             "visual_generation_instructions": gen_instr,
             "transition": "cut",
+            "style_transition": style_selection.transition,
+            "style_transition_rationale": style_selection.transition_rationale,
+            "visual_style": visual_style,
+            "scene_layout": scene_layout,
+            "composer_id": ("legacy_treatment_adapter" if treatment_scene else "legacy_adaptive_composer"),
+            "creative_direction": treatment.direction.value if treatment else None,
+            "composition_family": treatment_scene.composition_family if treatment_scene else scene_layout,
+            "camera_move": treatment_scene.camera_move if treatment_scene else "ken_burns_or_procedural",
+            "animation_technique": treatment_scene.animation_technique if treatment_scene else anim_instr,
+            "style_selection_rationale": style_selection.rationale,
+            "style_selection_scores": style_selection.scores,
+            "asset_source": beat_provider,
             "relevance_score": 0.92 if anim_mp4_path or visual_type == "generated_image" else 0.89,
             "reuse_count": reuse_num,
             "source_image": os.path.basename(canonical_path),
@@ -1393,6 +1787,7 @@ def build_20_beat_storyboard(
     outro_path = outro_media if os.path.isfile(outro_media) else outro_assets
 
     sourcing_summary = {
+        "total_visual_beats": audit_res.total_beats,
         "authentic_images_acquired": len(unique_photos),
         "existing_animations_acquired": len(unique_animations),
         "priority_a_photo_beats": priority_a_beats,
@@ -1400,11 +1795,25 @@ def build_20_beat_storyboard(
         "priority_c_animated_authentic_beats": priority_c_beats,
         "priority_d_generated_image_beats": generated_count,
         "priority_d_bespoke_anim_beats": priority_d_bespoke_beats,
-        "max_source_photo_reuse": max(photo_use_counts.values()) if photo_use_counts else 0,
+        "unique_photographic_assets": audit_res.unique_photographic_assets,
+        "unique_video_assets": audit_res.unique_video_assets,
+        "unique_maps": audit_res.unique_maps,
+        "unique_diagrams": audit_res.unique_diagrams,
+        "generated_images": audit_res.generated_images,
+        "animations": audit_res.animations,
+        "reused_source_images": audit_res.reused_source_images,
+        "near_duplicate_groups": audit_res.near_duplicate_groups,
+        "max_source_photo_reuse": audit_res.max_source_image_reuse,
+        "visual_style_distribution": visual_style_counts,
+        "scene_layout_distribution": {
+            layout: sum(1 for beat in storyboard_beat_records if beat.get("scene_layout") == layout)
+            for layout in sorted({str(beat.get("scene_layout")) for beat in storyboard_beat_records})
+        },
+        "primary_creative_direction": max(visual_style_counts, key=visual_style_counts.get) if visual_style_counts else "documentary",
     }
 
     storyboard_payload = {
-        "schema_version": "3.21M",
+        "schema_version": "3.21P" if treatment else "3.21N",
         "topic_id": topic.id,
         "topic_title": topic.title,
         "category": cat_spec.display_name,
@@ -1419,8 +1828,19 @@ def build_20_beat_storyboard(
             "unique_images": audit_res.unique_images,
             "unique_animations": audit_res.unique_animations,
             "max_reuse_observed": audit_res.max_reuse_observed,
+            "unique_photographic_assets": audit_res.unique_photographic_assets,
+            "unique_video_assets": audit_res.unique_video_assets,
+            "unique_maps": audit_res.unique_maps,
+            "unique_diagrams": audit_res.unique_diagrams,
+            "generated_images": audit_res.generated_images,
+            "animations": audit_res.animations,
+            "reused_source_images": audit_res.reused_source_images,
+            "near_duplicate_groups": audit_res.near_duplicate_groups,
+            "max_source_image_reuse": audit_res.max_source_image_reuse,
             "reuse_counts": audit_res.reuse_counts,
         },
+        "film_treatment": treatment.to_dict() if treatment else None,
+        "composition_diversity_audit": audit_composition_diversity(treatment.scenes) if treatment else None,
         "beats": storyboard_beat_records,
     }
 
@@ -1436,12 +1856,24 @@ def build_20_beat_storyboard(
             "topic_id": topic.id,
             "category": cat_spec.display_name,
             "beat_count": len(scene_beats),
+            "visual_style_distribution": visual_style_counts,
+            "unique_photographic_assets": audit_res.unique_photographic_assets,
+            "unique_video_assets": audit_res.unique_video_assets,
+            "unique_maps": audit_res.unique_maps,
+            "unique_diagrams": audit_res.unique_diagrams,
+            "generated_images": audit_res.generated_images,
+            "animations": audit_res.animations,
+            "reused_source_images": audit_res.reused_source_images,
+            "near_duplicate_groups": audit_res.near_duplicate_groups,
+            "max_source_image_reuse": audit_res.max_source_image_reuse,
             "distinct_visual_assets": audit_res.distinct_assets,
             "unique_images": audit_res.unique_images,
             "unique_animations": audit_res.unique_animations,
             "max_image_reuse_observed": audit_res.max_reuse_observed,
             "visual_sourcing_summary": sourcing_summary,
             "storyboard_beats": storyboard_beat_records,
+            "film_treatment": treatment.to_dict() if treatment else None,
+            "composition_diversity_audit": audit_composition_diversity(treatment.scenes) if treatment else None,
         },
         include_crazzydocs_outro=True,
         crazzydocs_outro_path=outro_path,

@@ -75,7 +75,8 @@ class ExpressiveTTSEngine:
             audio_path
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            from backend.app.core.process_utils import hidden_subprocess_kwargs
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, **hidden_subprocess_kwargs())
             return float(res.stdout.strip())
         except Exception as e:
             logger.warning("ffprobe failed on %s: %s", audio_path, e)
@@ -112,7 +113,8 @@ class ExpressiveTTSEngine:
             output_mp3
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            from backend.app.core.process_utils import hidden_subprocess_kwargs
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **hidden_subprocess_kwargs())
             if res.returncode == 0 and os.path.exists(output_mp3) and os.path.getsize(output_mp3) > 1000:
                 return output_mp3
             else:
@@ -234,7 +236,8 @@ class ExpressiveTTSEngine:
             "-ar", "48000",
             output_path
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        from backend.app.core.process_utils import hidden_subprocess_kwargs
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=20, **hidden_subprocess_kwargs())
         if res.returncode != 0:
             raise RuntimeError(f"TTS segment concatenation failed: {res.stderr}")
 

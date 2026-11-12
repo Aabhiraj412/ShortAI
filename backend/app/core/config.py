@@ -4,6 +4,7 @@ Reads from environment variables and local .env / .env.local files.
 Phase 5, Stage 3.15 Standard with Centralized Path Resolution.
 """
 import os
+from typing import Literal
 from pydantic_settings import BaseSettings
 from backend.app.core.paths import (
     PROJECT_ROOT_STR,
@@ -32,7 +33,7 @@ class Settings(BaseSettings):
     YOUTUBE_TOKEN_FILE: str = str(TOKEN_PATH)
     
     # Publishing & Automation Settings
-    PUBLISHING_MODE: str = "automatic_public" # "automatic_public", "manual_approval", "unlisted_test", "private"
+    PUBLISHING_MODE: Literal["manual_approval"] = "manual_approval"
     DAILY_PUBLISH_TIME_IST: str = "10:00"     # 10:00 AM IST
     DEFAULT_VOICE: str = "en-US-ChristopherNeural"
     

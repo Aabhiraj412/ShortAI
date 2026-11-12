@@ -14,14 +14,16 @@ import json
 import logging
 import os
 import smtplib
+import socket
 import sqlite3
 import subprocess
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from backend.app.core.execution_context import ExecutionContext
+from backend.app.core.secure_storage import protect_text, unprotect_text
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,7 @@ class NotificationManager:
         self.cooldown_seconds = cooldown_seconds
         self.db_path = db_path or os.path.join(WORKSPACE_ROOT, "backend", "studio.db")
         self._recent_events: Dict[str, float] = {}
+        self.last_email_receipt: Dict[str, Any] = {}
         os.makedirs(os.path.dirname(self.alert_log_path), exist_ok=True)
         self._init_notification_db()
 
@@ -94,32 +97,77 @@ class NotificationManager:
                     delivered_at TEXT NOT NULL
                 )
             """)
+            cur.execute("PRAGMA table_info(notification_delivery_ledger)")
+            cols = {row[1] for row in cur.fetchall()}
+            for col_name, col_type in (
+                ("delivery_state", "TEXT DEFAULT 'CONFIRMED_SENT'"),
+                ("error_category", "TEXT"),
+            ):
+                if col_name not in cols:
+                    cur.execute(f"ALTER TABLE notification_delivery_ledger ADD COLUMN {col_name} {col_type}")
             conn.commit()
             conn.close()
         except Exception as e:
             logger.error("Failed to init notification_delivery_ledger: %s", e)
 
     def is_event_delivered(self, event_key: str) -> bool:
-        """Checks if the event was already delivered in the persistent ledger."""
+        """Checks if the event was already confirmed or has unknown in-flight/post-DATA outcome."""
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT 1 FROM notification_delivery_ledger WHERE event_key = ?", (event_key,))
+            cur.execute(
+                "SELECT COALESCE(delivery_state, 'CONFIRMED_SENT') FROM notification_delivery_ledger WHERE event_key = ?",
+                (event_key,),
+            )
             row = cur.fetchone()
             conn.close()
-            return bool(row)
+            if not row:
+                return False
+            return row[0] in ("CONFIRMED_SENT", "DELIVERY_UNKNOWN", "DISPATCHING")
         except Exception:
             return False
 
-    def record_event_delivered(self, event_key: str, event_type: str, job_id: str, recipient: str):
-        """Records a successful notification delivery in the persistent ledger."""
+    def record_event_delivered(
+        self,
+        event_key: str,
+        event_type: str,
+        job_id: str,
+        recipient: str,
+        delivery_state: str = "CONFIRMED_SENT",
+        error_category: Optional[str] = None,
+    ):
+        """Records a notification outcome in the persistent ledger without overwriting confirmed records."""
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
             cur.execute("""
-                INSERT OR IGNORE INTO notification_delivery_ledger (event_key, event_type, job_id, recipient, delivered_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (event_key, event_type, job_id, recipient, datetime.utcnow().isoformat() + "Z"))
+                INSERT INTO notification_delivery_ledger (
+                    event_key, event_type, job_id, recipient, delivered_at, delivery_state, error_category
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_key) DO UPDATE SET
+                    delivered_at = CASE
+                        WHEN COALESCE(notification_delivery_ledger.delivery_state, 'CONFIRMED_SENT') IN ('CONFIRMED_SENT', 'DELIVERY_UNKNOWN')
+                        THEN notification_delivery_ledger.delivered_at
+                        ELSE excluded.delivered_at
+                    END,
+                    delivery_state = CASE
+                        WHEN COALESCE(notification_delivery_ledger.delivery_state, 'CONFIRMED_SENT') = 'CONFIRMED_SENT'
+                        THEN 'CONFIRMED_SENT'
+                        WHEN notification_delivery_ledger.delivery_state = 'DELIVERY_UNKNOWN'
+                        THEN 'DELIVERY_UNKNOWN'
+                        ELSE excluded.delivery_state
+                    END,
+                    error_category = excluded.error_category
+            """, (
+                event_key,
+                event_type,
+                job_id,
+                recipient,
+                datetime.utcnow().isoformat() + "Z",
+                delivery_state,
+                error_category,
+            ))
             conn.commit()
             conn.close()
         except Exception as e:
@@ -127,11 +175,87 @@ class NotificationManager:
 
     def is_email_configured(self) -> bool:
         """Checks whether SMTP credentials and recipient are present."""
-        smtp_host = os.environ.get("CRAZZYDOCS_SMTP_HOST") or os.environ.get("SMTP_HOST")
-        smtp_user = os.environ.get("CRAZZYDOCS_SMTP_USER") or os.environ.get("SMTP_USER")
-        smtp_pass = os.environ.get("CRAZZYDOCS_SMTP_PASSWORD") or os.environ.get("SMTP_PASSWORD")
-        to_email = os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT") or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL")
-        return bool(smtp_host and smtp_user and smtp_pass and to_email)
+        config = self._smtp_configuration()
+        return bool(
+            not config.get("configuration_error")
+            and config["host"] and config["username"] and config["password"] and config["recipient"]
+        )
+
+    def _smtp_configuration(self) -> Dict[str, str]:
+        config = {
+            "host": os.environ.get("CRAZZYDOCS_SMTP_HOST") or os.environ.get("SMTP_HOST") or "",
+            "port": os.environ.get("CRAZZYDOCS_SMTP_PORT") or os.environ.get("SMTP_PORT") or "587",
+            "username": os.environ.get("CRAZZYDOCS_SMTP_USER") or os.environ.get("SMTP_USER") or "",
+            "password": os.environ.get("CRAZZYDOCS_SMTP_PASSWORD") or os.environ.get("SMTP_PASSWORD") or "",
+            "recipient": os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT") or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL") or "",
+            "sender": os.environ.get("CRAZZYDOCS_SMTP_SENDER") or "",
+            "security": os.environ.get("CRAZZYDOCS_SMTP_SECURITY", "STARTTLS").upper(),
+        }
+        try:
+            from backend.app.database.db import SessionLocal, StudioSettingModel
+            with SessionLocal() as db:
+                stored = {
+                    item.key: item.value
+                    for item in db.query(StudioSettingModel).filter(
+                        StudioSettingModel.key.like("stage322_smtp_%")
+                    ).all()
+                }
+            mapping = {
+                "stage322_smtp_host": "host",
+                "stage322_smtp_port": "port",
+                "stage322_smtp_username": "username",
+                "stage322_smtp_recipient": "recipient",
+                "stage322_smtp_sender": "sender",
+                "stage322_smtp_security": "security",
+            }
+            for key, target in mapping.items():
+                if key in stored:
+                    config[target] = stored[key]
+            if "stage322_smtp_password_protected" in stored:
+                config["password"] = unprotect_text(stored["stage322_smtp_password_protected"])
+        except Exception:
+            logger.exception("Could not load persisted SMTP configuration.")
+            config["configuration_error"] = "Persisted SMTP configuration could not be loaded."
+        return config
+
+    def get_public_email_configuration(self) -> Dict:
+        config = self._smtp_configuration()
+        return {
+            "provider": "smtp",
+            "configured": bool(config["host"] and config["username"] and config["password"] and config["recipient"]),
+            "host": config["host"] or None,
+            "port": int(config["port"]),
+            "security": config["security"],
+            "sender": config["sender"] or config["username"] or None,
+            "recipient": config["recipient"] or None,
+            "password_configured": bool(config["password"]),
+            "configuration_error": config.get("configuration_error"),
+        }
+
+    def save_email_configuration(self, config: Dict[str, Optional[str]]) -> Dict:
+        from backend.app.database.db import SessionLocal, StudioSettingModel
+        values = {
+            "stage322_smtp_host": config.get("host"),
+            "stage322_smtp_port": str(config["port"]) if config.get("port") else None,
+            "stage322_smtp_username": config.get("username"),
+            "stage322_smtp_recipient": config.get("recipient"),
+            "stage322_smtp_sender": config.get("sender"),
+            "stage322_smtp_security": config.get("security"),
+        }
+        password = config.get("password")
+        if password:
+            values["stage322_smtp_password_protected"] = protect_text(password)
+        with SessionLocal() as db:
+            for key, value in values.items():
+                if value is None:
+                    continue
+                setting = db.query(StudioSettingModel).filter(StudioSettingModel.key == key).first()
+                if setting:
+                    setting.value = value
+                else:
+                    db.add(StudioSettingModel(key=key, value=value))
+            db.commit()
+        return self.get_public_email_configuration()
 
     def _is_duplicate(self, key: str) -> bool:
         """Checks if identical alert was sent recently within cooldown."""
@@ -161,37 +285,67 @@ Start-Sleep -Milliseconds 600
 $notify.Dispose()
 """
         try:
+            from backend.app.core.process_utils import hidden_subprocess_kwargs
             res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script],
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_script],
                 capture_output=True,
                 text=True,
                 timeout=5,
+                **hidden_subprocess_kwargs(),
             )
             return res.returncode == 0
         except Exception as e:
             logger.warning("Desktop notification failed: %s", e)
             return False
 
-    def notify_email(
+    def send_email_with_receipt(
         self,
         subject: str,
         body_text: str,
         body_html: Optional[str] = None,
         recipient: Optional[str] = None,
         max_retries: int = 2,
-    ) -> bool:
-        """Sends email alert via SMTP with transient retry handling."""
-        smtp_host = os.environ.get("CRAZZYDOCS_SMTP_HOST") or os.environ.get("SMTP_HOST")
-        smtp_port = int(os.environ.get("CRAZZYDOCS_SMTP_PORT") or os.environ.get("SMTP_PORT") or 587)
-        smtp_user = os.environ.get("CRAZZYDOCS_SMTP_USER") or os.environ.get("SMTP_USER")
-        smtp_pass = os.environ.get("CRAZZYDOCS_SMTP_PASSWORD") or os.environ.get("SMTP_PASSWORD")
-        to_email = recipient or os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT") or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL")
-        sender_addr = os.environ.get("CRAZZYDOCS_SMTP_SENDER") or smtp_user
-        security = os.environ.get("CRAZZYDOCS_SMTP_SECURITY", "STARTTLS").upper()
+    ) -> Dict[str, Any]:
+        """
+        Sends email via SMTP while tracking exact transaction phase:
+        - Pre-DATA failures (connect/STARTTLS/auth): safe transient retry -> FAILED_RETRYABLE
+        - SEND_DATA timeouts/disconnects after DATA starts: NO blind retry -> DELIVERY_UNKNOWN
+        - Confirmed delivery only when send_message() completes with zero refusals -> CONFIRMED_SENT
+        """
+        config = self._smtp_configuration()
+        if config.get("configuration_error"):
+            receipt = {
+                "confirmed": False,
+                "delivery_state": "FAILED_RETRYABLE",
+                "error_category": "NOT_CONFIGURED",
+                "safe_to_retry": True,
+                "last_error": "Persisted SMTP configuration is unavailable.",
+                "provider_response": None,
+            }
+            self.last_email_receipt = receipt
+            logger.error("SMTP notification skipped because persisted configuration is unavailable.")
+            return receipt
+
+        smtp_host = config["host"]
+        smtp_port = int(config["port"])
+        smtp_user = config["username"]
+        smtp_pass = config["password"]
+        to_email = recipient or config["recipient"]
+        sender_addr = config["sender"] or smtp_user
+        security = config["security"].upper()
 
         if not all([smtp_host, smtp_user, smtp_pass, to_email]):
+            receipt = {
+                "confirmed": False,
+                "delivery_state": "FAILED_RETRYABLE",
+                "error_category": "NOT_CONFIGURED",
+                "safe_to_retry": True,
+                "last_error": "SMTP credentials not fully configured.",
+                "provider_response": None,
+            }
+            self.last_email_receipt = receipt
             logger.debug("SMTP credentials not fully configured; skipping email dispatch.")
-            return False
+            return receipt
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -202,12 +356,16 @@ $notify.Dispose()
         if body_html:
             msg.attach(MIMEText(body_html, "html"))
 
+        last_err = ""
+        error_category = "CONNECTION_ERROR"
         for attempt in range(1, max_retries + 2):
+            phase = "CONNECT_AUTH"
             try:
                 if security == "SSL" or smtp_port == 465:
                     with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=25) as server:
                         server.login(smtp_user, smtp_pass)
-                        server.send_message(msg)
+                        phase = "SEND_DATA"
+                        refused = server.send_message(msg)
                 else:
                     with smtplib.SMTP(smtp_host, smtp_port, timeout=25) as server:
                         server.ehlo()
@@ -215,16 +373,127 @@ $notify.Dispose()
                             server.starttls()
                             server.ehlo()
                         server.login(smtp_user, smtp_pass)
-                        server.send_message(msg)
-                logger.info("Email notification confirmed delivered to %s", to_email)
-                return True
-            except Exception as e:
-                logger.warning("SMTP attempt %d/%d failed: %s", attempt, max_retries + 1, e)
-                if attempt <= max_retries:
-                    time.sleep(1.5 * attempt)
+                        phase = "SEND_DATA"
+                        refused = server.send_message(msg)
+                if isinstance(refused, dict) and len(refused) > 0:
+                    receipt = {
+                        "confirmed": False,
+                        "delivery_state": "FAILED_RETRYABLE",
+                        "error_category": "SMTP_REJECTED",
+                        "safe_to_retry": True,
+                        "last_error": "SMTP server refused one or more recipients.",
+                        "provider_response": f"refused_count={len(refused)}",
+                    }
+                    self.last_email_receipt = receipt
+                    return receipt
 
-        logger.error("Email delivery failed after %d attempts", max_retries + 1)
-        return False
+                receipt = {
+                    "confirmed": True,
+                    "delivery_state": "CONFIRMED_SENT",
+                    "error_category": None,
+                    "safe_to_retry": False,
+                    "last_error": None,
+                    "provider_response": "SMTP send_message accepted",
+                }
+                self.last_email_receipt = receipt
+                logger.info("Email notification confirmed delivered to %s", to_email)
+                return receipt
+            except (TimeoutError, socket.timeout, smtplib.SMTPServerDisconnected, BrokenPipeError, ConnectionResetError, OSError) as e:
+                last_err = f"{type(e).__name__} during {phase}"
+                if phase == "SEND_DATA":
+                    # Message bytes may already have been queued by the SMTP server; never blindly retry.
+                    receipt = {
+                        "confirmed": False,
+                        "delivery_state": "DELIVERY_UNKNOWN",
+                        "error_category": "TIMEOUT_UNKNOWN",
+                        "safe_to_retry": False,
+                        "last_error": last_err,
+                        "provider_response": f"Ambiguous SMTP result during SEND_DATA ({type(e).__name__})",
+                    }
+                    self.last_email_receipt = receipt
+                    logger.error("SMTP outcome unknown after SEND_DATA (%s); blocking blind retry.", type(e).__name__)
+                    return receipt
+                error_category = "CONNECTION_ERROR"
+                logger.warning("SMTP attempt %d/%d failed before DATA (%s).", attempt, max_retries + 1, type(e).__name__)
+                if attempt <= max_retries:
+                    time.sleep(min(2 ** (attempt - 1), 30))
+            except smtplib.SMTPAuthenticationError as e:
+                receipt = {
+                    "confirmed": False,
+                    "delivery_state": "FAILED_RETRYABLE",
+                    "error_category": "AUTH_ERROR",
+                    "safe_to_retry": False,
+                    "last_error": f"SMTPAuthenticationError ({getattr(e, 'smtp_code', 535)})",
+                    "provider_response": None,
+                }
+                self.last_email_receipt = receipt
+                logger.error("SMTP authentication failed (%s).", getattr(e, "smtp_code", "unknown"))
+                return receipt
+            except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as e:
+                code = int(getattr(e, "smtp_code", 550) or 550)
+                transient = 400 <= code < 500
+                last_err = f"{type(e).__name__} ({code})"
+                error_category = "SMTP_REJECTED"
+                logger.warning("SMTP rejected message (%s).", last_err)
+                if transient and attempt <= max_retries:
+                    time.sleep(min(2 ** (attempt - 1), 30))
+                    continue
+                receipt = {
+                    "confirmed": False,
+                    "delivery_state": "FAILED_RETRYABLE",
+                    "error_category": "SMTP_REJECTED",
+                    "safe_to_retry": transient,
+                    "last_error": last_err,
+                    "provider_response": f"smtp_code={code}",
+                }
+                self.last_email_receipt = receipt
+                return receipt
+            except Exception as e:
+                last_err = f"{type(e).__name__} during {phase}"
+                if phase == "SEND_DATA":
+                    receipt = {
+                        "confirmed": False,
+                        "delivery_state": "DELIVERY_UNKNOWN",
+                        "error_category": "TIMEOUT_UNKNOWN",
+                        "safe_to_retry": False,
+                        "last_error": last_err,
+                        "provider_response": f"Ambiguous SMTP error during SEND_DATA ({type(e).__name__})",
+                    }
+                    self.last_email_receipt = receipt
+                    return receipt
+                logger.warning("SMTP attempt %d/%d failed (%s).", attempt, max_retries + 1, type(e).__name__)
+                if attempt <= max_retries:
+                    time.sleep(min(2 ** (attempt - 1), 30))
+
+        receipt = {
+            "confirmed": False,
+            "delivery_state": "FAILED_RETRYABLE",
+            "error_category": error_category,
+            "safe_to_retry": True,
+            "last_error": last_err or "SMTP delivery failed",
+            "provider_response": None,
+        }
+        self.last_email_receipt = receipt
+        logger.error("Email delivery failed after %d attempts (%s)", max_retries + 1, error_category)
+        return receipt
+
+    def notify_email(
+        self,
+        subject: str,
+        body_text: str,
+        body_html: Optional[str] = None,
+        recipient: Optional[str] = None,
+        max_retries: int = 2,
+    ) -> bool:
+        """Sends email alert via SMTP with phase-aware retry and delivery receipt tracking."""
+        receipt = self.send_email_with_receipt(
+            subject=subject,
+            body_text=body_text,
+            body_html=body_html,
+            recipient=recipient,
+            max_retries=max_retries,
+        )
+        return bool(receipt.get("confirmed"))
 
     def record_audit_log(self, alert: AlertPayload):
         """Appends alert payload to persistent JSONL log."""

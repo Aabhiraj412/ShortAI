@@ -33,6 +33,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from backend.app.content.creative_identity_policy import CreativeIdentityPolicy
 from backend.app.core.paths import FFMPEG_DEFAULT_PATH
+from backend.app.rendering.style_treatments import compose_direction_frame, draw_visual_style_treatment
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,7 @@ class ExplainerAnimationEngine:
         variant: int = 0,
         category: str = "",
         illustrative_label: str = "ILLUSTRATIVE RECONSTRUCTION",
+        visual_style: str = "documentary",
     ) -> Dict[str, Any]:
         """
         Generates a distinct 1080x1920 analytical illustration / cartographic schematic PNG
@@ -289,6 +291,18 @@ class ExplainerAnimationEngine:
             draw.text((146, yc), line, font=self.font_title, fill=(248, 250, 255), anchor="lm")
             yc += 62
 
+        canvas = compose_direction_frame(
+            canvas,
+            visual_style,
+            topic_title=topic_title,
+            segment_text=segment_text,
+            stage_label=stage_label,
+            stat_text="",
+            beat_idx=beat_idx,
+        )
+        disclosure = ImageDraw.Draw(canvas)
+        disclosure.rounded_rectangle((70, 150, self.width - 70, 205), radius=18, fill=(8, 12, 16), outline=(190, 190, 180), width=2)
+        disclosure.text((self.width // 2, 178), badge_text, font=self.font_small, fill=(245, 242, 228), anchor="mm")
         canvas.save(out_path, format="PNG")
         return {
             "path": out_path,
@@ -323,6 +337,7 @@ class ExplainerAnimationEngine:
         accent_color: Tuple[int, int, int],
         source_credit: str = "Open Archive Animation",
         fps: float = 30.0,
+        visual_style: str = "documentary",
     ) -> Dict[str, Any]:
         """
         Priority B Adapter: Converts an authentic open-source animation (GIF, WebM, MP4)
@@ -356,6 +371,20 @@ class ExplainerAnimationEngine:
             od.text((146, yc), line, font=self.font_title, fill=(248, 250, 255, 255), anchor="lm")
             yc += 58
         od.text((self.width - 124, 1388), f"SOURCE: {source_credit[:36].upper()}", font=self.font_small, fill=(165, 185, 215, 255), anchor="rm")
+        style_labels = {
+            "documentary": ("DOCUMENTARY", (224, 232, 244, 255)),
+            "pop_info": ("POP INFO", (232, 93, 74, 255)),
+            "data_story": ("DATA STORY", (32, 201, 151, 255)),
+            "chalk_talk": ("CHALK TALK", (245, 242, 228, 255)),
+            "creator_motion_graphics": ("CREATOR MOTION", (255, 214, 10, 255)),
+            "cinematic_explainer": ("CINEMATIC EXPLAINER", (197, 163, 111, 255)),
+            "map_based_storytelling": ("MAP STORY", (84, 203, 183, 255)),
+        }
+        style_label, style_color = style_labels.get(visual_style, ("", accent_color + (255,)))
+        if not style_label:
+            raise ValueError(f"Unsupported adaptive visual style: {visual_style}")
+        od.rounded_rectangle([vx0, vy0 - 44, vx0 + 300, vy0 - 8], radius=12, fill=(10, 15, 25, 235))
+        od.text((vx0 + 14, vy0 - 26), style_label, font=self.font_small, fill=style_color, anchor="lm")
 
         overlay_fd, overlay_png = tempfile.mkstemp(suffix=".png", prefix="cd_pB_overlay_")
         os.close(overlay_fd)
@@ -433,6 +462,7 @@ class ExplainerAnimationEngine:
         coordinates: Optional[Dict[str, float]] = None,
         fps: float = 30.0,
         background_image_path: Optional[str] = None,
+        visual_style: str = "documentary",
     ) -> Dict[str, Any]:
         """
         Renders a genuine 30 FPS H.264 MP4 animation directly to `out_mp4_path`
@@ -675,6 +705,26 @@ class ExplainerAnimationEngine:
                         w_counter += len(ln)
                         y_txt += 104
 
+                draw_visual_style_treatment(
+                    frame,
+                    visual_style,
+                    stage_label=stage_label,
+                    callout_text=segment_text,
+                    stat_text=metrics[0][2] if metrics else "",
+                    accent_color=accent_color,
+                    beat_idx=beat_idx,
+                    total_beats=total_beats,
+                    progress=ease,
+                )
+                frame = compose_direction_frame(
+                    frame,
+                    visual_style,
+                    topic_title=topic_title,
+                    segment_text=segment_text,
+                    stage_label=stage_label,
+                    stat_text=metrics[0][2] if metrics else "",
+                    beat_idx=beat_idx,
+                )
                 proc.stdin.write(frame.tobytes())
 
             proc.stdin.close()

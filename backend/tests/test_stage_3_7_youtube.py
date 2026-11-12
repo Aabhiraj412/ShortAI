@@ -146,6 +146,7 @@ def test_mock_resumable_upload_private(test_pub_db, tmp_path):
     status_mock.progress.return_value = 1.0
     mock_req.next_chunk.side_effect = [(status_mock, {"id": "mock_yt_vid_999"})]
     mock_service.videos().insert.return_value = mock_req
+    mock_service.videos().list.return_value.execute.return_value = {"items": [{"id": "mock_yt_vid_999"}]}
 
     # Mock thumbnail response
     mock_thumb_req = MagicMock()

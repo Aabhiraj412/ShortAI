@@ -41,6 +41,8 @@ PIPELINE_STAGES: List[Tuple[str, str]] = [
     ("finalization", "Finalization"),
 ]
 
+ACTIVE_HEARTBEAT_TTL_SEC = 300.0
+
 STAGE_KEYS: List[str] = [s[0] for s in PIPELINE_STAGES]
 
 _SECRET_PATTERNS = [
@@ -280,6 +282,7 @@ class ProductionObservabilityStore:
                     "failed_acquisitions": 0,
                     "reused_images": 0,
                     "max_allowed_reuse": 2,
+                    "preferred_reuse": 1,
                     "status": "PENDING",
                 },
                 "creative": {
@@ -287,6 +290,10 @@ class ProductionObservabilityStore:
                     "supported_categories_count": 20,
                     "category_distribution": {},
                     "topic_score_breakdown": {},
+                    "visual_style_distribution": {},
+                    "composer_distribution": {},
+                    "film_treatment": {},
+                    "visual_diversity": {},
                     "authentic_images_acquired": 0,
                     "existing_animations_acquired": 0,
                     "animated_authentic_composites": 0,
@@ -465,6 +472,12 @@ class ProductionObservabilityStore:
         supported_categories_count: Optional[int] = None,
         category_distribution: Optional[Dict[str, int]] = None,
         topic_score_breakdown: Optional[Dict[str, Any]] = None,
+        visual_style_distribution: Optional[Dict[str, int]] = None,
+        scene_layout_distribution: Optional[Dict[str, int]] = None,
+        primary_creative_direction: Optional[str] = None,
+        composer_distribution: Optional[Dict[str, int]] = None,
+        film_treatment: Optional[Dict[str, Any]] = None,
+        visual_diversity: Optional[Dict[str, Any]] = None,
         authentic_images_acquired: Optional[int] = None,
         existing_animations_acquired: Optional[int] = None,
         animated_authentic_composites: Optional[int] = None,
@@ -488,6 +501,19 @@ class ProductionObservabilityStore:
                 cr["category_distribution"] = dict(category_distribution)
             if topic_score_breakdown is not None:
                 cr["topic_score_breakdown"] = dict(topic_score_breakdown)
+            if visual_style_distribution is not None:
+                cr["visual_style_distribution"] = dict(visual_style_distribution)
+            if scene_layout_distribution is not None:
+                cr["scene_layout_distribution"] = dict(scene_layout_distribution)
+            if primary_creative_direction is not None:
+                cr["primary_creative_direction"] = str(primary_creative_direction)
+            if composer_distribution is not None:
+                cr["composer_distribution"] = dict(composer_distribution)
+            if film_treatment is not None:
+                # This is a display-safe summary; full treatment remains in the storyboard.
+                cr["film_treatment"] = dict(film_treatment)
+            if visual_diversity is not None:
+                cr["visual_diversity"] = dict(visual_diversity)
             if authentic_images_acquired is not None:
                 cr["authentic_images_acquired"] = int(authentic_images_acquired)
             if existing_animations_acquired is not None:
@@ -708,67 +734,120 @@ class ProductionObservabilityStore:
         with self._lock:
             self.reload_from_disk()
             if production_id in self._prod_state["productions"]:
-                return self._public_view(self._prod_state["productions"][production_id])
+                return self._dashboard_view(self._prod_state["productions"][production_id])
             if include_tests and production_id in self._test_state["productions"]:
-                return self._public_view(self._test_state["productions"][production_id])
+                return self._dashboard_view(self._test_state["productions"][production_id])
             return None
 
-    def get_active_production(self, include_tests: bool = False) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _is_fresh_running_record(record: Dict[str, Any]) -> bool:
+        """A persisted running record is live only while its UTC update is fresh."""
+        if str(record.get("overall_status") or "").lower() not in ("starting", "running"):
+            return False
+        try:
+            updated = datetime.fromisoformat(str(record.get("last_updated") or "").replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds()
+            return 0.0 <= age <= ACTIVE_HEARTBEAT_TTL_SEC
+        except (TypeError, ValueError):
+            return False
+
+    def _dashboard_view(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        view = self._public_view(record)
+        if str(view.get("overall_status") or "").lower() in ("starting", "running") and not self._is_fresh_running_record(record):
+            view["overall_status"] = "stale"
+            view["progress_is_historical"] = True
+            view["current_operation"] = "Worker is no longer active; showing last-known progress pending recovery review."
+            view["estimated_remaining_sec"] = None
+            for stage in view.get("stages", {}).values():
+                if str(stage.get("status") or "").lower() in ("starting", "running"):
+                    stage["status"] = "stale"
+        return view
+
+    @staticmethod
+    def _matches_context(record: Dict[str, Any], execution_context: Optional[str]) -> bool:
+        if not execution_context:
+            return True
+        return str(record.get("execution_context") or "PRODUCTION").upper() == execution_context.upper()
+
+    def get_active_production(
+        self,
+        include_tests: bool = False,
+        execution_context: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         with self._lock:
             self.reload_from_disk()
             states = [self._prod_state] + ([self._test_state] if include_tests else [])
             for st in states:
                 for pid in reversed(st["order"]):
                     rec = st["productions"].get(pid)
-                    if rec and rec.get("overall_status") == "running":
-                        return self._public_view(rec)
+                    if rec and self._matches_context(rec, execution_context) and self._is_fresh_running_record(rec):
+                        return self._dashboard_view(rec)
             return None
 
-    def get_latest_production(self, include_tests: bool = False) -> Optional[Dict[str, Any]]:
+    def get_latest_production(
+        self,
+        include_tests: bool = False,
+        execution_context: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         with self._lock:
             self.reload_from_disk()
-            active = self.get_active_production(include_tests=include_tests)
+            active = self.get_active_production(include_tests=include_tests, execution_context=execution_context)
             if active:
                 return active
             candidates: List[Dict[str, Any]] = []
             for pid in self._prod_state["order"]:
                 rec = self._prod_state["productions"].get(pid)
-                if rec:
+                if rec and self._matches_context(rec, execution_context):
                     candidates.append(rec)
             if include_tests:
                 for pid in self._test_state["order"]:
                     rec = self._test_state["productions"].get(pid)
-                    if rec:
+                    if rec and self._matches_context(rec, execution_context):
                         candidates.append(rec)
             if not candidates:
                 return None
             candidates.sort(key=lambda r: r.get("last_updated") or "", reverse=True)
-            return self._public_view(candidates[0])
+            return self._dashboard_view(candidates[0])
 
-    def get_history(self, limit: int = 20, include_tests: bool = False) -> List[Dict[str, Any]]:
+    def get_history(
+        self,
+        limit: int = 20,
+        include_tests: bool = False,
+        execution_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         with self._lock:
             self.reload_from_disk()
             items: List[Dict[str, Any]] = []
             for pid in reversed(self._prod_state["order"]):
                 rec = self._prod_state["productions"].get(pid)
-                if rec:
-                    items.append(self._public_view(rec))
+                if rec and self._matches_context(rec, execution_context):
+                    items.append(self._dashboard_view(rec))
             if include_tests:
                 for pid in reversed(self._test_state["order"]):
                     rec = self._test_state["productions"].get(pid)
-                    if rec:
-                        items.append(self._public_view(rec))
+                    if rec and self._matches_context(rec, execution_context):
+                        items.append(self._dashboard_view(rec))
             items.sort(key=lambda r: r.get("last_updated") or "", reverse=True)
             return items[:limit]
 
     def get_dashboard_payload(self, include_tests: bool = False) -> Dict[str, Any]:
         active = self.get_active_production(include_tests=include_tests)
         latest = active or self.get_latest_production(include_tests=include_tests)
+        active_prod = self.get_active_production(include_tests=include_tests, execution_context="PRODUCTION")
+        latest_prod = active_prod or self.get_latest_production(include_tests=include_tests, execution_context="PRODUCTION")
+        active_val = self.get_active_production(include_tests=include_tests, execution_context="VALIDATION")
+        latest_val = active_val or self.get_latest_production(include_tests=include_tests, execution_context="VALIDATION")
         history = self.get_history(limit=15, include_tests=include_tests)
         return {
             "has_active": active is not None,
             "active_production": active,
             "displayed_production": latest,
+            "active_production_run": active_prod,
+            "latest_production_run": latest_prod,
+            "active_validation_run": active_val,
+            "latest_validation_run": latest_val,
             "history": [
                 {
                     "production_id": h["production_id"],
@@ -776,6 +855,7 @@ class ProductionObservabilityStore:
                     "execution_context": h["execution_context"],
                     "overall_status": h["overall_status"],
                     "overall_progress": h["overall_progress"],
+                    "progress_is_historical": h.get("progress_is_historical", False),
                     "current_stage": h["current_stage"],
                     "assets": h["assets"],
                     "creative": h.get("creative", {}),

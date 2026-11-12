@@ -12,6 +12,7 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
+from datetime import datetime, timezone
 import time
 import signal
 import asyncio
@@ -22,7 +23,17 @@ PROJECT_ROOT = Path("D:/Agents/CrazzyDocs").resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
-from backend.app.scheduler.scheduler import start_scheduler, scheduler, get_scheduler_status
+from backend.app.core.process_utils import install_windows_hidden_subprocess_defaults
+
+install_windows_hidden_subprocess_defaults()
+
+from backend.app.scheduler.scheduler import (
+    dispatch_eligible_recoveries,
+    get_scheduler_status,
+    reload_profile_from_db_if_changed,
+    scheduler,
+    start_scheduler,
+)
 from backend.app.scheduler.reconciliation_service import SchedulerProcessLock
 
 logs_dir = os.path.join(PROJECT_ROOT, "logs")
@@ -52,6 +63,80 @@ async def periodic_heartbeat_loop(lock: SchedulerProcessLock, interval_sec: int 
             logger.warning("[HEARTBEAT] Heartbeat update exception: %s", e)
 
 
+async def periodic_recovery_and_sleep_loop(interval_sec: int = 45):
+    """Detects Windows sleep/resume jumps, reloads DB schedule updates, and runs bounded recovery checks."""
+    last_mono = time.monotonic()
+    last_utc = datetime.now(timezone.utc)
+    ticks = 0
+    while True:
+        try:
+            await asyncio.sleep(10)
+            ticks += 1
+            reload_profile_from_db_if_changed()
+            if ticks * 10 < interval_sec:
+                continue
+            ticks = 0
+            now_mono = time.monotonic()
+            now_utc = datetime.now(timezone.utc)
+            wall_jump = (now_utc - last_utc).total_seconds() - (now_mono - last_mono)
+            last_mono = now_mono
+            last_utc = now_utc
+            if wall_jump > 90.0:
+                logger.warning(
+                    "[SLEEP_RESUME] Detected %.1fs system sleep/clock jump; reconciling active recovery windows.",
+                    wall_jump,
+                )
+            await dispatch_eligible_recoveries()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning("[RECOVERY_LOOP] Cycle recovery check warning: %s", e)
+
+
+def main():
+    logger.info("==================================================")
+    logger.info("STARTING CRAZZYDOCS AUTONOMOUS SCHEDULER DAEMON")
+    logger.info("Project Root: %s", PROJECT_ROOT)
+    logger.info("==================================================")
+
+    lock = SchedulerProcessLock()
+    if not lock.acquire():
+        logger.error("Another scheduler daemon instance is already running. Exiting.")
+        sys.exit(1)
+
+async def _run_daemon(lock: SchedulerProcessLock) -> int:
+    """Starts APScheduler inside the active asyncio loop and runs heartbeat/recovery tasks."""
+    started = start_scheduler(skip_lock_for_tests=True)
+    if not started:
+        logger.error("Failed to start scheduler.")
+        return 1
+
+    lock.update_heartbeat()
+    status = get_scheduler_status()
+    logger.info("Scheduler Active: Profile='%s', Timezone='%s'", status.get("active_profile"), status.get("timezone"))
+    for cycle in status.get("cycles", []):
+        logger.info(
+            "  -> Registered Cycle: %s (Start: %s | Pub: %s)",
+            cycle.get("cycle_name"),
+            cycle.get("generation", {}).get("cron_ist"),
+            cycle.get("publishing", {}).get("cron_ist"),
+        )
+
+    hb_task = asyncio.create_task(periodic_heartbeat_loop(lock))
+    rec_task = asyncio.create_task(periodic_recovery_and_sleep_loop())
+    try:
+        await asyncio.gather(hb_task, rec_task)
+    except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+        logger.info("Shutdown signal received. Stopping scheduler...")
+    finally:
+        rec_task.cancel()
+        hb_task.cancel()
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+        logger.info("Scheduler daemon shut down cleanly.")
+    return 0
+
+
 def main():
     logger.info("==================================================")
     logger.info("STARTING CRAZZYDOCS AUTONOMOUS SCHEDULER DAEMON")
@@ -64,34 +149,12 @@ def main():
         sys.exit(1)
 
     try:
-        # start_scheduler handles APScheduler configuration & startup reconciliation
-        started = start_scheduler(skip_lock_for_tests=True)
-        if not started:
-            logger.error("Failed to start scheduler.")
-            lock.release()
-            sys.exit(1)
-
-        status = get_scheduler_status()
-        logger.info("Scheduler Active: Profile='%s', Timezone='%s'", status.get("active_profile"), status.get("timezone"))
-        for cycle in status.get("cycles", []):
-            logger.info("  -> Registered Cycle: %s (Start: %s | Pub: %s)", cycle.get("cycle_name"), cycle.get("generation", {}).get("cron_ist"), cycle.get("publishing", {}).get("cron_ist"))
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        hb_task = loop.create_task(periodic_heartbeat_loop(lock))
-
-        # Run until interrupted
-        try:
-            loop.run_forever()
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("Shutdown signal received. Stopping scheduler...")
-        finally:
-            hb_task.cancel()
-            if scheduler.running:
-                scheduler.shutdown(wait=False)
-            lock.release()
-            logger.info("Scheduler daemon shut down cleanly.")
-
+        exit_code = asyncio.run(_run_daemon(lock))
+        lock.release()
+        if exit_code:
+            sys.exit(exit_code)
+    except (KeyboardInterrupt, SystemExit):
+        lock.release()
     except Exception as e:
         logger.critical("Daemon encountered fatal exception: %s", e)
         lock.release()

@@ -319,7 +319,7 @@ async def test_full_production_short_render():
     
     # 6. Verify Manual Publishing Invariant
     logger.info("--- UNIT TEST 5: Manual Publishing Authorization Invariant ---")
-    assert settings.PUBLISHING_MODE in ("manual_approval", "automatic_public"), f"Publishing mode ({settings.PUBLISHING_MODE}) must be valid"
+    assert settings.PUBLISHING_MODE == "manual_approval", f"Publishing mode ({settings.PUBLISHING_MODE}) must remain manual_approval"
     logger.info("[PASS] Publishing mode is set to 'manual_approval'. No automatic uploads without explicit manual authorization.")
 
     # Save summary report

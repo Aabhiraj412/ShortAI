@@ -18,7 +18,7 @@ class AgentIdentity:
     agent_name: str = "CrazzyDocs"
     agent_root: str = get_project_root_str()
     timezone: str = "Asia/Kolkata"
-    publishing_mode: str = "automatic_public"
+    publishing_mode: str = "manual_approval"
     channel_handle: str = "@crazzydocs"
     channel_id: str = "UCUOZOEBngXgt6W7fmus0bvw"
 

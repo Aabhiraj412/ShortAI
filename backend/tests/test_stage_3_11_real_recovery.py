@@ -146,16 +146,48 @@ def test_scenario_2_application_restart(recovery_test_env):
 # =============================================================================
 # SCENARIO 3: Interrupted Rendering
 # =============================================================================
-def test_scenario_3_interrupted_rendering(recovery_test_env):
+def _create_fixture_media_files(fixture_dir):
+    from PIL import Image
+    import subprocess
+    from backend.app.rendering.explainer_animation_engine import FFMPEG_DEFAULT_PATH
+
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    video_path = str(fixture_dir / "checkpoint_video.mp4")
+    thumb_path = str(fixture_dir / "checkpoint_thumb.png")
+    audio_path = str(fixture_dir / "checkpoint_voice.mp3")
+
+    Image.new("RGB", (1080, 1920), (18, 28, 48)).save(thumb_path, format="PNG")
+    ffmpeg_exe = str(FFMPEG_DEFAULT_PATH)
+    if os.path.exists(ffmpeg_exe):
+        subprocess.run(
+            [
+                ffmpeg_exe, "-y", "-f", "lavfi", "-i", "color=c=navy:s=1080x1920:r=24:d=2",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "2",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", video_path,
+            ],
+            capture_output=True, check=False, timeout=20,
+        )
+        subprocess.run(
+            [ffmpeg_exe, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "2", "-c:a", "libmp3lame", audio_path],
+            capture_output=True, check=False, timeout=15,
+        )
+    if not os.path.exists(video_path) or os.path.getsize(video_path) <= 1024:
+        with open(video_path, "wb") as f:
+            f.write(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + (b"\x00" * 4096))
+    if not os.path.exists(audio_path) or os.path.getsize(audio_path) <= 1024:
+        with open(audio_path, "wb") as f:
+            f.write(b"ID3\x03\x00\x00\x00\x00\x00\x00" + (b"\x00" * 4096))
+    return video_path, thumb_path, audio_path
+
+
+def test_scenario_3_interrupted_rendering(recovery_test_env, tmp_path):
     """
     Scenario 3: Power loss / crash occurs during Stage 9 rendering.
     Verifies that if video artifact exists and exceeds 1KB, it is reused.
     If corrupted / empty, it triggers clean re-render.
     """
     job_id = "test_interrupted_render_job"
-    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
-    valid_video = os.path.join(prod_dir, "video", "showcase_vesna_vulovic_verified.mp4")
-    valid_thumb = os.path.join(prod_dir, "thumbnails", "thumb_vesna_vulovic_verified.png")
+    valid_video, valid_thumb, _ = _create_fixture_media_files(tmp_path / "render_ckpt")
 
     with SessionLocal() as db:
         db.add(JobModel(
@@ -183,14 +215,13 @@ def test_scenario_3_interrupted_rendering(recovery_test_env):
 # =============================================================================
 # SCENARIO 4: Interrupted TTS
 # =============================================================================
-def test_scenario_4_interrupted_tts(recovery_test_env):
+def test_scenario_4_interrupted_tts(recovery_test_env, tmp_path):
     """
     Scenario 4: Interruption during Stage 8 voice narration.
     Verifies that checkpoint data retains valid voice track upon resumption.
     """
     job_id = "test_interrupted_tts_job"
-    prod_dir = r"D:\Agents\CrazzyDocs\media\productions\prod_20261110_vesna_vulovic"
-    valid_audio = os.path.join(prod_dir, "narration", "stage_3_13_vesna_voice.mp3")
+    _, _, valid_audio = _create_fixture_media_files(tmp_path / "tts_ckpt")
 
     with SessionLocal() as db:
         db.add(JobModel(
@@ -348,11 +379,7 @@ def test_scenario_9_missed_cycle_reconciliation(recovery_test_env):
 # SCENARIO 10: Expired Recovery Windows (STRICT_WINDOW vs CATCH_UP)
 # =============================================================================
 def test_scenario_10_expired_recovery_windows(recovery_test_env):
-    """
-    Scenario 10: Multiple missed cycles evaluated under STRICT_WINDOW vs CATCH_UP.
-    STRICT_WINDOW: All expired cycles marked MISSED.
-    CATCH_UP: Exactly 1 missed cycle is salvaged with a rescheduled publication slot.
-    """
+    """Legacy CATCH_UP requests must not backfill expired recovery windows."""
     test_date = recovery_test_env
     now_2330 = datetime(2026, 11, 10, 23, 30, 0, tzinfo=IST_TZ)
 
@@ -370,10 +397,10 @@ def test_scenario_10_expired_recovery_windows(recovery_test_env):
         db.query(JobModel).filter(JobModel.date_str == test_date).delete()
         db.commit()
 
-    # 2. CATCH_UP: Exactly 1 recovered with rescheduled publishing slot, 3 missed
-    rep_catchup = reconciler.reconcile_on_startup(test_now_ist=now_2330, recovery_policy=POLICY_CATCH_UP)
-    assert len(rep_catchup["recovered_cycles"]) == 1
-    assert len(rep_catchup["missed_cycles"]) == 3
-    salvaged = rep_catchup["recovered_cycles"][0]
-    assert salvaged["recovery_type"] == "CATCH_UP_POLICY"
-    assert salvaged["rescheduled"] is True
+    rep_requested_catchup = reconciler.reconcile_on_startup(
+        test_now_ist=now_2330,
+        recovery_policy=POLICY_CATCH_UP,
+    )
+    assert rep_requested_catchup["policy"] == POLICY_STRICT_WINDOW
+    assert rep_requested_catchup["recovered_cycles"] == []
+    assert len(rep_requested_catchup["missed_cycles"]) == 4

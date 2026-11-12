@@ -42,6 +42,21 @@ DB_PATH = os.path.join(WORKSPACE, "backend", "studio.db")
 LOCK_PATH = os.path.join(WORKSPACE, "backend", "studio_scheduler.lock")
 
 
+def _event_timestamp_utc(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        logger.warning("Skipping invalid operational event timestamp: %r", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
 @dataclass
 class ProductionHealthMetrics:
     current_cycle: str
@@ -56,6 +71,7 @@ class ProductionHealthMetrics:
     email_notifications: Dict[str, int]
     scheduler_heartbeat: Dict[str, Any]
     overall_health: str
+    health_reasons: List[str] = field(default_factory=list)
     timestamp_ist: str = field(default_factory=lambda: datetime.now(IST_TZ).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
@@ -157,25 +173,29 @@ class ProductionHealthDashboard:
         current_cycle_str = "None (Between Cycles)"
         next_prod_str = "Calculating..."
 
-        # Calculate which cycle is current or next
+        # Find weekday-aware current and next schedule slots.
         upcoming_slots = []
         for cycle in profile.cycles:
-            c_start, c_pub, _, _ = cycle.calculate_datetimes(now_ist)
-            # Check if now is within cycle window
-            c_end = c_start + timedelta(hours=cycle.window_hours)
-            if c_start <= now_ist <= c_end:
-                current_cycle_str = f"{cycle.name} ({cycle.start_hour_ist:02d}:{cycle.start_min_ist:02d}–{c_end.strftime('%H:%M')} IST)"
-            if c_start > now_ist:
-                upcoming_slots.append((c_start, cycle.name))
+            for day_offset in range(8):
+                candidate_date = now_ist + timedelta(days=day_offset)
+                if candidate_date.weekday() not in cycle.active_weekdays:
+                    continue
+                c_start, _, _, _ = cycle.calculate_datetimes(candidate_date)
+                c_end = c_start + timedelta(hours=cycle.window_hours)
+                if c_start <= now_ist <= c_end:
+                    current_cycle_str = (
+                        f"{cycle.name} ({cycle.start_hour_ist:02d}:"
+                        f"{cycle.start_min_ist:02d}–{c_end.strftime('%H:%M')} IST)"
+                    )
+                if c_start > now_ist:
+                    upcoming_slots.append((c_start, cycle.name))
+                    break
 
         if upcoming_slots:
             upcoming_slots.sort(key=lambda x: x[0])
             next_prod_str = f"{upcoming_slots[0][0].strftime('%Y-%m-%d %H:%M:%S IST')} ({upcoming_slots[0][1]})"
         else:
-            # First cycle tomorrow
-            tomorrow = now_ist + timedelta(days=1)
-            c_start, _, _, _ = profile.cycles[0].calculate_datetimes(tomorrow)
-            next_prod_str = f"{c_start.strftime('%Y-%m-%d %H:%M:%S IST')} ({profile.cycles[0].name})"
+            next_prod_str = "No enabled production cycles"
 
         # 2. Database Queries
         pipeline_stage = "IDLE"
@@ -295,14 +315,46 @@ class ProductionHealthDashboard:
             finally:
                 conn.close()
 
-        # 4. Heartbeat & Network
+        # 4. Heartbeat, Services & Network
         heartbeat = self._get_scheduler_heartbeat()
+        services = self.get_services_status()
         network_status = self._get_network_status()
 
-        # 5. Overall Health Classification
+        operating_mode = "IDLE"
+        try:
+            with SessionLocal() as db_session:
+                from backend.app.database.db import StudioSettingModel
+                mode_row = db_session.get(StudioSettingModel, "control_center.operating_mode.active")
+                if mode_row and mode_row.value:
+                    operating_mode = mode_row.value.upper()
+        except Exception:
+            pass
+
+        daemon_running = bool((services.get("scheduler_daemon") or {}).get("is_running"))
+
+        # 5. Honest Overall Health Classification
+        health_reasons: List[str] = []
+        if network_status == "DISCONNECTED":
+            health_reasons.append("Network connectivity is DISCONNECTED.")
+        if heartbeat["state"] == "STALE_LOCK":
+            health_reasons.append("Scheduler lock is STALE_LOCK (dead PID lock detected).")
+        if network_status == "DEGRADED":
+            health_reasons.append("Network or upstream AI provider is DEGRADED.")
+        if failed_qc_details["count"] > 0:
+            health_reasons.append(f"{failed_qc_details['count']} production(s) failed or blocked QC.")
+        if email_stats["failed"] > 0:
+            health_reasons.append(f"{email_stats['failed']} email notification(s) failed.")
+        if operating_mode == "PRODUCTION" and not daemon_running:
+            health_reasons.append("Operating mode is PRODUCTION while scheduler daemon is STOPPED.")
+
         if network_status == "DISCONNECTED" or heartbeat["state"] == "STALE_LOCK":
             overall_health = "CRITICAL"
-        elif network_status == "DEGRADED" or failed_qc_details["count"] > 0 or email_stats["failed"] > 0:
+        elif (
+            network_status == "DEGRADED"
+            or failed_qc_details["count"] > 0
+            or email_stats["failed"] > 0
+            or (operating_mode == "PRODUCTION" and not daemon_running)
+        ):
             overall_health = "DEGRADED"
         else:
             overall_health = "HEALTHY"
@@ -320,6 +372,7 @@ class ProductionHealthDashboard:
             email_notifications=email_stats,
             scheduler_heartbeat=heartbeat,
             overall_health=overall_health,
+            health_reasons=health_reasons,
         )
 
     def get_windows_task_status(self, use_cache: bool = True) -> Dict[str, Any]:
@@ -343,6 +396,10 @@ class ProductionHealthDashboard:
         self._task_cache = {"value": res, "ts": now_m}
         return res
 
+    def invalidate_task_cache(self) -> None:
+        """Clears cached Windows Task Scheduler snapshot after control-center mutations."""
+        self._task_cache = {"value": None, "ts": 0.0}
+
     def get_reconciled_operational_states(
         self,
         metrics: Optional[ProductionHealthMetrics] = None,
@@ -350,25 +407,47 @@ class ProductionHealthDashboard:
         windows_tasks: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Explicitly separates and reconciles Scheduler, Production Worker, Validation Worker,
-        and Overall Operational State so validation runs never masquerade as IDLE.
+        Separates worker activity from historical validation records so stale or completed
+        runs cannot be mistaken for a live validation worker.
         """
         m = metrics or self.get_health_metrics()
         svc = services or self.get_services_status()
         wt = windows_tasks or self.get_windows_task_status()
 
-        # 1. Scheduler State
+        # 1. Scheduler State & Truthful Sub-Signals
         daemon_running = bool((svc.get("scheduler_daemon") or {}).get("is_running"))
         sched_task = wt.get("scheduler_task") or {}
-        sched_raw_state = str(sched_task.get("task_state") or sched_task.get("status") or "").strip().lower()
+        sched_raw_state = str(sched_task.get("task_state") or sched_task.get("status") or "").strip()
+        sched_raw_lower = sched_raw_state.lower()
+        task_registered = bool(sched_task.get("is_registered"))
+        task_enabled = task_registered and ("disabled" not in sched_raw_lower)
+        task_running = "running" in sched_raw_lower
+        hb_state = str((m.scheduler_heartbeat or {}).get("state") or "STOPPED")
+        heartbeat_current = daemon_running and hb_state.upper() in {"ACTIVE", "RUNNING"}
+        next_cycle_valid = bool(m.next_production_ist and "DISABLED" not in str(m.next_production_ist).upper())
+
         if daemon_running:
             scheduler_state = "RUNNING"
-        elif "disabled" in sched_raw_state:
+        elif "disabled" in sched_raw_lower:
             scheduler_state = "DISABLED"
-        elif "ready" in sched_raw_state or "enabled" in sched_raw_state:
+        elif "ready" in sched_raw_lower or "enabled" in sched_raw_lower:
             scheduler_state = "STANDBY"
         else:
             scheduler_state = "STOPPED"
+
+        scheduler_details = {
+            "scheduler_state": scheduler_state,
+            "task_registered": task_registered,
+            "task_enabled": task_enabled,
+            "task_running": task_running,
+            "task_state": sched_raw_state or ("Not Registered" if not task_registered else "Unknown"),
+            "daemon_alive": daemon_running,
+            "daemon_pid": (svc.get("scheduler_daemon") or {}).get("pid"),
+            "heartbeat_current": heartbeat_current,
+            "heartbeat_state": hb_state,
+            "next_cycle_valid": next_cycle_valid,
+            "next_production_ist": m.next_production_ist,
+        }
 
         # 2. Production Worker State (strictly PRODUCTION jobs in persistent_jobs or observability store)
         prod_worker: Dict[str, Any] = {
@@ -457,24 +536,15 @@ class ProductionHealthDashboard:
                 }
 
             active_val = next((c for c in val_obs if c.get("overall_status") in ("starting", "running")), None)
-            target_val = active_val or (val_obs[0] if val_obs else None)
-            if target_val:
-                raw_st = str(target_val.get("overall_status") or "").lower()
-                if raw_st in ("starting", "running"):
-                    v_state = "RUNNING"
-                elif raw_st == "completed":
-                    v_state = "COMPLETED"
-                elif raw_st == "failed":
-                    v_state = "FAILED"
-                else:
-                    v_state = "IDLE"
+            if active_val:
+                raw_st = str(active_val.get("overall_status") or "").lower()
                 val_worker = {
-                    "state": v_state,
-                    "stage": target_val.get("current_stage"),
-                    "progress_pct": float(target_val.get("overall_progress") or 0.0),
-                    "topic": target_val.get("topic"),
-                    "run_id": target_val.get("production_id"),
-                    "updated_at": target_val.get("last_updated"),
+                    "state": "STARTING" if raw_st == "starting" else "RUNNING",
+                    "stage": active_val.get("current_stage"),
+                    "progress_pct": float(active_val.get("overall_progress") or 0.0),
+                    "topic": active_val.get("topic"),
+                    "run_id": active_val.get("production_id"),
+                    "updated_at": active_val.get("last_updated"),
                 }
         except Exception:
             pass
@@ -495,6 +565,7 @@ class ProductionHealthDashboard:
 
         return {
             "scheduler_state": scheduler_state,
+            "scheduler_details": scheduler_details,
             "production_worker_state": prod_worker["state"],
             "production_worker": prod_worker,
             "validation_worker_state": val_worker["state"],
@@ -827,12 +898,17 @@ class ProductionHealthDashboard:
         """Compiles latest operational activity from database."""
         events = []
         with SessionLocal() as db_session:
-            jobs = db_session.query(JobModel).order_by(JobModel.updated_at.desc()).limit(limit).all()
+            jobs = (
+                db_session.query(JobModel)
+                .filter(JobModel.id.notlike("test\\_%", escape="\\"))
+                .order_by(JobModel.updated_at.desc())
+                .limit(limit)
+                .all()
+            )
             for j in jobs:
-                ts = j.updated_at.strftime("%Y-%m-%d %H:%M:%S IST") if j.updated_at else "Recent"
                 level = "danger" if j.status in ("FAILED", "BLOCKED_QC") else ("warning" if j.status in ("RETRYING", "MISSED") else "success")
                 events.append({
-                    "timestamp": ts,
+                    "timestamp": _event_timestamp_utc(j.updated_at),
                     "type": "JOB_STATUS",
                     "title": f"Job {j.id} -> {j.status}",
                     "details": f"Stage: {j.current_stage} ({j.progress_pct:.0f}%) | Topic: {j.topic_title or 'N/A'}",
@@ -852,7 +928,7 @@ class ProductionHealthDashboard:
                     st = row[3] or ""
                     level = "success" if "uploaded" in st else ("danger" if "failed" in st else "info")
                     events.append({
-                        "timestamp": (row[5] or "")[:19] + " UTC",
+                        "timestamp": _event_timestamp_utc(row[5]),
                         "type": "PUBLISHING",
                         "title": f"Publishing Queue #{row[0]} -> {row[3]}",
                         "details": f"Topic: {row[1]} | Video ID: {row[2] or 'None'} | Visibility: {row[4]}",
@@ -861,7 +937,7 @@ class ProductionHealthDashboard:
             finally:
                 conn.close()
 
-        events.sort(key=lambda x: x["timestamp"], reverse=True)
+        events.sort(key=lambda x: x["timestamp"] or "", reverse=True)
         return events[:limit]
 
     def render_console_dashboard(self, metrics: Optional[ProductionHealthMetrics] = None) -> str:

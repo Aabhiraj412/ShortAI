@@ -467,6 +467,17 @@ def test_observability_tracks_all_12_stages_and_persists_across_restart(tmp_path
         reused_images=2,
         status="COMPLETE",
     )
+    obs1.update_creative_intelligence(
+        "prod_obs_01",
+        visual_style_distribution={"documentary": 8, "pop_info": 7, "chalk_talk": 5},
+        visual_diversity={
+            "total_visual_beats": 20,
+            "unique_photographic_assets": 8,
+            "reused_source_images": 0,
+            "near_duplicate_groups": 0,
+            "max_source_photo_reuse": 1,
+        },
+    )
     obs1.update_rendering(
         "prod_obs_01",
         current_operation="Muxing final Short",
@@ -499,6 +510,12 @@ def test_observability_tracks_all_12_stages_and_persists_across_restart(tmp_path
     assert loaded["assets"]["animations"] == 11
     assert loaded["rendering"]["completed_scenes"] == 20
     assert loaded["thumbnail"]["validation_status"] == "completed"
+    assert loaded["creative"]["visual_style_distribution"] == {
+        "documentary": 8,
+        "pop_info": 7,
+        "chalk_talk": 5,
+    }
+    assert loaded["creative"]["visual_diversity"]["reused_source_images"] == 0
     assert os.path.isfile(event_log)
     with open(event_log, "r", encoding="utf-8") as f:
         lines = [json.loads(line) for line in f if line.strip()]
@@ -543,6 +560,11 @@ def test_fastapi_observability_endpoints_and_dashboard_html(tmp_path, monkeypatc
     )
     temp_obs.start_production("val_api_01", topic="Tunguska Event 1908", execution_context="VALIDATION")
     temp_obs.update_assets("val_api_01", unique_images=5, generated_images=4, animations=11, reused_images=2)
+    temp_obs.update_creative_intelligence(
+        "val_api_01",
+        visual_style_distribution={"documentary": 4, "creator_motion_graphics": 3},
+        visual_diversity={"total_visual_beats": 7, "reused_source_images": 0},
+    )
     temp_obs.update_rendering("val_api_01", completed_scenes=7, total_scenes=20, current_beat_index=8, current_beat_id="b08", ffmpeg_status="ENCODING")
 
     monkeypatch.setattr(obs_mod, "production_observability", temp_obs)
@@ -554,6 +576,11 @@ def test_fastapi_observability_endpoints_and_dashboard_html(tmp_path, monkeypatc
     assert body["has_active"] is True
     assert body["active_production"]["production_id"] == "val_api_01"
     assert body["active_production"]["assets"]["animations"] == 11
+    assert body["active_production"]["creative"]["visual_style_distribution"] == {
+        "documentary": 4,
+        "creator_motion_graphics": 3,
+    }
+    assert body["active_production"]["creative"]["visual_diversity"]["reused_source_images"] == 0
     assert len(body["stages_schema"]) == 12
 
     r_act = client.get("/api/dashboard/progress/active")
@@ -569,4 +596,11 @@ def test_fastapi_observability_endpoints_and_dashboard_html(tmp_path, monkeypatc
     assert r_html.status_code == 200
     assert "liveObservabilityPanel" in r_html.text
     assert "Live Production Observability (12-Stage Telemetry)" in r_html.text
+    assert "Recent Production Observability Runs" not in r_html.text
     assert "/api/dashboard/progress" in r_html.text
+
+
+def test_completed_validation_worker_is_rendered_idle():
+    html_src = Path(r"D:\Agents\CrazzyDocs\backend\app\templates\dashboard.html").read_text(encoding="utf-8")
+    assert "const reportedValState = String(overviewRes.validation_worker_state || 'IDLE').toUpperCase();" in html_src
+    assert "const valState = reportedValState === 'COMPLETED' ? 'IDLE' : reportedValState;" in html_src

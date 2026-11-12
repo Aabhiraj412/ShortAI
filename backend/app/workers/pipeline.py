@@ -52,6 +52,8 @@ class ProductionPipeline:
         auto_upload: bool = False
     ) -> Dict:
         """Runs the complete production pipeline end-to-end."""
+        if auto_upload:
+            raise PermissionError("Automatic publishing is disabled; productions require explicit manual approval.")
         if self.is_running:
             return {"status": "error", "message": "Pipeline is already running."}
             

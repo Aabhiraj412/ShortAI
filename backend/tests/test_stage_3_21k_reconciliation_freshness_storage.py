@@ -24,6 +24,8 @@ if BACKEND_DIR not in sys.path:
 from fastapi.testclient import TestClient
 from PIL import Image
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from backend.app.content.curiosity_topic_engine import CuriosityTopicEngine
 from backend.app.content.topic_ledger import ContentRecord, TopicLedger
@@ -36,6 +38,7 @@ from backend.app.content.validation_topic_history import (
 from backend.app.main import app
 from backend.app.orchestration.production_workspace import ProductionWorkspace
 from backend.app.rendering.engines.creative_thumbnail_engine import CreativeThumbnailEngine
+from backend.app.database.db import JobModel
 from backend.app.services.production_health_dashboard import ProductionHealthDashboard
 from backend.app.services.production_observability import ProductionObservabilityStore
 from backend.scripts.run_dashboard import RoutinePollingAccessFilter, build_uvicorn_log_config
@@ -323,6 +326,123 @@ def test_dashboard_four_state_reconciliation_during_validation(tmp_path):
     assert states["production_worker_state"] == "IDLE"
     assert states["validation_worker_state"] == "RUNNING"
     assert states["overall_operational_state"] == "VALIDATION ACTIVE"
+
+
+def test_stale_progress_is_historical_without_mutating_persisted_stages(tmp_path):
+    store = ProductionObservabilityStore(store_path=str(tmp_path / "obs_store.json"))
+    old_heartbeat = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    production_id = "val_stale_sim_1"
+    store.start_production(production_id, topic="Stale validation", execution_context="VALIDATION")
+    store.start_stage(production_id, "video_rendering", "Rendering scene 4", progress=47.5)
+    store._prod_state["productions"][production_id]["last_updated"] = old_heartbeat
+    store._prod_state["productions"][production_id]["overall_progress"] = 47.5
+    store._save_file(store.store_path, store._prod_state)
+
+    payload = store.get_dashboard_payload()
+    point_view = store.get_production(production_id)
+    persisted = store._prod_state["productions"][production_id]
+    displayed = payload["displayed_production"]
+
+    assert payload["has_active"] is False
+    assert displayed["overall_status"] == "stale"
+    assert displayed["progress_is_historical"] is True
+    assert displayed["overall_progress"] == 47.5
+    assert "Worker is no longer active" in displayed["current_operation"]
+    assert displayed["stages"]["video_rendering"]["status"] == "stale"
+    assert displayed["stages"]["video_rendering"]["progress"] == 47.5
+    assert any(h["production_id"] == production_id and h["progress_is_historical"] for h in payload["history"])
+    assert point_view["overall_status"] == "stale"
+    assert persisted["overall_status"] == "running"
+    assert persisted["stages"]["video_rendering"]["status"] == "running"
+
+
+def test_terminal_validation_history_does_not_populate_worker_state(tmp_path):
+    store = ProductionObservabilityStore(store_path=str(tmp_path / "obs_store.json"))
+    production_id = "val_terminal_sim_1"
+    store.start_production(production_id, topic="Completed validation", execution_context="VALIDATION")
+    store._prod_state["productions"][production_id]["overall_status"] = "completed"
+    store._save_file(store.store_path, store._prod_state)
+
+    dashboard = ProductionHealthDashboard(db_path=str(tmp_path / "missing.db"))
+    fake_tasks = {
+        "scheduler_task": {"status": "Disabled", "task_state": "Disabled", "is_registered": True},
+        "dashboard_task": {"status": "Disabled", "task_state": "Disabled", "is_registered": True},
+    }
+    fake_services = {
+        "scheduler_daemon": {"state": "STOPPED", "is_running": False, "pid": None},
+        "dashboard_service": {"state": "RUNNING", "is_running": True, "pid": 1234, "port": 8000},
+    }
+    with patch("backend.app.services.production_observability.production_observability", store), \
+         patch.object(dashboard, "get_windows_task_status", return_value=fake_tasks), \
+         patch.object(dashboard, "_get_network_status", return_value="CONNECTED"):
+        metrics = dashboard.get_health_metrics()
+        states = dashboard.get_reconciled_operational_states(
+            metrics=metrics, services=fake_services, windows_tasks=fake_tasks
+        )
+
+    assert states["validation_worker_state"] == "IDLE"
+    assert states["validation_worker"]["run_id"] is None
+    assert states["validation_worker"]["topic"] is None
+
+
+def test_recent_activity_filters_test_jobs_and_emits_utc_timestamps(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'jobs.db'}")
+    JobModel.__table__.create(engine)
+    test_sessions = sessionmaker(bind=engine)
+    with test_sessions() as session:
+        session.add_all(
+            [
+                JobModel(
+                    id="production_job_1",
+                    date_str="2026-11-11",
+                    topic_title="Production event",
+                    updated_at=datetime(2026, 11, 11, 10, 0, 0),
+                ),
+                JobModel(
+                    id="test_dashboard_job",
+                    date_str="2026-11-11",
+                    topic_title="Test-only event",
+                    updated_at=datetime(2026, 11, 11, 11, 0, 0),
+                ),
+            ]
+        )
+        session.commit()
+
+    monkeypatch.setattr("backend.app.services.production_health_dashboard.SessionLocal", test_sessions)
+    dashboard = ProductionHealthDashboard(db_path=str(tmp_path / "missing.db"))
+    events = dashboard.get_recent_activity()
+
+    assert [event["title"] for event in events] == ["Job production_job_1 -> PENDING"]
+    assert events[0]["timestamp"] == "2026-11-11T10:00:00Z"
+
+
+def test_approved_sample_delivery_is_atomic_and_refuses_unrelated_overwrites(tmp_path, monkeypatch):
+    workspace_dir = tmp_path / "val_delivery"
+    workspace_dir.mkdir()
+    video_source = workspace_dir / "candidate.mp4"
+    thumbnail_source = workspace_dir / "candidate.jpg"
+    video_source.write_bytes(b"approved-video")
+    thumbnail_source.write_bytes(b"approved-thumbnail")
+    video_dir = tmp_path / "media" / "video"
+    thumbnail_dir = tmp_path / "media" / "thumbnail"
+    monkeypatch.setattr("backend.app.orchestration.production_workspace.MEDIA_VIDEO_DIR", video_dir)
+    monkeypatch.setattr("backend.app.orchestration.production_workspace.MEDIA_THUMBNAIL_DIR", thumbnail_dir)
+
+    workspace = ProductionWorkspace("val_delivery", "black-hole", "Black hole", base_dir=str(workspace_dir))
+    result = workspace.deliver_approved_sample(str(video_source), str(thumbnail_source))
+    assert result["video"]["delivery_status"] == "created"
+    assert result["thumbnail"]["delivery_status"] == "created"
+    assert Path(result["video"]["canonical_path"]).read_bytes() == video_source.read_bytes()
+    assert Path(result["thumbnail"]["canonical_path"]).read_bytes() == thumbnail_source.read_bytes()
+
+    repeated = workspace.deliver_approved_sample(str(video_source), str(thumbnail_source))
+    assert repeated["video"]["delivery_status"] == "already_present"
+    assert repeated["thumbnail"]["delivery_status"] == "already_present"
+
+    video_source.write_bytes(b"different-video")
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        workspace.deliver_approved_sample(str(video_source), str(thumbnail_source))
+    assert Path(result["video"]["canonical_path"]).read_bytes() == b"approved-video"
 
 
 def test_manifest_deliverables_and_dashboard_storage_endpoints(tmp_path):

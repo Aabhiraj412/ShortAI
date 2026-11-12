@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 import pytest
 from unittest.mock import patch, MagicMock
 from zoneinfo import ZoneInfo
+import sys
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from backend.app.scheduler.schedule_profiles import (
     IST_TZ,
@@ -27,6 +30,22 @@ from backend.app.scheduler.scheduler import (
 )
 from backend.app.core.config import settings
 from backend.app.database.db import SessionLocal, JobModel
+from backend.app.database.db import Base
+from backend.app.scheduler import scheduler as scheduler_module
+from backend.app.services import control_center_service
+
+
+@pytest.fixture(autouse=True)
+def isolate_scheduler_database(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'scheduler-tests.db'}")
+    Base.metadata.create_all(engine)
+    test_sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(sys.modules[__name__], "SessionLocal", test_sessions)
+    monkeypatch.setattr(scheduler_module, "SessionLocal", test_sessions)
+    monkeypatch.setattr(control_center_service, "SessionLocal", test_sessions)
+    monkeypatch.setattr(scheduler_module, "get_operating_mode", lambda: "PRODUCTION")
+    yield
+    engine.dispose()
 
 
 def test_four_cycles_profile_definition():
@@ -111,8 +130,8 @@ def test_runtime_profile_switching():
 
 
 @pytest.mark.asyncio
-async def test_deadline_sla_enforcement():
-    """Verifies that triggering past the cycle SLA deadline marks job MISSED."""
+async def test_recovery_window_expiration_prevents_late_generation():
+    """A trigger after recovery expiration must not start a new production run."""
     reload_scheduler("FOUR_CYCLES_DAILY")
     profile = get_active_profile()
     c1 = profile.cycles[0]  # Start 00:00, Deadline 06:00
@@ -121,15 +140,15 @@ async def test_deadline_sla_enforcement():
     late_dt = datetime(2026, 11, 10, 7, 30, 0, tzinfo=IST_TZ)
 
     res = await run_cycle_generation(cycle_id="cycle_1", test_ist_now=late_dt)
-    assert res["status"] == "MISSED"
-    assert res["error"] == "DEADLINE_EXCEEDED"
+    assert res["status"] == "RECOVERY_WINDOW_EXPIRED"
+    assert "Recovery window expired" in res["error"]
 
     # Verify SQLite status
     job_id = c1.format_job_id(late_dt)
     with SessionLocal() as db_session:
         saved_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
         assert saved_job is not None
-        assert saved_job.status == "MISSED"
+        assert saved_job.status == "RECOVERY_WINDOW_EXPIRED"
 
 
 @pytest.mark.asyncio
@@ -156,6 +175,20 @@ async def test_duplicate_run_prevention():
     assert res["status"] == "SKIPPED"
     assert res["reason"] == "ALREADY_COMPLETED"
     assert res["job_id"] == job_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["GAMING", "IDLE", "MAINTENANCE"])
+async def test_generation_is_deferred_outside_production_mode(monkeypatch, mode):
+    monkeypatch.setattr(scheduler_module, "get_operating_mode", lambda: mode)
+
+    result = await run_cycle_generation(
+        cycle_id="cycle_1",
+        test_ist_now=datetime(2026, 11, 12, 0, 0, tzinfo=IST_TZ),
+    )
+
+    assert result["status"] == "DEFERRED"
+    assert mode in result["reason"]
 
 
 @pytest.mark.asyncio

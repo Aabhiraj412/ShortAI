@@ -288,8 +288,7 @@ def test_scenario_12_database_connection_failure_resilience(matrix_test_env):
 def test_scenario_14_multiple_missed_cycles_reconciliation(matrix_test_env):
     """
     Scenario 14: System offline for >24 hours (all 4 daily cycles missed).
-    Under CATCH_UP policy, reconciler must recover at most 1 missed cycle (no runaway flood).
-    Under STRICT_WINDOW policy, all 4 are marked MISSED with zero extra executions.
+    Expired cycles must never be backfilled, even when a legacy CATCH_UP policy is requested.
     """
     test_date = matrix_test_env
     # Boot next day at 23:30 IST
@@ -303,10 +302,13 @@ def test_scenario_14_multiple_missed_cycles_reconciliation(matrix_test_env):
         db.query(JobModel).filter(JobModel.date_str == test_date).delete()
         db.commit()
 
-    # Under CATCH_UP: exactly 1 cycle recovered
-    report_catchup = reconciler.reconcile_on_startup(test_now_ist=dt_2330, recovery_policy=POLICY_CATCH_UP)
-    assert len(report_catchup["recovered_cycles"]) == 1, "CATCH_UP policy must recover at most 1 cycle!"
-    assert len(report_catchup["missed_cycles"]) == 3, "Remaining 3 cycles must be marked MISSED!"
+    report_requested_catchup = reconciler.reconcile_on_startup(
+        test_now_ist=dt_2330,
+        recovery_policy=POLICY_CATCH_UP,
+    )
+    assert report_requested_catchup["policy"] == POLICY_STRICT_WINDOW
+    assert report_requested_catchup["recovered_cycles"] == []
+    assert len(report_requested_catchup["missed_cycles"]) == 4
 
 
 # =============================================================================
@@ -456,13 +458,11 @@ def test_scenario_e_atomic_single_instance_lock(tmp_path):
 
 
 # =============================================================================
-# SCENARIO F: Missed Cycle Policy (CATCH_UP vs STRICT_WINDOW)
+# SCENARIO F: Missed Cycle Policy Does Not Backfill
 # =============================================================================
-def test_scenario_f_missed_cycle_policy_catch_up_vs_strict_window(matrix_test_env):
+def test_scenario_f_missed_cycle_policy_does_not_backfill(matrix_test_env):
     """
-    Scenario F: Tests recovery policy enforcement when a cycle window has expired.
-    - CATCH_UP: Recovers at most 1 missed cycle even if recovery window closed.
-    - STRICT_WINDOW: Expired cycles are marked MISSED with zero extra executions.
+    Scenario F: Legacy CATCH_UP configuration cannot recover expired cycles.
     """
     test_date = matrix_test_env
     # Laptop starts at 23:00 IST (Cycle 1, 2, 3 have expired)
@@ -478,16 +478,19 @@ def test_scenario_f_missed_cycle_policy_catch_up_vs_strict_window(matrix_test_en
     assert len(report_strict["recovered_cycles"]) == 0
     assert len(report_strict["missed_cycles"]) >= 1
 
-    # Case 2: CATCH_UP policy
+    # Case 2: A legacy CATCH_UP request remains strict.
     # Clean previous records
     with SessionLocal() as db:
         db.query(JobModel).filter(JobModel.date_str == test_date).delete()
         db.commit()
 
-    report_catchup = reconciler.reconcile_on_startup(test_now_ist=dt_2300, recovery_policy=POLICY_CATCH_UP)
-    # Under CATCH_UP, exactly 1 missed cycle is recovered
-    assert len(report_catchup["recovered_cycles"]) == 1
-    assert report_catchup["recovered_cycles"][0]["recovery_type"] == "CATCH_UP_POLICY"
+    report_requested_catchup = reconciler.reconcile_on_startup(
+        test_now_ist=dt_2300,
+        recovery_policy=POLICY_CATCH_UP,
+    )
+    assert report_requested_catchup["policy"] == POLICY_STRICT_WINDOW
+    assert report_requested_catchup["recovered_cycles"] == []
+    assert len(report_requested_catchup["missed_cycles"]) == 4
 
 
 # =============================================================================

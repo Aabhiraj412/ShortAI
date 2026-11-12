@@ -1,1377 +1,2224 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CrazzyDocs Shorts Studio — Production Health Dashboard</title>
-  <link rel="icon" type="image/png" href="/favicon.ico?v=20261111" />
-  <link rel="shortcut icon" type="image/png" href="/favicon.ico?v=20261111" />
-  <link rel="apple-touch-icon" href="/static/branding/Youtube-Icon.png?v=20261111" />
-  <style>
-    :root {
-      --bg: #090d16;
-      --card-bg: #121926;
-      --card-border: #1f2a3d;
-      --text-main: #f1f5f9;
-      --text-muted: #94a3b8;
-      --accent: #fee004;
-      --accent-hover: #e5ca03;
-      --success: #10b981;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-      --info: #3b82f6;
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background-color: var(--bg);
-      color: var(--text-main);
-      font-family: var(--font-sans);
-      line-height: 1.5;
-      padding: 24px;
-      min-height: 100vh;
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding-bottom: 20px;
-      border-bottom: 1px solid var(--card-border);
-      margin-bottom: 24px;
-      flex-wrap: wrap;
-      gap: 16px;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .brand-logo {
-      width: 40px;
-      height: 40px;
-      background: var(--accent);
-      color: #000;
-      font-weight: 900;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 8px;
-      font-size: 20px;
-      box-shadow: 0 0 12px rgba(254, 224, 4, 0.4);
-    }
-    .brand-title {
-      font-size: 20px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .yt-header-icon {
-      width: 24px;
-      height: 24px;
-      object-fit: contain;
-      vertical-align: middle;
-      display: inline-block;
-      filter: drop-shadow(0 0 4px rgba(255, 0, 0, 0.4));
-      transition: transform 0.2s ease;
-    }
-    .yt-header-icon:hover {
-      transform: scale(1.1);
-    }
-    .brand-sub {
-      font-size: 12px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-    }
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 4px 10px;
-      border-radius: 9999px;
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .badge-success { background: rgba(16, 185, 129, 0.15); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
-    .badge-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
-    .badge-info { background: rgba(59, 130, 246, 0.15); color: var(--info); border: 1px solid rgba(59, 130, 246, 0.3); }
-    .badge-accent { background: rgba(254, 224, 4, 0.15); color: var(--accent); border: 1px solid rgba(254, 224, 4, 0.3); }
-    .btn {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      color: var(--text-main);
-      padding: 8px 14px;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.2s;
-    }
-    .btn:hover { background: #1a2334; border-color: #2e3d57; }
-    .btn-active { background: var(--accent); color: #000; border-color: var(--accent); }
-    .btn-active:hover { background: var(--accent-hover); }
-    .time-badge {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--text-muted);
-      background: #0f1420;
-      padding: 6px 12px;
-      border-radius: 6px;
-      border: 1px solid var(--card-border);
-    }
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CrazzyDocs Studio — Autonomous Control Center</title>
+<style>
+  :root {
+    --bg: #070b14;
+    --bg-elev: #0d1424;
+    --bg-card: #111a2e;
+    --bg-input: #0a1020;
+    --border: rgba(148, 163, 184, 0.18);
+    --border-strong: rgba(56, 189, 248, 0.42);
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-2: #f59e0b;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --radius: 14px;
+    --shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: radial-gradient(circle at 12% 0%, #101e38 0%, var(--bg) 52%);
+    color: var(--text);
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .app-shell {
+    max-width: 1640px;
+    margin: 0 auto;
+    padding: 16px 20px 40px;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 18px;
+    margin-bottom: 18px;
+    border-radius: var(--radius);
+    background: rgba(13, 20, 36, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 14px var(--ok);
+  }
+  .brand-title { font-size: 17px; font-weight: 800; letter-spacing: 0.02em; }
+  .brand-sub { font-size: 12px; color: var(--muted); }
+  .status-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: default;
+  }
+  .pill.ok { border-color: rgba(34, 197, 94, 0.45); color: #86efac; }
+  .pill.warn { border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; }
+  .pill.err { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+  .pill.accent { border-color: rgba(56, 189, 248, 0.45); color: #7dd3fc; }
 
-    /* Grid Layouts */
-    .grid-overview {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 18px;
-      position: relative;
-    }
-    .card-label {
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.7px;
-      color: var(--text-muted);
-      margin-bottom: 8px;
-    }
-    .card-value {
-      font-size: 22px;
-      font-weight: 700;
-      color: #fff;
-    }
-    .card-subtext {
-      font-size: 12px;
-      color: var(--text-muted);
-      margin-top: 6px;
-    }
+  .nav-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .tab-btn {
+    padding: 9px 15px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .tab-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .tab-btn.active {
+    background: rgba(56, 189, 248, 0.14);
+    color: #e0f2fe;
+    border-color: var(--accent);
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
 
-    /* Pipeline Flow */
-    .pipeline-section {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 20px;
-      margin-bottom: 24px;
-    }
-    .obs-progress-track {
-      width: 100%;
-      height: 10px;
-      background: #090e18;
-      border: 1px solid #1e283b;
-      border-radius: 999px;
-      overflow: hidden;
-      margin: 10px 0 8px 0;
-    }
-    .obs-progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #38bdf8, var(--accent));
-      border-radius: 999px;
-      transition: width 0.35s ease;
-    }
-    .obs-stage-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
-      gap: 10px;
-      margin-top: 12px;
-    }
-    .obs-stage-card {
-      background: #0a0f1a;
-      border: 1px solid #1c2639;
-      border-radius: 8px;
-      padding: 10px 12px;
-    }
-    .obs-stage-card.running {
-      border-color: var(--accent);
-      background: rgba(254, 224, 4, 0.06);
-    }
-    .obs-stage-card.completed {
-      border-color: rgba(16, 185, 129, 0.45);
-      background: rgba(16, 185, 129, 0.05);
-    }
-    .obs-stage-card.failed {
-      border-color: rgba(239, 68, 68, 0.65);
-      background: rgba(239, 68, 68, 0.08);
-    }
-    .obs-triad {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 14px;
-      margin-top: 16px;
-    }
-    .obs-box {
-      background: #0d131f;
-      border: 1px solid #1e283b;
-      border-radius: 8px;
-      padding: 14px;
-    }
-    .obs-kv {
-      display: flex;
-      justify-content: space-between;
-      font-size: 12px;
-      padding: 4px 0;
-      border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
-    }
-    .obs-kv:last-child { border-bottom: none; }
-    .obs-error-banner {
-      background: rgba(239, 68, 68, 0.12);
-      border: 1px solid rgba(239, 68, 68, 0.5);
-      border-radius: 8px;
-      padding: 12px 14px;
-      margin-top: 12px;
-      color: #fca5a5;
-      font-size: 13px;
-    }
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 16px;
-    }
-    .section-title {
-      font-size: 15px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .pipeline-track {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      overflow-x: auto;
-      padding: 12px 4px;
-    }
-    .pipeline-node {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      background: #0a0f1a;
-      border: 1px solid #1a2335;
-      padding: 10px 14px;
-      border-radius: 8px;
-      min-width: 110px;
-      text-align: center;
-      position: relative;
-    }
-    .pipeline-node.active {
-      border-color: var(--accent);
-      background: rgba(254, 224, 4, 0.08);
-      box-shadow: 0 0 10px rgba(254, 224, 4, 0.2);
-    }
-    .pipeline-node.completed {
-      border-color: rgba(16, 185, 129, 0.5);
-      background: rgba(16, 185, 129, 0.05);
-    }
-    .pipeline-node.failed {
-      border-color: rgba(239, 68, 68, 0.6);
-      background: rgba(239, 68, 68, 0.08);
-    }
-    .node-num {
-      font-size: 11px;
-      font-family: var(--font-mono);
-      color: var(--text-muted);
-      margin-bottom: 4px;
-    }
-    .node-name {
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-    .pipeline-arrow {
-      color: #334155;
-      font-size: 14px;
-      flex-shrink: 0;
-    }
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .kpi-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 700; }
+  .kpi-val { font-size: 18px; font-weight: 800; margin-top: 4px; word-break: break-word; }
+  .kpi-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
-    /* Production Statistics */
-    .filter-bar {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 14px;
-    }
-    .stat-card {
-      background: #0d131f;
-      border: 1px solid #1e283b;
-      padding: 14px;
-      border-radius: 8px;
-    }
-    .stat-num {
-      font-size: 26px;
-      font-weight: 800;
-      margin-top: 4px;
-    }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+  }
+  .card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-title { font-size: 16px; font-weight: 800; margin: 0; }
+  .card-desc { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
 
-    /* System Health Grid */
-    .health-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .health-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 16px;
-      background: #0d131f;
-      border: 1px solid #1a2335;
-      border-radius: 8px;
-    }
-    .health-label {
-      font-size: 13px;
-      color: var(--text-muted);
-    }
-    .health-val {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      font-weight: 600;
-    }
+  .control-doc {
+    background: rgba(10, 16, 32, 0.72);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .control-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .control-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(148, 163, 184, 0.18);
+    font-size: 12px;
+  }
+  .meta-item strong { color: #cbd5e1; display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .meta-item span { color: var(--muted); }
 
-    /* Tables */
-    .table-container {
-      overflow-x: auto;
-      margin-top: 10px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-    th {
-      text-align: left;
-      padding: 10px 12px;
-      background: #0d131f;
-      color: var(--text-muted);
-      border-bottom: 1px solid var(--card-border);
-      font-weight: 600;
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    td {
-      padding: 10px 12px;
-      border-bottom: 1px solid #161f30;
-      color: #cbd5e1;
-    }
-    tr:hover td {
-      background: rgba(255, 255, 255, 0.02);
-    }
-    .mono { font-family: var(--font-mono); font-size: 12px; }
-    .text-success { color: var(--success); }
-    .text-warning { color: var(--warning); }
-    .text-danger { color: var(--danger); }
-    .text-info { color: var(--info); }
-    .text-accent { color: var(--accent); }
+  label.field-label { display: block; font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 4px; }
+  input[type="text"], input[type="number"], input[type="time"], select {
+    width: 100%;
+    padding: 8px 11px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 13px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+  }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .btn {
+    padding: 8px 14px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: #1e293b;
+    color: var(--text);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .btn:hover { background: #334155; border-color: var(--border-strong); }
+  .btn.primary { background: #0284c7; border-color: #38bdf8; color: #ffffff; }
+  .btn.primary:hover { background: #0369a1; }
+  .btn.warn { background: rgba(245, 158, 11, 0.18); border-color: rgba(245, 158, 11, 0.55); color: #fcd34d; }
+  .btn.danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.55); color: #fca5a5; }
+  .btn.ok { background: rgba(34, 197, 94, 0.18); border-color: rgba(34, 197, 94, 0.55); color: #86efac; }
+  .btn.sm { padding: 5px 10px; font-size: 12px; }
 
-    /* Footer */
-    .footer {
-      text-align: center;
-      font-size: 12px;
-      color: var(--text-muted);
-      margin-top: 40px;
-      padding-top: 20px;
-      border-top: 1px solid var(--card-border);
-    }
-  </style>
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+
+  .progress-bar {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.16);
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width 0.3s ease;
+  }
+  .stage-chips, .tl-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .chip {
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border);
+    background: rgba(15, 23, 42, 0.8);
+    color: var(--muted);
+  }
+  .chip.completed { border-color: rgba(34, 197, 94, 0.5); color: #86efac; background: rgba(34, 197, 94, 0.12); }
+  .chip.running { border-color: rgba(56, 189, 248, 0.6); color: #7dd3fc; background: rgba(56, 189, 248, 0.14); }
+  .chip.failed { border-color: rgba(239, 68, 68, 0.6); color: #fca5a5; background: rgba(239, 68, 68, 0.14); }
+
+  .log-box {
+    max-height: 360px;
+    overflow-y: auto;
+    background: #050811;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .log-line { padding: 3px 0; border-bottom: 1px solid rgba(148, 163, 184, 0.08); word-break: break-word; }
+  .toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 60;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: #0f172a;
+    border: 1px solid var(--accent);
+    color: var(--text);
+    box-shadow: var(--shadow);
+    display: none;
+    max-width: 420px;
+  }
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(2, 6, 23, 0.78);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-card {
+    width: 100%;
+    max-width: 560px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  @media (max-width: 1100px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+</style>
 </head>
 <body>
-
-  <!-- Header -->
-  <div class="header">
+<div class="app-shell">
+  <!-- TOP STATUS BAR -->
+  <header class="topbar">
     <div class="brand">
-      <div class="brand-logo">C</div>
+      <span class="brand-dot" id="topHealthDot"></span>
       <div>
-        <div class="brand-title">
-          <span>CrazzyDocs Shorts Studio</span>
-          <img src="/static/branding/Youtube-Icon.png?v=20261111" alt="YouTube" class="yt-header-icon" />
+        <div class="brand-title">CrazzyDocs Autonomous Studio</div>
+        <div class="brand-sub" id="topSubtitle">Local Control Center · 127.0.0.1:8000 · Asia/Kolkata</div>
+      </div>
+    </div>
+    <div class="status-pills">
+      <span class="pill accent" id="pillMode" title="Active Operating Mode (PRODUCTION / MAINTENANCE / VALIDATION)">Mode: --</span>
+      <span class="pill ok" id="pillRenderer" title="Approved Video Renderer (Lemo-Opuscar enforced, silent fallback blocked)">Renderer: Lemo-Opuscar</span>
+      <span class="pill" id="pillPolicy" title="YouTube Publishing Policy (automatic vs manual_approval)">Policy: --</span>
+      <span class="pill" id="pillScheduler" title="Production Scheduler Daemon status">Scheduler: --</span>
+      <span class="pill" id="pillOAuth" title="YouTube OAuth connection status">OAuth: --</span>
+      <span class="pill" id="pillQuota" title="Daily YouTube Data API quota usage">Quota: --</span>
+      <span class="pill" id="pillNextProd" title="Next scheduled production cycle">Next Prod: --</span>
+      <span class="pill" id="pillNextPub" title="Next scheduled YouTube publication slot">Next Pub: --</span>
+      <span class="pill" id="pillRefresh" title="Last dashboard sync time">Sync: --</span>
+      <button class="btn sm primary" id="btnRefreshAll" onclick="refreshAll()">Refresh All</button>
+    </div>
+  </header>
+
+  <!-- NAVIGATION TABS -->
+  <nav class="nav-tabs" aria-label="Control Center Sections">
+    <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview', this)">Overview &amp; Pipeline</button>
+    <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy Switches</button>
+    <button class="tab-btn" data-tab="pubschedule" onclick="switchTab('pubschedule', this)">Production Scheduler</button>
+    <button class="tab-btn" data-tab="prodconfig" onclick="switchTab('prodconfig', this)">Production &amp; Storage Config</button>
+    <button class="tab-btn" data-tab="queue" onclick="switchTab('queue', this)">Publishing Queue</button>
+    <button class="tab-btn" data-tab="processes" onclick="switchTab('processes', this)">Process Monitor &amp; Logs</button>
+  </nav>
+
+  <!-- TAB 1: OVERVIEW & PIPELINE -->
+  <section id="tab-overview" class="tab-panel active">
+    <div class="overview-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Active Cycle</div>
+        <div class="kpi-val" id="kpiActiveCycle">--</div>
+        <div class="kpi-sub" id="kpiCycleSub">4 Cycles Daily (IST)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Next Production</div>
+        <div class="kpi-val" id="kpiNextProd">--</div>
+        <div class="kpi-sub">Schedule: FOUR_CYCLES_DAILY</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Next YouTube Publish</div>
+        <div class="kpi-val" id="kpiNextPub">--</div>
+        <div class="kpi-sub" id="kpiNextPubSub">Private + publishAt UTC</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Pipeline Stage</div>
+        <div class="kpi-val" id="kpiStage">IDLE</div>
+        <div class="kpi-sub" id="kpiTopic">No active production</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Approved Renderer</div>
+        <div class="kpi-val" id="kpiRenderer">Lemo-Opuscar</div>
+        <div class="kpi-sub">Fallback to Canvas: BLOCKED</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">CPU / RAM / Disk</div>
+        <div class="kpi-val" id="kpiResources">--</div>
+        <div class="kpi-sub" id="kpiResourcesSub">Resource safety guard</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Startup &amp; Monitor</div>
+        <div class="kpi-val" id="kpiStartup">--</div>
+        <div class="kpi-sub" id="kpiMonitorSub">Windows Task Scheduler (pythonw)</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">12-Stage Autonomous Production Pipeline</h2>
+          <p class="card-desc">Live observability across Topic Discovery, Research, Script, Storyboard, Lemo-Opuscar Rendering, QC, and Scheduled Publishing.</p>
         </div>
-        <div class="brand-sub">Production Reliability &amp; Control Center • Autonomous YouTube Studio</div>
-      </div>
-    </div>
-    <div class="header-actions">
-      <div style="display:flex; flex-direction:column; align-items:flex-end;">
-        <span style="font-size:10px; font-weight:700; color:var(--text-muted); letter-spacing:0.5px; text-transform:uppercase;">Schedule Profile</span>
-        <span class="badge badge-accent" id="activeProfileBadge" style="margin-top:2px;">FOUR_CYCLES_DAILY</span>
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:flex-end;">
-        <span style="font-size:10px; font-weight:700; color:var(--text-muted); letter-spacing:0.5px; text-transform:uppercase;">System Health</span>
-        <span class="badge badge-success" id="overallHealthBadge" style="margin-top:2px;">SYSTEM HEALTHY</span>
-      </div>
-      <div class="time-badge" id="istClock">--:--:-- IST</div>
-      <button class="btn" id="refreshBtn" onclick="fetchDashboardData()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-        </svg>
-        Refresh
-      </button>
-    </div>
-  </div>
-
-  <!-- Main Overview Grid -->
-  <div class="grid-overview">
-    <div class="card">
-      <div class="card-label">Current Production Cycle</div>
-      <div class="card-value" id="currentCycleVal" style="font-size: 16px; font-weight:600;">Loading...</div>
-      <div class="card-subtext" id="cycleWindowVal">Schedule: Asia/Kolkata</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Next Production Run</div>
-      <div class="card-value" id="nextProdVal" style="font-size: 15px; font-weight:600;">Calculating...</div>
-      <div class="card-subtext" id="nextProdSub">Automated generation slot</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Target Publishing Slot</div>
-      <div class="card-value" id="targetPubVal" style="font-size: 15px; font-weight:600;">Calculating...</div>
-      <div class="card-subtext" id="targetPubSub">Mode: Automatic Public</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Pipeline &amp; Worker State</div>
-      <div class="card-value text-accent" id="pipelineStageVal" style="font-size: 16px;">IDLE</div>
-      <div class="card-subtext" id="pipelineProgressVal">Overall: IDLE</div>
-      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:10px;">
-        <span class="badge badge-warning" id="schedulerStateBadge" title="Windows Task & Scheduler Daemon">Sched: DISABLED</span>
-        <span class="badge badge-info" id="prodWorkerStateBadge" title="Production Pipeline Worker">Prod: IDLE</span>
-        <span class="badge badge-info" id="valWorkerStateBadge" title="Validation Pipeline Worker">Val: IDLE</span>
-        <span class="badge badge-info" id="overallOpStateBadge" title="Overall Reconciled State">Op: IDLE</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- Live Production Observability (Stage 3.21J) -->
-  <div class="pipeline-section" id="liveObservabilityPanel">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        Live Production Observability (12-Stage Telemetry)
-      </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <span class="badge badge-info" id="obsContextBadge">NONE</span>
-        <span class="badge badge-info" id="obsStatusBadge">IDLE</span>
-        <span class="mono" style="font-size:12px; color:var(--text-muted);" id="obsRefreshRateBadge">Poll: 10s</span>
-      </div>
-    </div>
-
-    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; align-items:center;">
-      <div>
-        <div style="font-size:16px; font-weight:700;" id="obsTopicTitle">No active production running</div>
-        <div class="mono" style="font-size:12px; color:var(--text-muted); margin-top:2px;" id="obsProdMeta">ID: -- | Stage: -- | ETA: --</div>
-        <div class="mono" style="font-size:11px; color:#94a3b8; margin-top:4px; word-break:break-all;" id="obsStorageDir">Workspace: --</div>
-        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;" id="obsDeliverableLinks"></div>
-      </div>
-      <div style="text-align:right;">
-        <div class="mono" style="font-size:22px; font-weight:800; color:var(--accent);" id="obsOverallPct">0%</div>
-        <div style="font-size:12px; color:var(--text-muted);" id="obsCurrentOperation">Waiting for next scheduled or validation run</div>
-      </div>
-    </div>
-
-    <div class="obs-progress-track">
-      <div class="obs-progress-fill" id="obsOverallBar" style="width: 0%;"></div>
-    </div>
-
-    <div class="obs-error-banner" id="obsErrorBanner" style="display:none;"></div>
-
-    <div class="obs-stage-grid" id="obsStageGrid"></div>
-
-    <div class="obs-triad">
-      <div class="obs-box">
-        <div class="card-label" style="margin-bottom:8px;">Visual Sourcing &amp; Licensing Controls</div>
-        <div class="obs-kv"><span>Topic Category</span><strong class="mono" id="obsCreativeCategory">--</strong></div>
-        <div class="obs-kv"><span>Authentic Images Acquired (Pri A)</span><strong class="mono" id="obsUniqueImages">0</strong></div>
-        <div class="obs-kv"><span>Open Animations Acquired (Pri B)</span><strong class="mono" id="obsExistingAnimations">0</strong></div>
-        <div class="obs-kv"><span>Animated Authentic Overlays (Pri C)</span><strong class="mono" id="obsAnimatedAuthentic">0</strong></div>
-        <div class="obs-kv"><span>Selective AI / Bespoke Anim (Pri D)</span><strong class="mono" id="obsGeneratedAndBespoke">0 gen / 0 anim</strong></div>
-        <div class="obs-kv"><span>Reused Photo Slots</span><strong class="mono" id="obsReusedImages">0 (max 2/img)</strong></div>
-        <div class="obs-kv"><span>Licenses &amp; Attribution</span><strong class="mono" id="obsLicenseCompliance">0 verified (100%)</strong></div>
-        <div style="display:none;"><span id="obsGeneratedImages">0</span><span id="obsAnimationsCount">0</span><span id="obsFailedAcq">0</span></div>
-      </div>
-
-      <div class="obs-box">
-        <div class="card-label" style="margin-bottom:8px;">Video Rendering Progress</div>
-        <div class="obs-kv"><span>FFmpeg Status</span><strong class="mono" id="obsFfmpegStatus">IDLE</strong></div>
-        <div class="obs-kv"><span>Scenes Rendered</span><strong class="mono" id="obsScenesCount">0 / 0</strong></div>
-        <div class="obs-kv"><span>Current Beat</span><strong class="mono" id="obsCurrentBeat">--</strong></div>
-        <div class="obs-kv"><span>Render Progress</span><strong class="mono" id="obsRenderPct">0%</strong></div>
-        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;" id="obsRenderOp">Awaiting storyboard</div>
-      </div>
-
-      <div class="obs-box">
-        <div class="card-label" style="margin-bottom:8px;">Thumbnail Sub-Stages & Preview</div>
-        <div style="display:flex; gap:12px; align-items:flex-start;">
-          <div style="flex:1;">
-            <div class="obs-kv"><span>Background Image</span><strong class="mono" id="obsThumbImg">PENDING</strong></div>
-            <div class="obs-kv"><span>Candidate Composition</span><strong class="mono" id="obsThumbComp">PENDING</strong></div>
-            <div class="obs-kv"><span>Safe-Zone Text Layout</span><strong class="mono" id="obsThumbText">PENDING</strong></div>
-            <div class="obs-kv"><span>Final Validation</span><strong class="mono" id="obsThumbVal">PENDING</strong></div>
-          </div>
-          <div style="width:66px; height:116px; background:#090e18; border:1px solid #1e283b; border-radius:6px; overflow:hidden; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-            <img id="obsThumbPreview" src="" alt="Preview" style="width:100%; height:100%; object-fit:cover; display:none;" />
-            <span id="obsThumbPlaceholder" style="font-size:10px; color:var(--text-muted); text-align:center; padding:4px;">No Preview</span>
-          </div>
+        <div class="btn-row">
+          <button class="btn warn sm" onclick="controlProduction('pause')">Pause Production</button>
+          <button class="btn ok sm" onclick="controlProduction('resume')">Resume</button>
+          <button class="btn danger sm" onclick="controlProduction('stop')">Graceful Stop</button>
         </div>
       </div>
+      <div class="progress-bar"><div class="progress-fill" id="pipelineProgressFill" style="width: 0%;"></div></div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);">
+        <span id="pipelineSummary">Idle — awaiting next scheduled cycle</span>
+        <span id="pipelinePct">0%</span>
+      </div>
+      <div class="stage-chips" id="pipelineStageChips"></div>
     </div>
 
-    <div style="margin-top:16px;">
-      <div class="card-label" style="margin-bottom:8px;">Recent Production Observability Runs</div>
-      <div style="overflow-x:auto;">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">Daily Production Cycles (FOUR_CYCLES_DAILY — Asia/Kolkata)</h2>
+          <p class="card-desc">Production cycles and their 4-hour Production Recovery windows are independent of YouTube publication. Actual YouTube publish times follow the Independent Publication Schedule Editor.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Production ID</th>
-              <th>Topic</th>
-              <th>Context</th>
+              <th>Cycle</th>
+              <th>Start (IST)</th>
+              <th>Production Recovery Deadline</th>
+              <th>Original Cycle Target</th>
               <th>Status</th>
-              <th>Progress</th>
-              <th>Assets (Img/Gen/Anim)</th>
-              <th>Deliverables</th>
-              <th>Updated</th>
+              <th>Remaining / Progress</th>
             </tr>
           </thead>
-          <tbody id="obsHistoryBody">
-            <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>
+          <tbody id="cyclesTableBody">
+            <tr><td colspan="6" style="color:var(--muted)">Loading cycles...</td></tr>
           </tbody>
         </table>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- Production Pipeline Lifecycle -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Autonomous Production Lifecycle (10 Stages)
+  <!-- TAB 2: MODE & POLICY SWITCHES -->
+  <section id="tab-controls" class="tab-panel">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">System Mode &amp; Policy Controls (Full Impact Documentation)</h2>
+          <p class="card-desc">Every switch displays its purpose, current value, immediate effect, dependencies, risks, restart requirement, and job scope before confirmation.</p>
+        </div>
       </div>
-      <span class="badge badge-info" id="pipelineStatusPill">IDLE</span>
-    </div>
-    <div class="pipeline-track" id="pipelineTrack">
-      <div class="pipeline-node" id="stage_topic"><span class="node-num">01</span><span class="node-name">Topic Research</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_script"><span class="node-num">02</span><span class="node-name">Script Generation</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_narration"><span class="node-num">03</span><span class="node-name">Narration</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_visuals"><span class="node-num">04</span><span class="node-name">Visual Assets</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_thumbnail"><span class="node-num">05</span><span class="node-name">Thumbnail</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_rendering"><span class="node-num">06</span><span class="node-name">Rendering</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_qc"><span class="node-num">07</span><span class="node-name">Quality Control</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_queue"><span class="node-num">08</span><span class="node-name">Publishing Queue</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_publishing"><span class="node-num">09</span><span class="node-name">YouTube Publishing</span></div>
-      <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-node" id="stage_completed"><span class="node-num">10</span><span class="node-name">Completed</span></div>
-    </div>
-  </div>
 
-  <!-- Production Statistics with Filter -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
-        Production Performance Statistics
+      <!-- Operating Mode Control -->
+      <div class="control-doc">
+        <div class="control-row">
+          <div>
+            <strong>Operating Mode Switch</strong>
+            <div style="color:var(--muted);font-size:12px;">Controls whether autonomous scheduled production and YouTube publishing are allowed to run.</div>
+          </div>
+          <div class="btn-row">
+            <select id="selectOperatingMode" style="width:200px;">
+              <option value="PRODUCTION">PRODUCTION</option>
+              <option value="MAINTENANCE">MAINTENANCE</option>
+              <option value="VALIDATION">VALIDATION</option>
+            </select>
+            <button class="btn primary" onclick="applyOperatingMode()">Apply Mode</button>
+          </div>
+        </div>
+        <div class="control-meta-grid">
+          <div class="meta-item"><strong>Current Value</strong><span id="metaModeVal">--</span></div>
+          <div class="meta-item"><strong>Immediate Effect</strong><span>PRODUCTION enables autonomous cycles; MAINTENANCE pauses new cycles; VALIDATION isolates DB/uploads.</span></div>
+          <div class="meta-item"><strong>Dependencies</strong><span>Scheduler Daemon + Windows Task Scheduler</span></div>
+          <div class="meta-item"><strong>Risks</strong><span>Switching to MAINTENANCE stops upcoming cycle launches.</span></div>
+          <div class="meta-item"><strong>Restart Required?</strong><span>No — takes effect immediately</span></div>
+          <div class="meta-item"><strong>Job Scope</strong><span>Applies to future cycle triggers; active jobs finish or honor pause/stop.</span></div>
+        </div>
       </div>
-      <div class="filter-bar">
-        <button class="btn btn-active" onclick="setStatsFilter('all', this)">All Time</button>
-        <button class="btn" onclick="setStatsFilter('30d', this)">Last 30 Days</button>
-        <button class="btn" onclick="setStatsFilter('7d', this)">Last 7 Days</button>
-        <button class="btn" onclick="setStatsFilter('today', this)">Today</button>
+
+      <!-- Publishing Policy Control -->
+      <div class="control-doc">
+        <div class="control-row">
+          <div>
+            <strong>YouTube Publishing Policy</strong>
+            <div style="color:var(--muted);font-size:12px;">Determines whether QC-passed videos automatically upload as private + scheduled publishAt, or wait for manual approval.</div>
+          </div>
+          <div class="btn-row">
+            <select id="selectPubPolicy" style="width:220px;">
+              <option value="automatic">automatic (Scheduled Private + publishAt)</option>
+              <option value="manual_approval">manual_approval (Hold in Queue)</option>
+            </select>
+            <button class="btn primary" onclick="applyPubPolicy()">Apply Policy</button>
+          </div>
+        </div>
+        <div class="control-meta-grid">
+          <div class="meta-item"><strong>Current Value</strong><span id="metaPolicyVal">--</span></div>
+          <div class="meta-item"><strong>Immediate Effect</strong><span>automatic uploads QC-passed Shorts as private with UTC publishAt + thumbnail; zero manual clicks.</span></div>
+          <div class="meta-item"><strong>Dependencies</strong><span>Connected YouTube OAuth, PRODUCTION mode, QC &amp; Renderer Compliance Pass</span></div>
+          <div class="meta-item"><strong>Risks</strong><span>If YouTube OAuth expires or quota is exhausted, uploads safely defer to queue.</span></div>
+          <div class="meta-item"><strong>Restart Required?</strong><span>No — immediate</span></div>
+          <div class="meta-item"><strong>Job Scope</strong><span>Applies immediately to newly completed &amp; queued items.</span></div>
+        </div>
+        <div style="margin-top:12px;">
+          <strong style="font-size:12px;color:#cbd5e1;">6-Point Automatic Publishing Readiness Checklist:</strong>
+          <div class="stage-chips" id="readinessChecklist"></div>
+        </div>
       </div>
-    </div>
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="card-label">Genuine Productions Attempted</div>
-        <div class="stat-num text-info" id="statGenuineAttempted">0</div>
-        <span id="statAttempted" style="display:none;">0</span>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Genuine Completed Productions</div>
-        <div class="stat-num text-success" id="statGenuineCompleted">0</div>
-        <span id="statCompleted" style="display:none;">0</span>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Publicly Published (YouTube)</div>
-        <div class="stat-num text-accent" id="statPublished">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Verified Private Uploads</div>
-        <div class="stat-num text-success" id="statPrivateUploads">1</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Active Publishing Queue</div>
-        <div class="stat-num text-info" id="statActiveQueue">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">QC Blocked / Failed</div>
-        <div class="stat-num text-danger" id="statQcFailed">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Test Executions (Audit)</div>
-        <div class="stat-num" style="color:#a855f7;" id="statTestExecutions">3</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Archived Showcase Records</div>
-        <div class="stat-num" style="color:#94a3b8;" id="statArchivedShowcase">180</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Total Archived History</div>
-        <div class="stat-num" style="color:#64748b;" id="statArchived">253</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Missed Cycles</div>
-        <div class="stat-num text-warning" id="statMissed">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label">Recovered Cycles</div>
-        <div class="stat-num text-success" id="statRecovered">0</div>
+
+      <!-- Scheduler Daemon Control -->
+      <div class="control-doc">
+        <div class="control-row">
+          <div>
+            <strong>Production Scheduler Task &amp; Daemon</strong>
+            <div style="color:var(--muted);font-size:12px;">Controls Windows Task Scheduler `CrazzyDocs-Production-Scheduler` (runs hidden via pythonw.exe).</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn ok" onclick="toggleScheduler(true)">Enable Scheduler</button>
+            <button class="btn danger" onclick="toggleScheduler(false)">Disable Scheduler</button>
+          </div>
+        </div>
+        <div class="control-meta-grid">
+          <div class="meta-item"><strong>Current Value</strong><span id="metaSchedVal">--</span></div>
+          <div class="meta-item"><strong>Immediate Effect</strong><span>Enables/disables autonomous cycle dispatch &amp; scheduled YouTube verification.</span></div>
+          <div class="meta-item"><strong>Dependencies</strong><span>Windows Logon Task + Operating Mode = PRODUCTION</span></div>
+          <div class="meta-item"><strong>Risks</strong><span>Disabling halts unattended 4x daily production.</span></div>
+          <div class="meta-item"><strong>Restart Required?</strong><span>No — task state updates live</span></div>
+          <div class="meta-item"><strong>Job Scope</strong><span>Future scheduled cycles &amp; recovery checks</span></div>
+        </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- System Health Grid -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        System Runtime &amp; Subsystem Health
+  <!-- TAB 3: PRODUCTION SCHEDULER -->
+  <section id="tab-pubschedule" class="tab-panel">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">Production Scheduler <span class="pill" id="uniSyncBadge">Checking...</span></h2>
+          <p class="card-desc">Configure automated daily production cycles independently from YouTube publishing (Asia/Kolkata).</p>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="btnShowAddCycle" onclick="openCycleForm(-1)">+ Add Cycle</button>
+          <button class="btn sm" id="btnRefreshUni" onclick="refreshUnifiedSchedule()">Refresh</button>
+        </div>
       </div>
-    </div>
-    <div class="health-grid">
-      <div class="health-item">
-        <span class="health-label">Scheduler Daemon Process</span>
-        <span class="health-val text-warning" id="healthSchedulerProc">STOPPED</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Scheduler Heartbeat</span>
-        <span class="health-val text-warning" id="healthHeartbeat">IDLE (PID: None)</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Dashboard Service Process</span>
-        <span class="health-val text-success" id="healthDashboardProc">RUNNING (Port 8000)</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Windows Task: Scheduler</span>
-        <span class="health-val" id="healthTaskScheduler">CHECKING...</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Windows Task: Dashboard</span>
-        <span class="health-val" id="healthTaskDashboard">CHECKING...</span>
-      </div>
-      <div class="health-item" style="display:none;">
-        <span class="health-label">Windows Task Scheduler (Legacy)</span>
-        <span class="health-val" id="healthWindowsTask">OPTED-OUT</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Database Health</span>
-        <span class="health-val text-success" id="healthDb">INTEGRITY OK (WAL)</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Network &amp; YouTube API</span>
-        <span class="health-val text-success" id="healthNetwork">CONNECTED</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Crash Recovery Guard</span>
-        <span class="health-val text-success" id="healthRecovery">HEALTHY (0 Checkpoints)</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Disk Storage Free</span>
-        <span class="health-val" id="healthDisk">151.4 GB (316 MB Media)</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Daily Email Summary Service</span>
-        <span class="health-val text-accent" id="healthEmail">READY (06:00 IST)</span>
-      </div>
-      <div class="health-item">
-        <span class="health-label">Publishing Ledger Safety</span>
-        <span class="health-val text-success" id="healthPublishing">IDEMPOTENT (1 Active | 253 Archived)</span>
-      </div>
-    </div>
-  </div>
 
-  <!-- Active Publishing History Table -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        Active Publishing Ledger (Genuine Production Slate)
+      <!-- SECTION A: SCHEDULER OVERVIEW -->
+      <div id="uniLoadingBanner" class="control-doc" style="display:none;margin-bottom:12px;color:var(--muted);font-size:12px;">
+        Loading schedule status...
       </div>
-      <span class="badge badge-success" id="activeLedgerCountBadge">1 Active Record</span>
-    </div>
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Topic Title</th>
-            <th>Status</th>
-            <th>Visibility</th>
-            <th>YouTube Video ID</th>
-            <th>Timestamp</th>
-          </tr>
-        </thead>
-        <tbody id="pubHistoryBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading active publishing ledger...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 
-  <!-- Archived Historical Records Section -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-        Archived Publishing History (Audit &amp; Showcase Records)
+      <div class="kpi-grid" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+        <div class="kpi" style="padding:10px 12px;">
+          <div class="kpi-label">Scheduler Status</div>
+          <div class="kpi-val" id="ovSchedulerStatus" style="font-size:15px;">--</div>
+        </div>
+        <div class="kpi" style="padding:10px 12px;">
+          <div class="kpi-label">Active Schedule</div>
+          <div class="kpi-val" id="ovActiveSchedule" style="font-size:15px;">--</div>
+        </div>
+        <div class="kpi" style="padding:10px 12px;">
+          <div class="kpi-label">Production Cycles / Day</div>
+          <div class="kpi-val" id="ovProdCount" style="font-size:15px;">--</div>
+        </div>
+        <div class="kpi" style="padding:10px 12px;">
+          <div class="kpi-label">Next Production</div>
+          <div class="kpi-val" id="ovNextProd" style="font-size:14px;">--</div>
+        </div>
+        <div class="kpi" style="padding:10px 12px;">
+          <div class="kpi-label">Last Successful Run</div>
+          <div class="kpi-val" id="ovLastSuccess" style="font-size:13px;">--</div>
+        </div>
+        <div style="display:none;"><span id="ovPubCount"></span><span id="ovNextPub"></span></div>
       </div>
-      <div style="display:flex; gap:10px; align-items:center;">
-        <span class="badge" style="background:#1e293b; color:#94a3b8;" id="archiveCountBadge">253 Archived</span>
-        <button class="btn" style="padding:4px 10px; font-size:12px;" onclick="toggleArchiveView()" id="toggleArchiveBtn">Toggle Archive Table</button>
+
+      <details style="margin-bottom:14px;border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:rgba(15,23,42,0.35);">
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);font-weight:600;">System Diagnostics (Technical Details)</summary>
+        <div class="meta-grid" style="font-size:12px;margin-top:8px;">
+          <div class="meta-item"><strong>Active Version</strong><span id="diagActiveVer">--</span></div>
+          <div class="meta-item"><strong>Active Revision</strong><code id="diagActiveRev">--</code></div>
+          <div class="meta-item"><strong>Scheduler Revision</strong><code id="diagSchedRev">--</code></div>
+          <div class="meta-item"><strong>Draft Revision</strong><code id="diagDraftRev">--</code></div>
+          <div class="meta-item"><strong>Last Activated</strong><span id="diagLastActivated">--</span></div>
+          <div class="meta-item"><strong>Last Scheduler Sync</strong><span id="diagLastSynced">--</span></div>
+          <div class="meta-item"><strong>Recovery Worker</strong><span id="diagWorkerStatus">--</span></div>
+          <div class="meta-item"><strong>Unmapped Slots</strong><span id="diagUnmappedCount">0</span></div>
+        </div>
+      </details>
+
+      <!-- SECTION B: PRODUCTION DAILY SCHEDULE -->
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Daily Production Cycles (IST)</div>
+      <div class="table-wrap" style="margin-bottom:14px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Cycle</th>
+              <th>Production Start</th>
+              <th>Production Recovery</th>
+              <th>Recovery Deadline</th>
+              <th>Enabled</th>
+            </tr>
+          </thead>
+          <tbody id="uniScheduleBody">
+            <tr><td colspan="5" style="color:var(--muted)">Loading production schedule...</td></tr>
+          </tbody>
+        </table>
       </div>
-    </div>
-    <div class="table-container" id="archiveContainer" style="display:none;">
-      <table>
-        <thead>
-          <tr>
-            <th>Orig ID</th>
-            <th>Topic Title</th>
-            <th>Original Status</th>
-            <th>Classification</th>
-            <th>Archival Reason</th>
-            <th>Archived At</th>
-          </tr>
-        </thead>
-        <tbody id="archiveHistoryBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Click 'Toggle Archive Table' to display historical records.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 
-  <!-- Recovery History Table -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-        Crash Recovery &amp; Checkpoint Resumption History
+      <!-- SECTION C: ADD / EDIT PRODUCTION CYCLE FORM -->
+      <div id="cycleFormCard" class="control-doc" style="display:none;margin-bottom:14px;border-color:var(--accent);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <strong id="cycleFormTitle">Add Production Cycle</strong>
+          <button class="btn sm" onclick="closeCycleForm()">Close</button>
+        </div>
+        <div class="form-grid" style="margin-bottom:10px;">
+          <div>
+            <label class="field-label">Cycle Name</label>
+            <input type="text" id="cfName" placeholder="e.g. Morning" />
+          </div>
+          <div>
+            <label class="field-label">Production Start Time (IST)</label>
+            <input type="time" id="cfProdStart" value="06:00" />
+          </div>
+          <div>
+            <label class="field-label">Production Recovery (hours)</label>
+            <input type="number" id="cfProdRecHours" min="2" max="4" step="0.5" value="4" />
+          </div>
+          <div>
+            <label class="field-label">Enabled</label>
+            <select id="cfEnabled">
+              <option value="true">ON (Enabled)</option>
+              <option value="false">OFF (Disabled)</option>
+            </select>
+          </div>
+          <div style="display:none;">
+            <input type="time" id="cfPubTime" value="12:00" />
+            <input type="checkbox" id="cfNextDay" />
+            <input type="number" id="cfPubPrepMin" value="30" />
+            <input type="number" id="cfPubRecHours" value="4" />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary" onclick="saveCycleForm()">Save Cycle</button>
+          <button class="btn" onclick="closeCycleForm()">Cancel</button>
+        </div>
       </div>
-    </div>
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th>Job ID</th>
-            <th>Topic</th>
-            <th>Status</th>
-            <th>Recovery Trigger</th>
-            <th>Stage Resumed</th>
-            <th>Retries</th>
-            <th>Timestamp</th>
-            <th>Operator Attention</th>
-          </tr>
-        </thead>
-        <tbody id="recoveryHistoryBody">
-          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading recovery events...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 
-  <!-- Recent Operational Activity -->
-  <div class="pipeline-section">
-    <div class="section-header">
-      <div class="section-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        Recent Operational Events
+      <!-- SECTION D: VISUAL 24-HOUR TIMELINE -->
+      <div class="control-doc" style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+          <strong style="font-size:13px;">24-Hour Visual Schedule Timeline (IST)</strong>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);">
+            <span><span style="display:inline-block;width:10px;height:10px;background:#38bdf8;border-radius:2px;margin-right:4px;"></span>Production</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;margin-right:4px;"></span>Prod Recovery</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#a855f7;border-radius:2px;margin-right:4px;"></span>Pub Prep</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px;"></span>Publish Target</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#14b8a6;border-radius:2px;margin-right:4px;"></span>Pub Recovery</span>
+          </div>
+        </div>
+        <div id="uniVisualTimeline" style="margin-top:6px;"></div>
+        <div id="uniSelectedCycleDetail" style="margin-top:10px;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px;">
+          Click any cycle row in the timeline to inspect its full execution lifecycle.
+        </div>
       </div>
-    </div>
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th>Timestamp</th>
-            <th>Event Category</th>
-            <th>Event Title</th>
-            <th>Details</th>
-          </tr>
-        </thead>
-        <tbody id="activityBody">
-          <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Loading events...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 
-  <!-- Footer -->
-  <div class="footer">
-    CrazzyDocs Shorts Studio &bull; Canonical Workspace: <code>D:\Agents\CrazzyDocs</code> &bull; Local Operator Dashboard (Port 8000)
-  </div>
-
-  <script>
-    let currentFilter = 'all';
-
-    function updateClock() {
-      const now = new Date();
-      const options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
-      const istTime = new Intl.DateTimeFormat('en-GB', options).format(now);
-      document.getElementById('istClock').textContent = istTime + ' IST';
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    let pollTimer = null;
-    let currentPollMs = 20000;
-    let lastHeavyFetchAt = 0;
-    let isFetchingDashboard = false;
-    const ACTIVE_POLL_MS = 5000;
-    const IDLE_POLL_MS = 20000;
-    const HEAVY_POLL_MS = 60000;
-
-    function _obsBadgeClass(st) {
-      if (st === 'completed' || st === 'COMPLETED' || st === 'RUNNING') return st === 'RUNNING' ? 'badge-warning' : 'badge-success';
-      if (st === 'running' || st === 'STARTING' || st === 'VALIDATION ACTIVE' || st === 'PRODUCTION ACTIVE' || st === 'RECOVERY ACTIVE') return 'badge-warning';
-      if (st === 'failed' || st === 'FAILED' || st === 'ERROR') return 'badge-danger';
-      if (st === 'DISABLED' || st === 'STOPPED' || st === 'DEGRADED') return 'badge-warning';
-      return 'badge-info';
-    }
-
-    function _formatBytesMB(bytes) {
-      if (!bytes || bytes <= 0) return '0 MB';
-      return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-    }
-
-    function renderLiveObservability(progressRes) {
-      if (!progressRes) return;
-      const prod = progressRes.active_production || progressRes.displayed_production;
-      const schema = progressRes.stages_schema || [];
-      const hasActive = Boolean(progressRes.has_active);
-
-      currentPollMs = hasActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
-      const rateBadge = document.getElementById('obsRefreshRateBadge');
-      if (rateBadge) {
-        rateBadge.textContent = document.hidden
-          ? 'Poll: PAUSED (Tab Hidden)'
-          : ('Poll: ' + (hasActive ? '5s (LIVE)' : '20s (Idle)'));
-      }
-
-      const ctxEl = document.getElementById('obsContextBadge');
-      const stEl = document.getElementById('obsStatusBadge');
-      const topicEl = document.getElementById('obsTopicTitle');
-      const metaEl = document.getElementById('obsProdMeta');
-      const pctEl = document.getElementById('obsOverallPct');
-      const opEl = document.getElementById('obsCurrentOperation');
-      const barEl = document.getElementById('obsOverallBar');
-      const errBanner = document.getElementById('obsErrorBanner');
-      const gridEl = document.getElementById('obsStageGrid');
-
-      if (!prod) {
-        if (ctxEl) ctxEl.textContent = 'NONE';
-        if (stEl) { stEl.textContent = 'IDLE'; stEl.className = 'badge badge-info'; }
-        const stDirEl = document.getElementById('obsStorageDir');
-        const dlEl = document.getElementById('obsDeliverableLinks');
-        if (stDirEl) stDirEl.textContent = 'Workspace: --';
-        if (dlEl) dlEl.innerHTML = '';
-        if (gridEl && schema.length) {
-          gridEl.innerHTML = schema.map(s => `
-            <div class="obs-stage-card">
-              <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:700;">
-                <span>${s.label}</span><span class="mono">0%</span>
-              </div>
-              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">pending</div>
+      <!-- SECTION E: ADVANCED SETTINGS (COLLAPSED BY DEFAULT) -->
+      <details style="margin-bottom:14px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:rgba(15,23,42,0.35);">
+        <summary style="cursor:pointer;font-size:13px;font-weight:600;">Advanced Settings</summary>
+        <div style="margin-top:12px;">
+          <div class="btn-row" style="margin-bottom:12px;">
+            <select id="prodPresetSelect" style="width:220px;">
+              <option value="FOUR_CYCLES_DAILY">Preset: 4 Cycles Daily</option>
+              <option value="SINGLE_DAILY">Preset: Single Daily</option>
+            </select>
+            <button class="btn sm" onclick="loadProdPreset()">Load Preset</button>
+          </div>
+          <div class="form-grid" style="margin-bottom:12px;">
+            <div>
+              <label class="field-label">Timezone</label>
+              <input type="text" id="pubTimezone" value="Asia/Kolkata" onchange="markUnifiedDraftDirty()" />
             </div>
-          `).join('');
-        }
-      } else {
-        const overallStatus = (prod.overall_status || 'idle').toUpperCase();
-        const overallPct = Number(prod.overall_progress || 0);
-        const etaTxt = prod.estimated_remaining_sec !== null && prod.estimated_remaining_sec !== undefined
-          ? (prod.estimated_remaining_sec + 's')
-          : '--';
+            <div>
+              <label class="field-label">Missed Production Slot Behavior</label>
+              <select id="pubMissedBehavior" onchange="markUnifiedDraftDirty()">
+                <option value="next_slot">Next Available Slot</option>
+                <option value="skip">Skip</option>
+                <option value="immediate_if_ready">Immediate If Ready</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label">Recovery Overlap Policy</label>
+              <select id="pubOverlapPolicy" onchange="markUnifiedDraftDirty()">
+                <option value="STRICT">STRICT (No Overlaps)</option>
+                <option value="SHARED_RECOVERY">SHARED_RECOVERY (Permit w/ Claiming)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label">Wait For Publication Slot</label>
+              <select id="pubWaitForSlot" onchange="markUnifiedDraftDirty()">
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="field-label">Enabled Weekdays</label>
+            <div class="btn-row" id="pubWeekdaysWrap"></div>
+          </div>
+        </div>
+      </details>
 
-        if (ctxEl) ctxEl.textContent = prod.execution_context || 'PRODUCTION';
-        if (stEl) { stEl.textContent = overallStatus; stEl.className = 'badge ' + _obsBadgeClass(overallStatus); }
-        if (topicEl) topicEl.textContent = prod.topic || prod.production_id;
-        if (metaEl) metaEl.textContent = `ID: ${prod.production_id} | Stage: ${prod.current_stage || '--'} | ETA: ${etaTxt}`;
-        if (pctEl) pctEl.textContent = overallPct.toFixed(0) + '%';
-        if (opEl) opEl.textContent = prod.current_operation || '--';
-        if (barEl) barEl.style.width = Math.min(100, Math.max(0, overallPct)) + '%';
+      <!-- SECTION F: VALIDATION AND ACTIVATION -->
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn" id="btnSaveUnifiedDraft" onclick="saveUnifiedDraft()">SAVE DRAFT</button>
+        <button class="btn" id="btnValidateUnified" onclick="validateUnifiedDraft()">VALIDATE SCHEDULE</button>
+        <button class="btn primary" id="btnActivateUnifiedSchedule" onclick="activateUnifiedSchedule()" disabled>ACTIVATE SCHEDULE</button>
+        <button class="btn danger sm" onclick="cancelUnifiedDraft()">Discard Draft</button>
+      </div>
 
-        const storage = prod.storage || {};
-        const stDirEl = document.getElementById('obsStorageDir');
-        if (stDirEl) {
-          stDirEl.textContent = storage.workspace_abs_dir
-            ? ('Workspace: ' + storage.workspace_abs_dir)
-            : 'Workspace: --';
-        }
-        const dlEl = document.getElementById('obsDeliverableLinks');
-        if (dlEl) {
-          const pills = [];
-          if (storage.video_url) {
-            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.video_url}" target="_blank">Open Video (${_formatBytesMB(storage.video_size_bytes)})</a>`);
-          }
-          if (storage.thumbnail_url) {
-            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.thumbnail_url}" target="_blank">Open Thumbnail (${_formatBytesMB(storage.thumbnail_size_bytes)})</a>`);
-          }
-          if (storage.manifest_url) {
-            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.manifest_url}" target="_blank">Manifest JSON</a>`);
-          }
-          if (storage.artifacts_url) {
-            pills.push(`<a class="btn" style="padding:3px 9px; font-size:11px; text-decoration:none;" href="${storage.artifacts_url}" target="_blank">Artifact Paths</a>`);
-          }
-          dlEl.innerHTML = pills.join('');
-        }
+      <div id="uniValidationBox" class="control-doc" style="display:none;margin-bottom:12px;font-size:13px;"></div>
+      <div id="uniActivationStatusBox" class="control-doc" style="display:none;margin-bottom:14px;font-size:13px;"></div>
 
-        if (errBanner) {
-          if (prod.error && prod.overall_status === 'failed') {
-            errBanner.style.display = 'block';
-            errBanner.innerHTML = `<strong>PIPELINE FAILURE AT ${(prod.error.stage || 'UNKNOWN').toUpperCase()}:</strong> ${prod.error.summary || 'Unknown error'} <span class="mono">(Retryable: ${prod.error.retry_possible ? 'YES' : 'NO'}, Safe to Resume: ${prod.error.safe_to_resume ? 'YES' : 'NO'})</span>`;
-          } else {
-            errBanner.style.display = 'none';
-          }
-        }
-
-        const stagesMap = prod.stages || {};
-        if (gridEl) {
-          gridEl.innerHTML = schema.map(s => {
-            const st = stagesMap[s.key] || { status: 'pending', progress: 0, operation: '' };
-            const statusLower = (st.status || 'pending').toLowerCase();
-            return `
-              <div class="obs-stage-card ${statusLower}">
-                <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:700;">
-                  <span>${s.label}</span>
-                  <span class="mono">${Number(st.progress || 0).toFixed(0)}%</span>
-                </div>
-                <div style="font-size:11px; color:var(--text-muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${st.operation || statusLower}">
-                  ${statusLower.toUpperCase()}${st.operation ? ': ' + st.operation : ''}
-                </div>
-              </div>
-            `;
-          }).join('');
-        }
-
-        const a = prod.assets || {};
-        const cr = prod.creative || {};
-        const catEl = document.getElementById('obsCreativeCategory');
-        if (catEl) {
-          const catCount = cr.supported_categories_count || 20;
-          catEl.textContent = (cr.category || 'MULTI-CATEGORY') + ` (${catCount} avail)`;
-        }
-        document.getElementById('obsUniqueImages').textContent = cr.authentic_images_acquired ?? a.unique_images ?? 0;
-        const existEl = document.getElementById('obsExistingAnimations');
-        if (existEl) existEl.textContent = cr.existing_animations_acquired ?? 0;
-        const animAuthEl = document.getElementById('obsAnimatedAuthentic');
-        if (animAuthEl) animAuthEl.textContent = cr.animated_authentic_composites ?? 0;
-        const genBespEl = document.getElementById('obsGeneratedAndBespoke');
-        if (genBespEl) {
-          const gCount = cr.generated_images ?? a.generated_images ?? 0;
-          const bCount = cr.bespoke_animations ?? a.animations ?? 0;
-          genBespEl.textContent = `${gCount} gen / ${bCount} anim`;
-        }
-        document.getElementById('obsGeneratedImages').textContent = a.generated_images ?? 0;
-        document.getElementById('obsAnimationsCount').textContent = a.animations ?? 0;
-        document.getElementById('obsReusedImages').textContent = `${a.reused_images ?? 0} (max ${a.max_allowed_reuse ?? 2}/img)`;
-        document.getElementById('obsFailedAcq').textContent = a.failed_acquisitions ?? 0;
-        const licEl = document.getElementById('obsLicenseCompliance');
-        if (licEl) {
-          const lVer = cr.license_verified_count ?? 0;
-          const aPct = cr.attribution_completeness_pct ?? 100;
-          licEl.textContent = `${lVer} verified (${aPct}%)`;
-        }
-
-        const r = prod.rendering || {};
-        document.getElementById('obsFfmpegStatus').textContent = r.ffmpeg_status || 'IDLE';
-        document.getElementById('obsScenesCount').textContent = `${r.completed_scenes ?? 0} / ${r.total_scenes ?? 0}`;
-        document.getElementById('obsCurrentBeat').textContent = r.current_beat_id ? `#${r.current_beat_index || 0} (${r.current_beat_id})` : '--';
-        document.getElementById('obsRenderPct').textContent = `${Number(r.progress_pct || 0).toFixed(1)}%`;
-        document.getElementById('obsRenderOp').textContent = r.current_operation || '--';
-
-        const th = prod.thumbnail || {};
-        document.getElementById('obsThumbImg').textContent = (th.image_generation_status || 'PENDING').toUpperCase();
-        document.getElementById('obsThumbComp').textContent = (th.composition_status || 'PENDING').toUpperCase();
-        document.getElementById('obsThumbText').textContent = (th.text_layout_status || 'PENDING').toUpperCase();
-        document.getElementById('obsThumbVal').textContent = (th.validation_status || 'PENDING').toUpperCase();
-        const prevImg = document.getElementById('obsThumbPreview');
-        const prevPlaceholder = document.getElementById('obsThumbPlaceholder');
-        if (prevImg && prevPlaceholder) {
-          if (th.preview_url) {
-            prevImg.src = th.preview_url;
-            prevImg.style.display = 'block';
-            prevPlaceholder.style.display = 'none';
-          } else {
-            prevImg.style.display = 'none';
-            prevPlaceholder.style.display = 'block';
-          }
-        }
-      }
-
-      const histBody = document.getElementById('obsHistoryBody');
-      const hist = progressRes.history || [];
-      if (histBody) {
-        if (hist.length > 0) {
-          histBody.innerHTML = hist.map(h => {
-            const stg = h.storage || {};
-            const links = [];
-            if (stg.video_url) links.push(`<a href="${stg.video_url}" target="_blank" style="color:#60a5fa;">Video</a>`);
-            if (stg.thumbnail_url) links.push(`<a href="${stg.thumbnail_url}" target="_blank" style="color:#34d399;">Thumb</a>`);
-            if (stg.manifest_url) links.push(`<a href="${stg.manifest_url}" target="_blank" style="color:#c084fc;">Manifest</a>`);
-            return `
+      <!-- COMPACT EXECUTION MONITORING -->
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Execution Monitoring</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td class="mono" style="font-size:11px;" title="${stg.workspace_abs_dir || ''}">${h.production_id}</td>
-              <td style="font-weight:600;">${h.topic}</td>
-              <td><span class="badge badge-info">${h.execution_context || 'PRODUCTION'}</span></td>
-              <td><span class="badge ${_obsBadgeClass(h.overall_status)}">${(h.overall_status || 'unknown').toUpperCase()}</span></td>
-              <td class="mono">${Number(h.overall_progress || 0).toFixed(0)}%</td>
-              <td class="mono" style="font-size:11px;">${(h.assets?.unique_images ?? 0)} / ${(h.assets?.generated_images ?? 0)} / ${(h.assets?.animations ?? 0)}</td>
-              <td style="font-size:11px; white-space:nowrap;">${links.length ? links.join(' • ') : '<span style="color:var(--text-muted);">--</span>'}</td>
-              <td class="mono" style="font-size:11px;">${(h.last_updated || '').replace('T', ' ').slice(0, 19)}</td>
+              <th>Cycle</th>
+              <th>Production</th>
+              <th>Publication</th>
+              <th>Status</th>
             </tr>
-          `;
-          }).join('');
-        } else {
-          histBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No tracked productions recorded yet.</td></tr>';
-        }
-      }
-    }
+          </thead>
+          <tbody id="uniCompactExecBody">
+            <tr><td colspan="4" style="color:var(--muted)">Loading execution status...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details style="margin-top:10px;border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:rgba(15,23,42,0.35);">
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);font-weight:600;">Details (Technical Execution &amp; Recovery Diagnostics)</summary>
+        <div id="uniExecDetailsBox" style="margin-top:8px;font-size:12px;color:var(--muted);">No additional diagnostics.</div>
+      </details>
+    </div>
+  </section>
 
-    async function fetchDashboardData(forceHeavy = true) {
-      if (isFetchingDashboard) return;
-      isFetchingDashboard = true;
-      try {
-        const nowMs = Date.now();
-        const shouldFetchHeavy = forceHeavy || (lastHeavyFetchAt === 0) || ((nowMs - lastHeavyFetchAt) >= HEAVY_POLL_MS);
+  <!-- TAB 4: PRODUCTION & STORAGE CONFIG -->
+  <section id="tab-prodconfig" class="tab-panel">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Production &amp; Renderer Configuration</h2>
+            <p class="card-desc">Enforces Lemo-Opuscar renderer and persists pipeline quality settings across restarts.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div>
+            <label class="field-label">Video Renderer (Enforced)</label>
+            <input type="text" id="cfgRenderer" value="lemo-opuscar" readonly />
+          </div>
+          <div>
+            <label class="field-label">Concurrency (1-2)</label>
+            <select id="selectConcurrency">
+              <option value="1">1 (Recommended)</option>
+              <option value="2">2</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Target Duration (50-58s)</label>
+            <input type="number" id="cfgDuration" value="54" min="50" max="58" />
+          </div>
+          <div>
+            <label class="field-label">Beat Count (12-30)</label>
+            <input type="number" id="cfgBeats" value="20" min="12" max="30" />
+          </div>
+          <div>
+            <label class="field-label">Min Distinct Visual Assets</label>
+            <input type="number" id="cfgDiversity" value="10" min="4" max="25" />
+          </div>
+          <div>
+            <label class="field-label">QC Strictness</label>
+            <select id="cfgQcStrictness">
+              <option value="strict">strict (Recommended)</option>
+              <option value="standard">standard</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Recovery Policy</label>
+            <select id="cfgRecoveryPolicy">
+              <option value="checkpoint_resume">checkpoint_resume</option>
+              <option value="strict_window">strict_window</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Max CPU % / RAM %</label>
+            <div style="display:flex;gap:6px;">
+              <input type="number" id="cfgMaxCpu" value="92" min="50" max="99" />
+              <input type="number" id="cfgMaxRam" value="90" min="50" max="99" />
+            </div>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:14px;">
+          <button class="btn primary" onclick="saveProductionConfig()">Save Production Config</button>
+        </div>
+      </div>
 
-        const [overviewRes, progressRes] = await Promise.all([
-          fetch('/api/dashboard/overview').then(r => r.json()),
-          fetch('/api/dashboard/progress').then(r => r.json()).catch(() => null),
-        ]);
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Canonical Storage Paths</h2>
+            <p class="card-desc">Inspect, browse, validate, and open storage directories. Historical assets remain untouched.</p>
+          </div>
+          <span class="pill ok" id="storageDiskFree">Disk: -- GB free</span>
+        </div>
+        <div id="storageFieldsWrap" style="display:flex;flex-direction:column;gap:10px;"></div>
+        <div class="btn-row" style="margin-top:14px;">
+          <button class="btn" onclick="validateStoragePaths()">Validate Paths</button>
+          <button class="btn primary" onclick="saveStoragePaths()">Save Storage Config</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
-        let statsRes = null, healthRes = null, historyRes = null, recoveryRes = null, activityRes = null;
-        if (shouldFetchHeavy) {
-          lastHeavyFetchAt = nowMs;
-          [statsRes, healthRes, historyRes, recoveryRes, activityRes] = await Promise.all([
-            fetch('/api/dashboard/stats?filter=' + currentFilter).then(r => r.json()),
-            fetch('/api/dashboard/health').then(r => r.json()),
-            fetch('/api/dashboard/history').then(r => r.json()),
-            fetch('/api/dashboard/recovery').then(r => r.json()),
-            fetch('/api/dashboard/activity').then(r => r.json()),
-          ]);
-        }
-
-        renderLiveObservability(progressRes);
-
-        // Overview + 4-State Reconciliation Badges
-        document.getElementById('currentCycleVal').textContent = overviewRes.current_cycle || 'None';
-        document.getElementById('nextProdVal').textContent = overviewRes.next_production_ist || 'Not scheduled';
-        document.getElementById('targetPubVal').textContent = overviewRes.target_publishing_ist || 'Calculating...';
-        document.getElementById('pipelineStageVal').textContent = overviewRes.pipeline_stage || 'IDLE';
-        document.getElementById('activeProfileBadge').textContent = overviewRes.active_profile || 'FOUR_CYCLES_DAILY';
-
-        const opState = overviewRes.overall_operational_state || 'IDLE';
-        const schedState = overviewRes.scheduler_state || 'DISABLED';
-        const prodState = overviewRes.production_worker_state || 'IDLE';
-        const valState = overviewRes.validation_worker_state || 'IDLE';
-
-        const ppVal = document.getElementById('pipelineProgressVal');
-        if (ppVal) ppVal.textContent = `Overall: ${opState}`;
-
-        const sbEl = document.getElementById('schedulerStateBadge');
-        if (sbEl) {
-          sbEl.textContent = 'Sched: ' + schedState;
-          sbEl.className = 'badge ' + _obsBadgeClass(schedState);
-        }
-        const pbEl = document.getElementById('prodWorkerStateBadge');
-        if (pbEl) {
-          pbEl.textContent = 'Prod: ' + prodState;
-          pbEl.className = 'badge ' + _obsBadgeClass(prodState);
-        }
-        const vbEl = document.getElementById('valWorkerStateBadge');
-        if (vbEl) {
-          vbEl.textContent = 'Val: ' + valState;
-          vbEl.className = 'badge ' + _obsBadgeClass(valState);
-        }
-        const obEl = document.getElementById('overallOpStateBadge');
-        if (obEl) {
-          obEl.textContent = 'Op: ' + opState;
-          obEl.className = 'badge ' + _obsBadgeClass(opState);
-        }
-
-        // Overall Health Pill
-        const healthBadge = document.getElementById('overallHealthBadge');
-        healthBadge.textContent = 'SYSTEM ' + (overviewRes.overall_health || 'HEALTHY');
-        healthBadge.className = 'badge ' + (overviewRes.overall_health === 'HEALTHY' ? 'badge-success' : (overviewRes.overall_health === 'DEGRADED' ? 'badge-warning' : 'badge-danger'));
-
-        if (!shouldFetchHeavy) {
-          return;
-        }
-
-        // Stats
-        if (document.getElementById('statAttempted')) {
-          document.getElementById('statAttempted').textContent = statsRes.attempted;
-        }
-        if (document.getElementById('statCompleted')) {
-          document.getElementById('statCompleted').textContent = statsRes.completed;
-        }
-        if (document.getElementById('statGenuineAttempted')) {
-          document.getElementById('statGenuineAttempted').textContent = statsRes.genuine_attempted !== undefined ? statsRes.genuine_attempted : 0;
-        }
-        if (document.getElementById('statGenuineCompleted')) {
-          document.getElementById('statGenuineCompleted').textContent = statsRes.genuine_completed !== undefined ? statsRes.genuine_completed : 0;
-        }
-        document.getElementById('statPublished').textContent = statsRes.published;
-        if (document.getElementById('statPrivateUploads')) {
-          document.getElementById('statPrivateUploads').textContent = statsRes.private_uploads !== undefined ? statsRes.private_uploads : 1;
-        }
-        if (document.getElementById('statActiveQueue')) {
-          document.getElementById('statActiveQueue').textContent = statsRes.active_pending_queue !== undefined ? statsRes.active_pending_queue : 0;
-        }
-        document.getElementById('statQcFailed').textContent = statsRes.qc_failed;
-        if (document.getElementById('statTestExecutions')) {
-          document.getElementById('statTestExecutions').textContent = statsRes.test_jobs_count !== undefined ? statsRes.test_jobs_count : 3;
-        }
-        if (document.getElementById('statArchivedShowcase')) {
-          document.getElementById('statArchivedShowcase').textContent = statsRes.archived_showcase_count !== undefined ? statsRes.archived_showcase_count : 180;
-        }
-        if (document.getElementById('statArchived')) {
-          document.getElementById('statArchived').textContent = statsRes.archived_records_count !== undefined ? statsRes.archived_records_count : 253;
-        }
-        document.getElementById('statMissed').textContent = statsRes.missed;
-        document.getElementById('statRecovered').textContent = statsRes.recovered;
-
-        // Health Items: Scheduler Heartbeat
-        const hb = healthRes.scheduler_heartbeat || {};
-        const hbText = hb.state === 'RUNNING'
-          ? ('ACTIVE' + (hb.pid ? ' (PID: ' + hb.pid + ')' : ''))
-          : (hb.state === 'STALE_HEARTBEAT' ? ('STALE' + (hb.age_seconds ? ' (' + Math.round(hb.age_seconds / 60) + 'm ago)' : '')) : (hb.state || 'IDLE'));
-        document.getElementById('healthHeartbeat').textContent = hbText;
-        document.getElementById('healthHeartbeat').className = 'health-val ' + (hb.state === 'RUNNING' ? 'text-success' : 'text-warning');
-
-        // Scheduler Daemon Process
-        const sProc = healthRes.scheduler_daemon || {};
-        const sProcEl = document.getElementById('healthSchedulerProc');
-        if (sProcEl) {
-          sProcEl.textContent = sProc.is_running ? ('RUNNING (PID: ' + sProc.pid + ')') : 'STOPPED (Standby)';
-          sProcEl.className = 'health-val ' + (sProc.is_running ? 'text-success' : 'text-warning');
-        }
-
-        // Dashboard Service Process
-        const dProc = healthRes.dashboard_service || {};
-        const dProcEl = document.getElementById('healthDashboardProc');
-        if (dProcEl) {
-          dProcEl.textContent = dProc.is_running ? ('RUNNING (PID: ' + (dProc.pid || 'Active') + ', Port: ' + (dProc.port || 8000) + ')') : 'STOPPED';
-          dProcEl.className = 'health-val ' + (dProc.is_running ? 'text-success' : 'text-danger');
-        }
-
-        // Windows Tasks Status
-        const win = healthRes.windows_task || healthRes.windows_tasks || {};
-        const sTask = win.scheduler_task || {};
-        const dTask = win.dashboard_task || {};
-
-        const sTaskEl = document.getElementById('healthTaskScheduler');
-        if (sTaskEl) {
-          const sLabel = sTask.is_registered ? ('REGISTERED (' + (sTask.status || sTask.task_state || 'Ready') + ')') : 'NOT REGISTERED';
-          sTaskEl.textContent = sLabel;
-          sTaskEl.className = 'health-val ' + (sTask.is_registered ? (sTask.status === 'Disabled' ? 'text-warning' : 'text-success') : 'text-danger');
-        }
-
-        const dTaskEl = document.getElementById('healthTaskDashboard');
-        if (dTaskEl) {
-          const dLabel = dTask.is_registered ? ('REGISTERED (' + (dTask.status || dTask.task_state || 'Ready') + ')') : 'NOT REGISTERED';
-          dTaskEl.textContent = dLabel;
-          dTaskEl.className = 'health-val ' + (dTask.is_registered ? (dTask.status === 'Disabled' ? 'text-warning' : 'text-success') : 'text-danger');
-        }
-
-        const winLegacyEl = document.getElementById('healthWindowsTask');
-        if (winLegacyEl) {
-          winLegacyEl.textContent = win.is_registered ? 'REGISTERED' : 'NOT REGISTERED';
-          winLegacyEl.className = 'health-val ' + (win.is_registered ? 'text-success' : 'text-warning');
-        }
-
-        const db = healthRes.database || {};
-        document.getElementById('healthDb').textContent = db.status + ' (' + (db.journal_mode || 'WAL').toUpperCase() + ', ' + db.table_count + ' tables)';
-
-        document.getElementById('healthNetwork').textContent = healthRes.network_status || 'CONNECTED';
-        document.getElementById('healthRecovery').textContent = (healthRes.recovery_status || 'HEALTHY') + ' (' + (healthRes.failed_qc_count || 0) + ' QC blocked)';
-
-        const disk = healthRes.disk || {};
-        document.getElementById('healthDisk').textContent = disk.free_gb + ' GB free (' + disk.media_size_mb + ' MB Media)';
-
-        // Publishing Ledger Safety
-        const pubSafety = healthRes.publishing_ledger_safety || {};
-        const pubSafetyEl = document.getElementById('healthPublishing');
-        if (pubSafetyEl) {
-          pubSafetyEl.textContent = pubSafety.display_text || 'IDEMPOTENT (1 Active | 253 Archived)';
-        }
-
-        // Active Publishing History
-        const pubBody = document.getElementById('pubHistoryBody');
-        const activeCountBadge = document.getElementById('activeLedgerCountBadge');
-        if (activeCountBadge && historyRes) {
-          activeCountBadge.textContent = historyRes.length + ' Active Record' + (historyRes.length === 1 ? '' : 's');
-        }
-        if (historyRes && historyRes.length > 0) {
-          pubBody.innerHTML = historyRes.map(item => `
+  <!-- TAB 5: PUBLISHING QUEUE -->
+  <section id="tab-queue" class="tab-panel">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">YouTube Publishing Queue</h2>
+          <p class="card-desc">User-controlled scheduled publishing. QC-approved videos wait here until you edit metadata, thumbnail, and set an Asia/Kolkata publication date &amp; time.</p>
+        </div>
+        <div class="btn-row">
+          <select id="queueFilterState" style="width:210px;" onchange="renderQueueTable()">
+            <option value="ALL">All States</option>
+            <option value="Awaiting Review">Awaiting Review</option>
+            <option value="Ready to Schedule">Ready to Schedule</option>
+            <option value="Uploading">Uploading</option>
+            <option value="Scheduled">Scheduled</option>
+            <option value="Publishing">Publishing</option>
+            <option value="Published">Published</option>
+            <option value="Failed">Failed</option>
+          </select>
+          <button class="btn primary sm" onclick="verifyScheduledNow()">Verify YouTube Status</button>
+          <button class="btn sm" onclick="fetchQueue()">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td class="mono">#${item.id}</td>
-              <td style="font-weight:600;">${item.topic_title}</td>
-              <td><span class="badge ${item.upload_status.includes('uploaded') ? 'badge-success' : (item.upload_status.includes('failed') ? 'badge-danger' : 'badge-info')}">${item.upload_status}</span></td>
-              <td><span class="badge ${item.visibility === 'public' ? 'badge-accent' : 'badge-info'}">${item.visibility}</span></td>
-              <td class="mono">${item.youtube_video_id || '<span style="color:#64748b;">Not yet assigned</span>'}</td>
-              <td class="mono" style="font-size:11px;">${(item.upload_timestamp || item.scheduled_timestamp || 'Not recorded').replace('T', ' ').slice(0, 19)}</td>
+              <th>Video</th>
+              <th>Production Status</th>
+              <th>Metadata</th>
+              <th>Thumbnail</th>
+              <th>Scheduled Time</th>
+              <th>YouTube Status</th>
+              <th>Actions</th>
             </tr>
-          `).join('');
-        } else {
-          pubBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No active publishing ledger records found.</td></tr>';
-        }
+          </thead>
+          <tbody id="queueTableBody">
+            <tr><td colspan="7" style="color:var(--muted)">Loading publishing queue...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-        // Archive count badge
-        const archBadge = document.getElementById('archiveCountBadge');
-        if (archBadge && healthRes.archive_summary) {
-          archBadge.textContent = (healthRes.archive_summary.total_archived || 253) + ' Archived';
-        }
+    <!-- EDIT & SCHEDULE MODAL -->
+    <div id="pubEditModal" class="control-doc" style="display:none;margin-top:16px;border-color:var(--accent);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <strong id="pubModalHeading">Edit &amp; Schedule YouTube Publication</strong>
+        <button class="btn sm" onclick="closePubEditModal()">Close</button>
+      </div>
+      <input type="hidden" id="pubModalId" />
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div style="grid-column:span 2;">
+          <label class="field-label">YouTube Title (max 100 chars)</label>
+          <input type="text" id="pubModalTitle" maxlength="100" />
+        </div>
+        <div style="grid-column:span 2;">
+          <label class="field-label">Description</label>
+          <textarea id="pubModalDesc" rows="3" style="width:100%;"></textarea>
+        </div>
+        <div>
+          <label class="field-label">Tags (comma-separated)</label>
+          <input type="text" id="pubModalTags" placeholder="history, documentary, shorts" />
+        </div>
+        <div>
+          <label class="field-label">Hashtags (comma-separated)</label>
+          <input type="text" id="pubModalHashtags" placeholder="#Shorts, #History" />
+        </div>
+        <div>
+          <label class="field-label">Publication Date &amp; Time (Asia/Kolkata IST)</label>
+          <input type="datetime-local" id="pubModalScheduledIst" />
+        </div>
+        <div>
+          <label class="field-label">Upload Custom Thumbnail (PNG/JPG, &lt;2MB)</label>
+          <input type="file" id="pubModalThumbFile" accept="image/png,image/jpeg,image/webp" onchange="uploadQueueThumbnail()" />
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="submitPubSchedule()">Save &amp; Schedule on YouTube</button>
+        <button class="btn" onclick="submitPubMetadataOnly()">Save Metadata Only</button>
+        <button class="btn" onclick="closePubEditModal()">Cancel</button>
+      </div>
+    </div>
+  </section>
 
-        // Recovery History
-        const recBody = document.getElementById('recoveryHistoryBody');
-        if (recoveryRes && recoveryRes.length > 0) {
-          recBody.innerHTML = recoveryRes.map(item => {
-            const isAborted = item.is_aborted || (item.raw_status === 'ABORTED_PRE_RESET') || (item.status && item.status.includes('ABORTED'));
-            const statusBadge = isAborted
-              ? '<span class="badge" style="background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);font-size:11px;">ABORTED — No production executed</span>'
-              : `<span class="badge badge-info">${item.status}</span>`;
-            return `
+  <!-- TAB 6: PROCESS MONITOR & LOGS -->
+  <section id="tab-processes" class="tab-panel">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">Background Process Monitor (Zero-Flash Hidden Execution)</h2>
+          <p class="card-desc">All CrazzyDocs background daemons and render subprocesses run hidden via pythonw.exe / CREATE_NO_WINDOW.</p>
+        </div>
+        <button class="btn sm" onclick="refreshProcesses()">Refresh Processes</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td class="mono">${item.job_id}</td>
-              <td style="font-weight:600;">${item.topic}</td>
-              <td>${statusBadge}</td>
-              <td style="color:#f59e0b;">${item.recovery_reason}</td>
-              <td class="mono" style="font-size:11px;">${item.recovered_stage}</td>
-              <td class="mono">${item.retry_count}</td>
-              <td class="mono" style="font-size:11px;">${(item.updated_at || '').replace('T', ' ').slice(0, 19)}</td>
-              <td><span class="badge ${item.operator_intervention_needed ? 'badge-danger' : 'badge-success'}">${item.operator_intervention_needed ? 'YES' : 'NO'}</span></td>
-            </tr>`;
-          }).join('');
-        } else {
-          recBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Zero crash recovery incidents recorded. System running smoothly.</td></tr>';
-        }
-
-        // Recent Activity
-        const actBody = document.getElementById('activityBody');
-        if (activityRes && activityRes.length > 0) {
-          actBody.innerHTML = activityRes.map(item => `
-            <tr>
-              <td class="mono" style="font-size:11px; white-space:nowrap;">${item.timestamp}</td>
-              <td><span class="badge badge-${item.level}">${item.type}</span></td>
-              <td style="font-weight:600;">${item.title}</td>
-              <td style="color:var(--text-muted); font-size:12px;">${item.details}</td>
+              <th>PID</th>
+              <th>Process</th>
+              <th>Role</th>
+              <th>Memory</th>
+              <th>Status</th>
+              <th>Window Mode</th>
             </tr>
-          `).join('');
-        } else {
-          actBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">No recent events recorded.</td></tr>';
-        }
+          </thead>
+          <tbody id="processTableBody">
+            <tr><td colspan="6" style="color:var(--muted)">Loading active processes...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-      } catch (err) {
-        console.error('Failed to update dashboard:', err);
-      } finally {
-        isFetchingDashboard = false;
-      }
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">Structured Activity &amp; System Logs (Secret-Redacted)</h2>
+          <p class="card-desc">Filter by severity or search term. API keys and OAuth tokens are automatically redacted.</p>
+        </div>
+        <div class="btn-row">
+          <select id="logLevelFilter" style="width:130px;" onchange="refreshLogs()">
+            <option value="ALL">ALL Levels</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <input type="text" id="logSearchInput" placeholder="Search logs..." style="width:200px;" onkeyup="if(event.key==='Enter') refreshLogs()" />
+          <button class="btn sm" onclick="refreshLogs()">Filter</button>
+          <a class="btn sm primary" href="/api/control-center/logs/download" target="_blank" style="text-decoration:none;">Download Logs</a>
+        </div>
+      </div>
+      <div class="log-box" id="logsContainer">Loading logs...</div>
+    </div>
+  </section>
+</div>
+
+<!-- FOLDER BROWSER MODAL -->
+<div class="modal-backdrop" id="browseModal">
+  <div class="modal-card">
+    <div class="card-head" style="margin-bottom:10px;">
+      <h3 class="card-title">Select Storage Directory</h3>
+      <button class="btn sm" onclick="closeBrowseModal()">Close</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Current: <strong id="browseCurrentPath"></strong></div>
+    <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px;margin-bottom:12px;" id="browseDirList"></div>
+    <div class="btn-row" style="justify-content:flex-end;">
+      <button class="btn" onclick="browseUp()">Parent Folder</button>
+      <button class="btn primary" onclick="selectBrowsedPath()">Use This Folder</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRMATION MODAL -->
+<div class="modal-backdrop" id="confirmModal">
+  <div class="modal-card">
+    <h3 class="card-title" id="confirmTitle">Confirm Action</h3>
+    <p id="confirmBody" style="color:var(--muted);margin:10px 0 18px;"></p>
+    <div class="btn-row" style="justify-content:flex-end;">
+      <button class="btn" onclick="closeConfirmModal(false)">Cancel</button>
+      <button class="btn primary" id="confirmOkBtn" onclick="closeConfirmModal(true)">Confirm &amp; Apply</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toastBox"></div>
+
+<script>
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const STORAGE_KEYS = [
+  ["production_output_root", "Production Output Root"],
+  ["final_video_dir", "Final Video Directory"],
+  ["thumbnail_dir", "Thumbnail Directory"],
+  ["temp_render_dir", "Temp Render Directory"],
+  ["archive_dir", "Archive Directory"],
+  ["quarantine_dir", "Quarantine Directory"]
+];
+
+let stateCache = {
+  queueItems: [],
+  pubSpec: null,
+  storageCfg: {},
+  browseTargetKey: null,
+  browseCurrent: "",
+  browseParent: "",
+  confirmResolver: null
+};
+
+function showToast(msg, isErr = false) {
+  const box = document.getElementById("toastBox");
+  box.textContent = msg;
+  box.style.borderColor = isErr ? "var(--err)" : "var(--accent)";
+  box.style.display = "block";
+  clearTimeout(box._t);
+  box._t = setTimeout(() => { box.style.display = "none"; }, 4200);
+}
+
+async function apiJson(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    ...opts
+  });
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (_) { data = { raw: text }; }
+  if (!res.ok) {
+    throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function askConfirm(title, body) {
+  return new Promise((resolve) => {
+    stateCache.confirmResolver = resolve;
+    document.getElementById("confirmTitle").textContent = title;
+    document.getElementById("confirmBody").textContent = body;
+    document.getElementById("confirmModal").style.display = "flex";
+  });
+}
+
+function closeConfirmModal(accepted) {
+  document.getElementById("confirmModal").style.display = "none";
+  if (stateCache.confirmResolver) {
+    const fn = stateCache.confirmResolver;
+    stateCache.confirmResolver = null;
+    fn(Boolean(accepted));
+  }
+}
+
+function switchTab(tabId, btn) {
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("tab-" + tabId).classList.add("active");
+  if (btn) btn.classList.add("active");
+  if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
+  if (tabId === "queue") { refreshPublishing(); }
+}
+
+async function refreshOverviewAndHealth() {
+  try {
+    const [overview, health, pubState, resources, ytStatus] = await Promise.all([
+      apiJson("/api/dashboard/overview"),
+      apiJson("/api/dashboard/health"),
+      apiJson("/api/control-center/publishing"),
+      apiJson("/api/control-center/resources"),
+      apiJson("/api/stage-3-22/youtube/status")
+    ]);
+    const mode = overview.operating_mode || "PRODUCTION";
+    const schedState = overview.scheduler_state || (overview.scheduler_details && overview.scheduler_details.scheduler_state) || "STOPPED";
+    const readiness = pubState.readiness || {};
+    const checks = readiness.checks || {};
+    const oauthOk = Boolean(ytStatus.connected || checks.oauth_connected);
+    const quota = ytStatus.quota || health.youtube_quota || {};
+    const cpuPct = resources.cpu ? resources.cpu.used_percent : "--";
+    const ramPct = resources.memory ? resources.memory.used_percent : "--";
+    const diskFreeGb = resources.disk && resources.disk.free_bytes ? (resources.disk.free_bytes / (1024 ** 3)).toFixed(1) : "--";
+    const worker = overview.production_worker || {};
+
+    document.getElementById("pillMode").textContent = `Mode: ${mode}`;
+    document.getElementById("pillMode").className = "pill " + (mode === "PRODUCTION" ? "ok" : "warn");
+    document.getElementById("metaModeVal").textContent = mode;
+    document.getElementById("selectOperatingMode").value = mode;
+
+    const pol = pubState.mode || overview.publishing_mode || "automatic";
+    document.getElementById("pillPolicy").textContent = `Policy: ${pol}`;
+    document.getElementById("pillPolicy").className = "pill " + (pol === "automatic" ? "ok" : "warn");
+    document.getElementById("metaPolicyVal").textContent = pol;
+    document.getElementById("selectPubPolicy").value = pol;
+
+    const schedOn = schedState === "RUNNING";
+    document.getElementById("pillScheduler").textContent = `Scheduler: ${schedState}`;
+    document.getElementById("pillScheduler").className = "pill " + (schedOn ? "ok" : "warn");
+    document.getElementById("metaSchedVal").textContent = schedOn ? "RUNNING (pythonw)" : schedState;
+
+    document.getElementById("pillOAuth").textContent = `OAuth: ${oauthOk ? "CONNECTED" : "DISCONNECTED"}`;
+    document.getElementById("pillOAuth").className = "pill " + (oauthOk ? "ok" : "err");
+
+    document.getElementById("pillQuota").textContent = `Quota: ${quota.used ?? 0}/${quota.limit ?? 10000}`;
+    document.getElementById("pillRefresh").textContent = `Sync: ${new Date().toLocaleTimeString()}`;
+
+    document.getElementById("kpiStage").textContent = overview.pipeline_stage || worker.stage || "IDLE";
+    document.getElementById("kpiTopic").textContent = worker.topic ? `${worker.topic} (${worker.state || "IDLE"})` : "No active production";
+    document.getElementById("kpiResources").textContent = `CPU ${cpuPct}% · RAM ${ramPct}%`;
+    document.getElementById("kpiResourcesSub").textContent = `Disk free: ${diskFreeGb} GB`;
+
+    const startupTasks = health.windows_tasks || {};
+    document.getElementById("kpiStartup").textContent = (startupTasks.is_registered || checks.scheduler_task_enabled) ? "REGISTERED" : "CHECK";
+    document.getElementById("kpiMonitorSub").textContent = startupTasks.details || "4 Windows tasks (pythonw)";
+
+    const checksWrap = document.getElementById("readinessChecklist");
+    checksWrap.innerHTML = "";
+    Object.keys(checks).forEach((k) => {
+      const ok = Boolean(checks[k]);
+      const el = document.createElement("span");
+      el.className = "chip " + (ok ? "completed" : "failed");
+      el.textContent = `${k}: ${ok ? "PASS" : "FAIL"}`;
+      checksWrap.appendChild(el);
+    });
+  } catch (err) {
+    showToast("Overview sync failed: " + err.message, true);
+  }
+}
+
+async function refreshControlAndCycles() {
+  try {
+    const [cc, liveCycles] = await Promise.all([
+      apiJson("/api/control-center/state"),
+      apiJson("/api/control-center/cycles/live")
+    ]);
+
+    const cycles = liveCycles.cycles || [];
+    const activeC = cycles.find(c => ["RUNNING", "RETRYING", "PAUSED", "ACTIVE_WINDOW"].includes(c.status));
+    const nextC = cycles.find(c => c.status === "UPCOMING");
+    document.getElementById("kpiActiveCycle").textContent = activeC ? activeC.name : "None Active";
+    document.getElementById("kpiNextProd").textContent = nextC ? nextC.start_time_ist : "00:00 IST";
+    document.getElementById("pillNextProd").textContent = `Next Prod: ${nextC ? nextC.start_time_ist : "00:00 IST"}`;
+
+    const tbody = document.getElementById("cyclesTableBody");
+    tbody.innerHTML = cycles.map(c => `
+      <tr>
+        <td><strong>${c.name}</strong></td>
+        <td>${c.start_time_ist}</td>
+        <td>${c.recovery_expiration_ist}</td>
+        <td>${c.target_publish_ist}</td>
+        <td><span class="chip ${c.status === "COMPLETED" ? "completed" : (c.status === "RUNNING" ? "running" : "")}">${c.status}</span></td>
+        <td>${c.remaining_recovery_label || "--"} (${Math.round(c.job_progress_pct || 0)}%)</td>
+      </tr>
+    `).join("") || `<tr><td colspan="6">No cycle data</td></tr>`;
+
+    const pubSched = cc.publication_schedule || {};
+    const upcoming = pubSched.upcoming_slots || [];
+    const nextPub = upcoming[0];
+    document.getElementById("kpiNextPub").textContent = nextPub ? nextPub.ist_display : "--";
+    document.getElementById("kpiNextPubSub").textContent = nextPub ? `UTC publishAt: ${nextPub.utc_iso}` : "No slot";
+    document.getElementById("pillNextPub").textContent = `Next Pub: ${nextPub ? nextPub.ist_display : "--"}`;
+
+    await refreshUnifiedSchedule();
+
+    const pcfg = cc.production_config || {};
+    document.getElementById("cfgRenderer").value = pcfg.renderer || "lemo-opuscar";
+    document.getElementById("selectConcurrency").value = String(pcfg.concurrency || 1);
+    document.getElementById("cfgDuration").value = pcfg.duration_target_sec || 54;
+    document.getElementById("cfgBeats").value = pcfg.beat_count || 20;
+    document.getElementById("cfgDiversity").value = pcfg.diversity_min_assets || 10;
+    document.getElementById("cfgQcStrictness").value = pcfg.qc_strictness || "strict";
+    document.getElementById("cfgRecoveryPolicy").value = pcfg.recovery_policy || "checkpoint_resume";
+    document.getElementById("cfgMaxCpu").value = pcfg.max_cpu_pct || 92;
+    document.getElementById("cfgMaxRam").value = pcfg.max_ram_pct || 90;
+
+    stateCache.storageCfg = cc.storage_config || {};
+    renderStorageFields(stateCache.storageCfg);
+  } catch (err) {
+    showToast("Control state error: " + err.message, true);
+  }
+}
+
+async function refreshPipeline() {
+  try {
+    const data = await apiJson("/api/dashboard/progress");
+    const rec = data.active_production || data.latest_production || data;
+    const pct = Math.round(rec.overall_progress_pct || 0);
+    document.getElementById("pipelineProgressFill").style.width = `${pct}%`;
+    document.getElementById("pipelinePct").textContent = `${pct}%`;
+    document.getElementById("pipelineSummary").textContent = rec.topic_title
+      ? `${rec.topic_title} · ${rec.current_stage || rec.status || "IDLE"}`
+      : "Idle — awaiting next scheduled cycle";
+    const chips = document.getElementById("pipelineStageChips");
+    const stages = rec.stages || {};
+    chips.innerHTML = Object.keys(stages).map(k => {
+      const s = stages[k] || {};
+      const st = String(s.status || "pending").toLowerCase();
+      const cls = st === "completed" ? "completed" : (st === "running" ? "running" : (st === "failed" ? "failed" : ""));
+      return `<span class="chip ${cls}">${k}: ${st.toUpperCase()}</span>`;
+    }).join("");
+  } catch (_) {}
+}
+
+async function refreshPublishing() {
+  try {
+    const data = await apiJson("/api/publishing/queue");
+    stateCache.queueItems = data.items || data.uploads || (Array.isArray(data) ? data : []);
+    renderQueueTable();
+  } catch (err) {
+    showToast("Queue fetch failed: " + err.message, true);
+  }
+}
+
+async function fetchQueue() {
+  return refreshPublishing();
+}
+
+function renderQueueTable() {
+  const filter = document.getElementById("queueFilterState").value;
+  const items = stateCache.queueItems.filter(it => {
+    const st = it.ui_status || it.lifecycle_state || "";
+    return filter === "ALL" || st === filter;
+  });
+  const tbody = document.getElementById("queueTableBody");
+  if (!items.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">No queue items matching filter '${filter}'.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(it => {
+    const uiSt = it.ui_status || "Ready to Schedule";
+    const cls = uiSt === "Published" ? "completed" : (uiSt === "Failed" ? "failed" : (uiSt === "Scheduled" || uiSt === "Uploading" || uiSt === "Publishing" ? "running" : ""));
+    const tags = Array.isArray(it.tags) ? it.tags.slice(0, 4).join(", ") : "";
+    const thumbHtml = it.thumbnail_path
+      ? `<img src="/api/publishing/queue/${it.id}/thumbnail-preview?t=${encodeURIComponent(it.upload_timestamp || it.id)}" alt="thumb" style="width:48px;height:84px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" onerror="this.style.display='none'" />`
+      : `<span style="color:var(--muted);font-size:11px;">No thumbnail</span>`;
+    const schedDisplay = it.scheduled_ist_display && it.scheduled_ist_display !== "Not Scheduled"
+      ? `<strong>${it.scheduled_ist_display}</strong><br><span style="color:var(--muted);font-size:11px;">UTC: ${it.scheduled_utc_publish_at || "--"}</span>`
+      : `<span style="color:var(--muted);">Not Scheduled</span>`;
+    const ytLink = it.youtube_video_id
+      ? `<a href="${it.youtube_url || ('https://youtu.be/' + it.youtube_video_id)}" target="_blank" class="btn sm">VIEW ON YOUTUBE</a>`
+      : "";
+    const cancelBtn = (uiSt === "Scheduled")
+      ? `<button class="btn danger sm" onclick="cancelQueueItemSchedule(${it.id})">CANCEL SCHEDULE</button>`
+      : "";
+    const pubNowBtn = (uiSt !== "Published" && uiSt !== "Publishing")
+      ? `<button class="btn ok sm" onclick="publishQueueItemNow(${it.id})">PUBLISH NOW</button>`
+      : "";
+    const editBtn = (uiSt !== "Published")
+      ? `<button class="btn primary sm" onclick="openPubEditModal(${it.id})">EDIT &amp; SCHEDULE</button>`
+      : "";
+    const errHtml = it.error ? `<div style="color:#f87171;font-size:11px;margin-top:4px;">${it.error}</div>` : "";
+    return `
+      <tr>
+        <td><strong>#${it.id}</strong><br><span style="color:var(--muted);font-size:11px;">${it.topic_title || "--"}</span></td>
+        <td><span class="chip ${it.production_cycle_id ? 'completed' : ''}">QC Passed</span><br><span style="color:var(--muted);font-size:11px;">${it.production_cycle_id || "Manual/Imported"}</span></td>
+        <td><strong>${it.title || "--"}</strong><br><span style="color:var(--muted);font-size:11px;">${(it.description || "").slice(0, 70)}${(it.description || "").length > 70 ? "..." : ""}</span><br><span style="color:var(--muted);font-size:11px;">Tags: ${tags || "--"}</span></td>
+        <td>${thumbHtml}</td>
+        <td>${schedDisplay}</td>
+        <td><span class="chip ${cls}">${uiSt}</span><br><span style="color:var(--muted);font-size:11px;">Privacy: ${it.youtube_privacy_status || it.visibility || "private"}</span>${errHtml}</td>
+        <td><div style="display:flex;flex-direction:column;gap:4px;">${editBtn}${pubNowBtn}${cancelBtn}${ytLink}</div></td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function openPubEditModal(ledgerId) {
+  const it = stateCache.queueItems.find(x => x.id === ledgerId);
+  if (!it) return;
+  document.getElementById("pubModalId").value = String(ledgerId);
+  document.getElementById("pubModalHeading").textContent = `Edit & Schedule #${ledgerId}: ${it.title || it.topic_title}`;
+  document.getElementById("pubModalTitle").value = it.title || it.topic_title || "";
+  document.getElementById("pubModalDesc").value = it.description || "";
+  document.getElementById("pubModalTags").value = (it.tags || []).join(", ");
+  document.getElementById("pubModalHashtags").value = (it.hashtags || ["#Shorts"]).join(", ");
+  document.getElementById("pubModalScheduledIst").value = it.scheduled_ist_input || "";
+  document.getElementById("pubModalThumbFile").value = "";
+  document.getElementById("pubEditModal").style.display = "block";
+}
+
+function closePubEditModal() {
+  document.getElementById("pubEditModal").style.display = "none";
+}
+
+async function uploadQueueThumbnail() {
+  const ledgerId = Number(document.getElementById("pubModalId").value);
+  const input = document.getElementById("pubModalThumbFile");
+  if (!ledgerId || !input.files || !input.files[0]) return;
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  try {
+    const res = await fetch(`/api/publishing/queue/${ledgerId}/thumbnail`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Thumbnail upload failed");
+    showToast("Custom thumbnail updated.");
+    await refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function submitPubMetadataOnly() {
+  const ledgerId = Number(document.getElementById("pubModalId").value);
+  const payload = {
+    title: document.getElementById("pubModalTitle").value.trim(),
+    description: document.getElementById("pubModalDesc").value,
+    tags: document.getElementById("pubModalTags").value.split(",").map(s => s.trim()).filter(Boolean),
+    hashtags: document.getElementById("pubModalHashtags").value.split(",").map(s => s.trim()).filter(Boolean),
+  };
+  try {
+    await apiJson(`/api/publishing/queue/${ledgerId}`, { method: "PUT", body: JSON.stringify(payload) });
+    showToast("Metadata saved.");
+    closePubEditModal();
+    await refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function submitPubSchedule() {
+  const ledgerId = Number(document.getElementById("pubModalId").value);
+  const schedIst = document.getElementById("pubModalScheduledIst").value;
+  if (!schedIst) {
+    showToast("Please select a future date & time in Asia/Kolkata.", true);
+    return;
+  }
+  const payload = {
+    scheduled_ist: schedIst,
+    confirm: true,
+    title: document.getElementById("pubModalTitle").value.trim(),
+    description: document.getElementById("pubModalDesc").value,
+    tags: document.getElementById("pubModalTags").value.split(",").map(s => s.trim()).filter(Boolean),
+    hashtags: document.getElementById("pubModalHashtags").value.split(",").map(s => s.trim()).filter(Boolean),
+  };
+  try {
+    const res = await apiJson(`/api/publishing/queue/${ledgerId}/schedule`, { method: "POST", body: JSON.stringify(payload) });
+    if (res.result && res.result.success === false) {
+      showToast(res.result.error || "YouTube scheduling failed.", true);
+    } else {
+      showToast("Video uploaded as Private & scheduled on YouTube!");
+      closePubEditModal();
     }
+    await refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
 
-    let archiveLoaded = false;
-    async function toggleArchiveView() {
-      const container = document.getElementById('archiveContainer');
-      const btn = document.getElementById('toggleArchiveBtn');
-      if (container.style.display === 'none') {
-        container.style.display = 'block';
-        btn.textContent = 'Hide Archive Table';
-        if (!archiveLoaded) {
-          try {
-            const res = await fetch('/api/dashboard/archive?limit=100').then(r => r.json());
-            const body = document.getElementById('archiveHistoryBody');
-            const items = res.recent_archived || [];
-            if (items.length > 0) {
-              body.innerHTML = items.map(item => `
-                <tr>
-                  <td class="mono">#${item.id}</td>
-                  <td style="font-weight:600;">${item.topic_title}</td>
-                  <td><span class="badge ${item.upload_status.includes('uploaded') ? 'badge-success' : 'badge-info'}">${item.upload_status}</span></td>
-                  <td class="mono" style="font-size:11px;">${item.original_classification}</td>
-                  <td style="color:#94a3b8; font-size:12px;">${item.archive_reason}</td>
-                  <td class="mono" style="font-size:11px;">${(item.archived_at || '').replace('T', ' ').slice(0, 19)}</td>
-                </tr>
-              `).join('');
-              archiveLoaded = true;
-            } else {
-              body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No archived records found.</td></tr>';
-            }
-          } catch (e) {
-            console.error('Failed to load archive history:', e);
-          }
-        }
+async function publishQueueItemNow(ledgerId) {
+  const ok = await askConfirm("Publish Immediately?", "This will make the video PUBLIC on YouTube right away.");
+  if (!ok) return;
+  try {
+    const res = await apiJson(`/api/publishing/queue/${ledgerId}/publish-now`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+    if (res.result && res.result.success === false) {
+      showToast(res.result.error || "Immediate publish failed.", true);
+    } else {
+      showToast("Video published publicly on YouTube!");
+    }
+    await refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function cancelQueueItemSchedule(ledgerId) {
+  const ok = await askConfirm("Cancel Scheduled Release?", "This will remove the YouTube scheduled publishAt time and keep the video Private.");
+  if (!ok) return;
+  try {
+    await apiJson(`/api/publishing/queue/${ledgerId}/cancel-schedule`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+    showToast("Scheduled release cancelled; video remains Private.");
+    await refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function hhmmToMin(hhmm) {
+  const parts = String(hhmm || "00:00").split(":");
+  return (Number(parts[0] || 0) * 60) + Number(parts[1] || 0);
+}
+
+function minToHhmm(totalMin, allowNextDay = true) {
+  const cross = totalMin >= 1440;
+  const m = ((totalMin % 1440) + 1440) % 1440;
+  const label = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  return { hhmm: label, cross, label: `${label}${allowNextDay && cross ? " (+1 day)" : ""}` };
+}
+
+function calcProdDeadlinePreview(startTime, recDurMin) {
+  return minToHhmm(hhmmToMin(startTime) + Number(recDurMin || 240)).label;
+}
+
+function findMappedSlot(cycle, pubSlots) {
+  if (!cycle) return null;
+  let slot = (pubSlots || []).find(s => s.mapped_cycle_id && s.mapped_cycle_id === cycle.cycle_id);
+  if (!slot) {
+    slot = (pubSlots || []).find(s => s.time_ist === cycle.target_publish_time);
+  }
+  return slot || null;
+}
+
+function ensureSlotForCycle(cycle) {
+  if (!stateCache.pubSpec) stateCache.pubSpec = { timezone_name: "Asia/Kolkata", slots: [] };
+  if (!Array.isArray(stateCache.pubSpec.slots)) stateCache.pubSpec.slots = [];
+  let slot = findMappedSlot(cycle, stateCache.pubSpec.slots);
+  if (!slot) {
+    slot = {
+      slot_id: `pub_${cycle.cycle_id}`,
+      label: `${cycle.name || cycle.cycle_id} Publish`,
+      time_ist: cycle.target_publish_time || "18:00",
+      prep_window_minutes: 30,
+      recovery_duration_minutes: 240,
+      recovery_offset_minutes: 0,
+      mapped_cycle_id: cycle.cycle_id,
+      enabled: cycle.enabled !== false
+    };
+    stateCache.pubSpec.slots.push(slot);
+  } else {
+    slot.mapped_cycle_id = cycle.cycle_id;
+  }
+  return slot;
+}
+
+function markUnifiedDraftDirty() {
+  stateCache.uniDirty = true;
+  stateCache.uniValidated = false;
+  if (stateCache.prodSpec && stateCache.prodSpec.profile_name === "FOUR_CYCLES_DAILY") {
+    stateCache.prodSpec.profile_name = "CUSTOM";
+  }
+  updateActivationButtons();
+  renderVisualTimeline();
+}
+
+function updateActivationButtons() {
+  const actBtn = document.getElementById("btnActivateUnifiedSchedule");
+  if (actBtn) {
+    const canAct = Boolean(stateCache.uniValidated && !stateCache.uniDirty && !stateCache.isSubmittingUni);
+    actBtn.disabled = !canAct;
+    actBtn.title = canAct ? "Activate validated schedule" : "Click VALIDATE SCHEDULE before activating";
+  }
+}
+
+function renderUnifiedOverview(u) {
+  const sync = u.scheduler_sync || {};
+  const isSynced = Boolean(sync.is_synchronized);
+  const badge = document.getElementById("uniSyncBadge");
+  if (badge) {
+    if (isSynced) {
+      badge.textContent = "Active & Synchronized";
+      badge.style.background = "rgba(34,197,94,0.18)";
+      badge.style.color = "#86efac";
+    } else {
+      badge.textContent = "Sync Pending";
+      badge.style.background = "rgba(245,158,11,0.18)";
+      badge.style.color = "#fcd34d";
+    }
+  }
+
+  const schedOk = u.lifecycle_state !== "FAILED";
+  const ovSched = document.getElementById("ovSchedulerStatus");
+  if (ovSched) {
+    ovSched.innerHTML = isSynced
+      ? `<span style="color:#86efac;">&#9679; Healthy</span>`
+      : (schedOk ? `<span style="color:#fcd34d;">&#9679; Sync Pending</span>` : `<span style="color:#fca5a5;">&#9679; Attention</span>`);
+  }
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt("ovActiveSchedule", u.active_schedule_name || "FOUR_CYCLES_DAILY");
+  setTxt("ovProdCount", `${u.prod_cycles_per_day ?? (u.mappings || []).length} / day`);
+  setTxt("ovPubCount", `${u.pub_slots_per_day ?? (u.mappings || []).length} / day`);
+  setTxt("ovNextProd", u.next_production ? u.next_production.production_start_ist.replace("2026-", "") : "--");
+  setTxt("ovNextPub", u.next_publication ? u.next_publication.ist_display.replace("2026-", "") : "--");
+  const ls = u.last_successful_execution;
+  setTxt("ovLastSuccess", ls ? (ls.completed_at_ist || "Completed") : "None yet");
+
+  const prod = u.production || {};
+  const pub = u.publication || {};
+  setTxt("diagActiveVer", `v${u.active_schedule_version || 1} (Pub v${(pub.active || {}).schedule_version || 1})`);
+  setTxt("diagActiveRev", u.active_revision || "--");
+  setTxt("diagSchedRev", sync.loaded_revision || "--");
+  setTxt("diagDraftRev", ((prod.draft || {}).revision) || ((pub.draft || {}).revision) || "--");
+  setTxt("diagLastActivated", u.last_activated_at_ist || "--");
+  setTxt("diagLastSynced", sync.synced_at_ist || "--");
+  setTxt("diagWorkerStatus", u.publication_recovery_worker_status || "IDLE");
+  setTxt("diagUnmappedCount", String((u.unmapped_publication_slots || []).length));
+}
+
+function renderUnifiedSchedule(u) {
+  if (!u) return;
+  stateCache.unified = u;
+  const prod = u.production || {};
+  const pub = u.publication || {};
+
+  if (!stateCache.uniDirty) {
+    stateCache.prodSpec = JSON.parse(JSON.stringify(prod.draft || prod.active || { profile_name: "FOUR_CYCLES_DAILY", timezone_name: "Asia/Kolkata", cycles: [] }));
+    stateCache.pubSpec = JSON.parse(JSON.stringify(pub.draft || pub.active || { timezone_name: "Asia/Kolkata", slots: [] }));
+    const prodVal = prod.draft_validation || {};
+    const pubVal = pub.draft_validation || {};
+    stateCache.uniValidated = Boolean(u.lifecycle_state === "VALID" || (prodVal.valid && pubVal.valid));
+  }
+
+  renderUnifiedOverview(u);
+
+  const pSpec = stateCache.prodSpec;
+  const pubSpec = stateCache.pubSpec;
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  setVal("pubTimezone", pubSpec.timezone_name || pSpec.timezone_name || "Asia/Kolkata");
+  setVal("pubMissedBehavior", pubSpec.missed_slot_behavior || "next_slot");
+  setVal("pubOverlapPolicy", pubSpec.recovery_overlap_policy || "STRICT");
+  setVal("pubWaitForSlot", String(pubSpec.wait_for_slot !== false));
+
+  const wdWrap = document.getElementById("pubWeekdaysWrap");
+  if (wdWrap) {
+    const activeDays = new Set(pubSpec.weekdays || WEEKDAYS);
+    wdWrap.innerHTML = WEEKDAYS.map(d => `
+      <label style="display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border:1px solid var(--border);border-radius:8px;cursor:pointer;">
+        <input type="checkbox" class="pub-wd-cb" value="${d}" ${activeDays.has(d) ? "checked" : ""} onchange="markUnifiedDraftDirty()" />
+        <span>${d}</span>
+      </label>
+    `).join("");
+  }
+
+  const tbody = document.getElementById("uniScheduleBody");
+  const cycles = pSpec.cycles || [];
+  if (tbody) {
+    tbody.innerHTML = cycles.map((c, idx) => {
+      const s = findMappedSlot(c, pubSpec.slots || []) || ensureSlotForCycle(c);
+      const prodRecHours = Number(((c.recovery_duration_minutes ?? 240) / 60).toFixed(1));
+      const deadlineLabel = calcProdDeadlinePreview(c.start_time || "00:00", c.recovery_duration_minutes ?? 240);
+      const prepMin = Number(s.prep_window_minutes ?? 30);
+      const pubRecHours = Number(((s.recovery_duration_minutes ?? 240) / 60).toFixed(1));
+      const pubDeadline = minToHhmm(hhmmToMin(c.target_publish_time || "06:00") + Number(s.recovery_duration_minutes ?? 240) + (c.next_day ? 1440 : 0));
+
+      return `
+        <tr>
+          <td>
+            <div style="font-weight:600;margin-bottom:4px;">${c.name || `Cycle ${idx + 1}`}</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="btn sm" onclick="openCycleForm(${idx})">Edit</button>
+              <button class="btn sm" onclick="moveProdCycle(${idx}, -1)" ${idx === 0 ? "disabled" : ""} title="Move Up">&uarr;</button>
+              <button class="btn sm" onclick="moveProdCycle(${idx}, 1)" ${idx === cycles.length - 1 ? "disabled" : ""} title="Move Down">&darr;</button>
+              <button class="btn danger sm" onclick="removeProdCycle(${idx})">Delete</button>
+            </div>
+          </td>
+          <td><input type="time" value="${c.start_time || "00:00"}" onchange="updateCycleRowField(${idx}, 'start_time', this.value)" /></td>
+          <td>
+            <input type="number" min="2" max="4" step="0.5" value="${prodRecHours}" onchange="updateCycleRowField(${idx}, 'prod_rec_hours', Number(this.value))" style="width:66px;" /> hrs
+          </td>
+          <td><strong>${deadlineLabel}</strong></td>
+          <td>
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" ${c.enabled !== false ? "checked" : ""} onchange="updateCycleRowField(${idx}, 'enabled', this.checked)" />
+              <span>${c.enabled !== false ? "ON" : "OFF"}</span>
+            </label>
+          </td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="5" style="color:var(--muted)">No cycles configured. Click + Add Cycle.</td></tr>`;
+  }
+
+  renderVisualTimeline();
+  renderCompactExecution(u);
+  updateActivationButtons();
+}
+
+function updateCycleRowField(idx, field, val) {
+  const c = stateCache.prodSpec.cycles[idx];
+  if (!c) return;
+  const s = ensureSlotForCycle(c);
+  if (field === "start_time") c.start_time = val;
+  else if (field === "prod_rec_hours") c.recovery_duration_minutes = Math.round(Number(val || 4) * 60);
+  else if (field === "target_publish_time") {
+    c.target_publish_time = val;
+    s.time_ist = val;
+  } else if (field === "next_day") {
+    c.next_day = Boolean(val);
+  } else if (field === "pub_prep_min") {
+    s.prep_window_minutes = Math.round(Number(val || 30));
+  } else if (field === "pub_rec_hours") {
+    s.recovery_duration_minutes = Math.round(Number(val || 4) * 60);
+  } else if (field === "enabled") {
+    c.enabled = Boolean(val);
+    s.enabled = Boolean(val);
+  }
+  markUnifiedDraftDirty();
+  renderUnifiedSchedule(stateCache.unified);
+}
+
+function renderVisualTimeline() {
+  const container = document.getElementById("uniVisualTimeline");
+  if (!container || !stateCache.prodSpec) return;
+  const cycles = stateCache.prodSpec.cycles || [];
+  const slots = (stateCache.pubSpec && stateCache.pubSpec.slots) || [];
+  const totalSpan = 1800;
+  const pct = (m) => `${Math.max(0, Math.min(100, (m / totalSpan) * 100)).toFixed(2)}%`;
+  const widthPct = (dur) => `${Math.max(0.8, Math.min(100, (dur / totalSpan) * 100)).toFixed(2)}%`;
+
+  const axis = [0, 360, 720, 1080, 1440, 1680].map(m => {
+    const lbl = m >= 1440 ? `${String(Math.floor((m - 1440) / 60)).padStart(2, "0")}:00 +1d` : `${String(Math.floor(m / 60)).padStart(2, "0")}:00`;
+    return `<span style="position:absolute;left:${pct(m)};font-size:10px;color:var(--muted);transform:translateX(-20%);">${lbl}</span>`;
+  }).join("");
+
+  const rowsHtml = cycles.map((c, idx) => {
+    if (c.enabled === false) {
+      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;opacity:0.45;"><div style="width:130px;font-size:12px;">${c.name} (OFF)</div><div style="flex:1;height:18px;background:rgba(148,163,184,0.1);border-radius:6px;"></div></div>`;
+    }
+    const s = findMappedSlot(c, slots) || {};
+    const pStart = hhmmToMin(c.start_time || "00:00");
+    const pRecDur = Number(c.recovery_duration_minutes ?? 240);
+    const pubBase = hhmmToMin(c.target_publish_time || "06:00") + (c.next_day ? 1440 : 0);
+    const prepDur = Number(s.prep_window_minutes ?? 30);
+    const pubRecDur = Number(s.recovery_duration_minutes ?? 240);
+    const selected = stateCache.selectedCycleIdx === idx;
+
+    return `
+      <div onclick="selectTimelineCycle(${idx})" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;cursor:pointer;padding:3px 6px;border-radius:8px;border:1px solid ${selected ? "var(--accent)" : "transparent"};">
+        <div style="width:130px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name || `Cycle ${idx + 1}`}</div>
+        <div style="position:relative;flex:1;height:20px;background:rgba(15,23,42,0.7);border-radius:6px;overflow:hidden;">
+          <div title="Production Start" style="position:absolute;left:${pct(pStart)};width:${widthPct(30)};height:100%;background:#38bdf8;"></div>
+          <div title="Production Recovery" style="position:absolute;left:${pct(pStart)};width:${widthPct(pRecDur)};height:100%;background:rgba(245,158,11,0.55);"></div>
+          <div title="Publication Prep" style="position:absolute;left:${pct(pubBase - prepDur)};width:${widthPct(prepDur)};height:100%;background:#a855f7;"></div>
+          <div title="Target Publish" style="position:absolute;left:${pct(pubBase)};width:${widthPct(18)};height:100%;background:#22c55e;"></div>
+          <div title="Publication Recovery" style="position:absolute;left:${pct(pubBase)};width:${widthPct(pubRecDur)};height:100%;background:rgba(20,184,166,0.45);"></div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  container.innerHTML = `
+    <div style="position:relative;height:18px;margin-left:140px;margin-bottom:4px;">${axis}</div>
+    ${rowsHtml || `<div style="color:var(--muted);font-size:12px;">No cycles to display.</div>`}
+  `;
+}
+
+function selectTimelineCycle(idx) {
+  stateCache.selectedCycleIdx = idx;
+  renderVisualTimeline();
+  const c = (stateCache.prodSpec.cycles || [])[idx];
+  const detail = document.getElementById("uniSelectedCycleDetail");
+  if (!c || !detail) return;
+  const s = findMappedSlot(c, (stateCache.pubSpec && stateCache.pubSpec.slots) || []) || {};
+  const pStart = hhmmToMin(c.start_time || "00:00");
+  const pRecDur = Number(c.recovery_duration_minutes ?? 240);
+  const pDeadline = minToHhmm(pStart + pRecDur).label;
+  const pubBase = hhmmToMin(c.target_publish_time || "06:00") + (c.next_day ? 1440 : 0);
+  const prepStart = minToHhmm(pubBase - Number(s.prep_window_minutes ?? 30)).label;
+  const pubTarget = minToHhmm(pubBase).label;
+  const pubRecEnd = minToHhmm(pubBase + Number(s.recovery_duration_minutes ?? 240)).label;
+  detail.innerHTML = `
+    <strong>${c.name}</strong>:
+    Prod Start <strong>${c.start_time}</strong> &rarr;
+    Prod Recovery ends <strong>${pDeadline}</strong> &rarr;
+    Pub Prep starts <strong>${prepStart}</strong> &rarr;
+    Target Publish <strong>${pubTarget}</strong> &rarr;
+    Pub Recovery ends <strong>${pubRecEnd}</strong>.
+  `;
+}
+
+function renderCompactExecution(u) {
+  const tbody = document.getElementById("uniCompactExecBody");
+  const detBox = document.getElementById("uniExecDetailsBox");
+  const rows = u.compact_execution || [];
+  if (tbody) {
+    tbody.innerHTML = rows.map(r => {
+      const chipCls = r.overall_status === "Success" || r.overall_status === "Scheduled" ? "completed" : (r.overall_status === "In Progress" ? "running" : (r.overall_status === "Attention" ? "failed" : ""));
+      const recNote = r.recovery_needed ? `<div style="font-size:11px;color:#fcd34d;margin-top:2px;">Recovery: ${r.recovery_detail}</div>` : "";
+      return `
+        <tr>
+          <td><strong>${r.cycle_name || r.cycle_id}</strong></td>
+          <td>${r.production_state}${recNote}</td>
+          <td>${r.publication_state}</td>
+          <td><span class="chip ${chipCls}">${r.overall_status}</span></td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="4" style="color:var(--muted)">No execution data available.</td></tr>`;
+  }
+  if (detBox) {
+    detBox.innerHTML = rows.map(r => `
+      <div style="margin-bottom:4px;">
+        <strong>${r.cycle_name || r.cycle_id}:</strong>
+        Job=${r.production_job_id || "none"} | Prod Window=${r.production_start_ist || "--"}..${r.production_recovery_deadline_ist || "--"} |
+        Pub=${r.publication_time_ist || "--"} (Rec end ${r.publication_recovery_deadline_ist || "--"}) | Video=${r.youtube_video_id || "pending"}
+      </div>
+    `).join("") || "No additional diagnostics.";
+  }
+}
+
+function openCycleForm(idx) {
+  stateCache.editingCycleIdx = idx;
+  const card = document.getElementById("cycleFormCard");
+  const title = document.getElementById("cycleFormTitle");
+  if (!card) return;
+  if (idx >= 0 && stateCache.prodSpec && stateCache.prodSpec.cycles[idx]) {
+    const c = stateCache.prodSpec.cycles[idx];
+    const s = findMappedSlot(c, (stateCache.pubSpec && stateCache.pubSpec.slots) || []) || {};
+    title.textContent = `Edit Cycle: ${c.name}`;
+    document.getElementById("cfName").value = c.name || "";
+    document.getElementById("cfProdStart").value = c.start_time || "06:00";
+    document.getElementById("cfProdRecHours").value = Number(((c.recovery_duration_minutes ?? 240) / 60).toFixed(1));
+    document.getElementById("cfPubTime").value = c.target_publish_time || "12:00";
+    document.getElementById("cfNextDay").checked = Boolean(c.next_day);
+    document.getElementById("cfPubPrepMin").value = Number(s.prep_window_minutes ?? 30);
+    document.getElementById("cfPubRecHours").value = Number(((s.recovery_duration_minutes ?? 240) / 60).toFixed(1));
+    document.getElementById("cfEnabled").value = String(c.enabled !== false);
+  } else {
+    title.textContent = "Add Production Cycle";
+    document.getElementById("cfName").value = `Cycle ${(stateCache.prodSpec.cycles || []).length + 1}`;
+    document.getElementById("cfProdStart").value = "15:00";
+    document.getElementById("cfProdRecHours").value = "4";
+    document.getElementById("cfPubTime").value = "21:00";
+    document.getElementById("cfNextDay").checked = false;
+    document.getElementById("cfPubPrepMin").value = "30";
+    document.getElementById("cfPubRecHours").value = "4";
+    document.getElementById("cfEnabled").value = "true";
+  }
+  card.style.display = "block";
+}
+
+function closeCycleForm() {
+  const card = document.getElementById("cycleFormCard");
+  if (card) card.style.display = "none";
+}
+
+function saveCycleForm() {
+  if (!stateCache.prodSpec) stateCache.prodSpec = { profile_name: "CUSTOM", timezone_name: "Asia/Kolkata", cycles: [] };
+  const idx = stateCache.editingCycleIdx ?? -1;
+  const name = document.getElementById("cfName").value.trim() || "Custom Cycle";
+  const start = document.getElementById("cfProdStart").value || "06:00";
+  const prodRecMin = Math.round(Number(document.getElementById("cfProdRecHours").value || 4) * 60);
+  const pubTime = document.getElementById("cfPubTime").value || "12:00";
+  const nextDay = document.getElementById("cfNextDay").checked;
+  const prepMin = Math.round(Number(document.getElementById("cfPubPrepMin").value || 30));
+  const pubRecMin = Math.round(Number(document.getElementById("cfPubRecHours").value || 4) * 60);
+  const enabled = document.getElementById("cfEnabled").value === "true";
+
+  let cycle;
+  if (idx >= 0 && stateCache.prodSpec.cycles[idx]) {
+    cycle = stateCache.prodSpec.cycles[idx];
+    cycle.name = name;
+    cycle.start_time = start;
+    cycle.recovery_duration_minutes = prodRecMin;
+    cycle.target_publish_time = pubTime;
+    cycle.next_day = nextDay;
+    cycle.enabled = enabled;
+  } else {
+    const cid = `cycle_${Date.now().toString().slice(-4)}`;
+    cycle = {
+      cycle_id: cid,
+      name,
+      start_time: start,
+      recovery_duration_minutes: prodRecMin,
+      target_publish_time: pubTime,
+      active_weekdays: [0, 1, 2, 3, 4, 5, 6],
+      next_day: nextDay,
+      enabled
+    };
+    stateCache.prodSpec.cycles.push(cycle);
+  }
+  const slot = ensureSlotForCycle(cycle);
+  slot.label = `${name} Publish`;
+  slot.time_ist = pubTime;
+  slot.prep_window_minutes = prepMin;
+  slot.recovery_duration_minutes = pubRecMin;
+  slot.enabled = enabled;
+
+  closeCycleForm();
+  markUnifiedDraftDirty();
+  renderUnifiedSchedule(stateCache.unified);
+}
+
+function moveProdCycle(idx, delta) {
+  const arr = stateCache.prodSpec.cycles || [];
+  const target = idx + delta;
+  if (target < 0 || target >= arr.length) return;
+  const tmp = arr[idx];
+  arr[idx] = arr[target];
+  arr[target] = tmp;
+  markUnifiedDraftDirty();
+  renderUnifiedSchedule(stateCache.unified);
+}
+
+async function removeProdCycle(idx) {
+  const c = (stateCache.prodSpec.cycles || [])[idx];
+  if (!c) return;
+  const ok = await askConfirm("Delete Production Cycle?", `Remove "${c.name}" and its mapped publication slot from the draft?`);
+  if (!ok) return;
+  stateCache.prodSpec.cycles.splice(idx, 1);
+  if (stateCache.pubSpec && Array.isArray(stateCache.pubSpec.slots)) {
+    stateCache.pubSpec.slots = stateCache.pubSpec.slots.filter(s => s.mapped_cycle_id !== c.cycle_id && s.time_ist !== c.target_publish_time);
+  }
+  markUnifiedDraftDirty();
+  renderUnifiedSchedule(stateCache.unified);
+}
+
+async function loadProdPreset() {
+  const preset_name = document.getElementById("prodPresetSelect").value;
+  const [prodSpec, pubRes] = await Promise.all([
+    apiJson(`/api/control-center/schedule/preset/${preset_name}`),
+    apiJson("/api/control-center/publication-schedule/preset", { method: "POST", body: JSON.stringify({ preset_name: "FOLLOW_PRODUCTION_CYCLE" }) })
+  ]);
+  stateCache.prodSpec = prodSpec;
+  stateCache.pubSpec = pubRes.draft;
+  (stateCache.prodSpec.cycles || []).forEach(c => {
+    const s = ensureSlotForCycle(c);
+    s.time_ist = c.target_publish_time;
+    s.label = `${c.name} Publish`;
+  });
+  markUnifiedDraftDirty();
+  renderUnifiedSchedule(stateCache.unified);
+  showToast(`Loaded preset ${preset_name} into draft.`);
+}
+
+async function refreshUnifiedSchedule() {
+  if (stateCache.isRefreshingUni) return;
+  stateCache.isRefreshingUni = true;
+  const banner = document.getElementById("uniLoadingBanner");
+  if (banner) banner.style.display = "block";
+  try {
+    const u = await apiJson("/api/control-center/unified-schedule");
+    renderUnifiedSchedule(u);
+  } catch (err) {
+    showToast("Schedule load failed: " + err.message, true);
+  } finally {
+    stateCache.isRefreshingUni = false;
+    if (banner) banner.style.display = "none";
+  }
+}
+
+async function refreshPublicationRecovery() {
+  await refreshUnifiedSchedule();
+}
+
+function collectUnifiedSpecs() {
+  const pSpec = stateCache.prodSpec || { profile_name: "CUSTOM", timezone_name: "Asia/Kolkata", cycles: [] };
+  pSpec.timezone_name = document.getElementById("pubTimezone").value.trim() || "Asia/Kolkata";
+  pSpec.cycles = (pSpec.cycles || []).map((c, idx) => ({
+    cycle_id: c.cycle_id || `cycle_${idx + 1}`,
+    name: c.name || `Cycle ${idx + 1}`,
+    start_time: c.start_time || "00:00",
+    recovery_duration_minutes: Number(c.recovery_duration_minutes ?? 240),
+    target_publish_time: c.target_publish_time || "06:00",
+    active_weekdays: Array.isArray(c.active_weekdays) && c.active_weekdays.length ? c.active_weekdays : [0, 1, 2, 3, 4, 5, 6],
+    next_day: Boolean(c.next_day),
+    enabled: c.enabled !== false
+  }));
+
+  const pubSpec = stateCache.pubSpec || { slots: [] };
+  pubSpec.timezone_name = pSpec.timezone_name;
+  pubSpec.missed_slot_behavior = document.getElementById("pubMissedBehavior").value;
+  pubSpec.recovery_overlap_policy = document.getElementById("pubOverlapPolicy").value;
+  pubSpec.wait_for_slot = document.getElementById("pubWaitForSlot").value === "true";
+  pubSpec.weekdays = Array.from(document.querySelectorAll(".pub-wd-cb:checked")).map(cb => cb.value);
+  if (!pubSpec.weekdays.length) pubSpec.weekdays = [...WEEKDAYS];
+
+  const activeCycleIds = new Set(pSpec.cycles.map(c => c.cycle_id));
+  pSpec.cycles.forEach(c => {
+    const s = ensureSlotForCycle(c);
+    s.time_ist = c.target_publish_time;
+    s.enabled = c.enabled !== false;
+  });
+  pubSpec.slots = (pubSpec.slots || []).filter(s => !s.mapped_cycle_id || activeCycleIds.has(s.mapped_cycle_id));
+  return { pSpec, pubSpec };
+}
+
+async function saveUnifiedDraft() {
+  if (stateCache.isSubmittingUni) return;
+  stateCache.isSubmittingUni = true;
+  try {
+    const { pSpec, pubSpec } = collectUnifiedSpecs();
+    await apiJson("/api/control-center/unified-schedule/draft", {
+      method: "POST",
+      body: JSON.stringify({ confirm: false, production_spec: pSpec, publication_spec: pubSpec })
+    });
+    stateCache.uniDirty = false;
+    stateCache.uniValidated = false;
+    showToast("Draft saved.");
+    await refreshUnifiedSchedule();
+  } catch (err) {
+    showToast("Save failed: " + err.message, true);
+  } finally {
+    stateCache.isSubmittingUni = false;
+    updateActivationButtons();
+  }
+}
+
+async function validateUnifiedDraft() {
+  if (stateCache.isSubmittingUni) return;
+  stateCache.isSubmittingUni = true;
+  const vBox = document.getElementById("uniValidationBox");
+  try {
+    const { pSpec, pubSpec } = collectUnifiedSpecs();
+    const res = await apiJson("/api/control-center/unified-schedule/validate", {
+      method: "POST",
+      body: JSON.stringify({ confirm: false, production_spec: pSpec, publication_spec: pubSpec })
+    });
+    const lines = [];
+    (res.errors || []).forEach(e => lines.push(`<div style="color:#fca5a5;"><strong>ERROR:</strong> ${e}</div>`));
+    (res.warnings || []).forEach(w => lines.push(`<div style="color:#fcd34d;"><strong>WARNING:</strong> ${w}</div>`));
+    (res.successes || []).forEach(s => lines.push(`<div style="color:#86efac;"><strong>SUCCESS:</strong> ${s}</div>`));
+    if (vBox) {
+      vBox.style.display = "block";
+      vBox.style.borderColor = res.valid ? "#22c55e" : "#ef4444";
+      vBox.innerHTML = lines.join("");
+    }
+    stateCache.uniDirty = false;
+    stateCache.uniValidated = Boolean(res.valid);
+    showToast(res.valid ? "Schedule validation passed." : "Validation found issues.", !res.valid);
+  } catch (err) {
+    stateCache.uniValidated = false;
+    if (vBox) {
+      vBox.style.display = "block";
+      vBox.style.borderColor = "#ef4444";
+      vBox.innerHTML = `<div style="color:#fca5a5;"><strong>ERROR:</strong> ${err.message}</div>`;
+    }
+    showToast("Validation failed: " + err.message, true);
+  } finally {
+    stateCache.isSubmittingUni = false;
+    updateActivationButtons();
+  }
+}
+
+async function activateUnifiedSchedule() {
+  if (!stateCache.uniValidated || stateCache.uniDirty) {
+    showToast("Validate the current schedule before activating.", true);
+    return;
+  }
+  const ok = await askConfirm(
+    "Activate Schedule?",
+    "Applies the validated schedule, updates APScheduler, and verifies scheduler synchronization."
+  );
+  if (!ok || stateCache.isSubmittingUni) return;
+  stateCache.isSubmittingUni = true;
+  updateActivationButtons();
+  const statusBox = document.getElementById("uniActivationStatusBox");
+  try {
+    const { pSpec, pubSpec } = collectUnifiedSpecs();
+    const res = await apiJson("/api/control-center/unified-schedule/activate", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true, production_spec: pSpec, publication_spec: pubSpec })
+    });
+    stateCache.uniDirty = false;
+    stateCache.uniValidated = false;
+    if (statusBox) {
+      statusBox.style.display = "block";
+      if (res.status === "ACTIVE" && res.is_synchronized) {
+        statusBox.style.borderColor = "#22c55e";
+        statusBox.innerHTML = `<strong style="color:#86efac;">GREEN: Schedule Active and Synchronized.</strong>`;
+      } else if (res.status === "ACTIVE") {
+        statusBox.style.borderColor = "#f59e0b";
+        statusBox.innerHTML = `<strong style="color:#fcd34d;">YELLOW: Schedule Activated, Scheduler Synchronization Pending.</strong>`;
       } else {
-        container.style.display = 'none';
-        btn.textContent = 'Toggle Archive Table';
+        statusBox.style.borderColor = "#ef4444";
+        statusBox.innerHTML = `<strong style="color:#fca5a5;">RED: Schedule Activation Failed.</strong> ${res.reason || ""}`;
       }
     }
-
-    function setStatsFilter(filter, el) {
-      currentFilter = filter;
-      document.querySelectorAll('.filter-bar .btn').forEach(b => b.classList.remove('btn-active'));
-      el.classList.add('btn-active');
-      fetchDashboardData(true);
+    showToast("Schedule activated and synchronized.");
+    await refreshControlAndCycles();
+  } catch (err) {
+    if (statusBox) {
+      statusBox.style.display = "block";
+      statusBox.style.borderColor = "#ef4444";
+      statusBox.innerHTML = `<strong style="color:#fca5a5;">RED: Schedule Activation Failed.</strong> ${err.message}`;
     }
+    showToast("Activation failed: " + err.message, true);
+  } finally {
+    stateCache.isSubmittingUni = false;
+    updateActivationButtons();
+  }
+}
 
-    // Adaptive split polling with visibility throttling & single-instance guard
-    async function scheduleNextRefresh() {
-      if (pollTimer) {
-        clearTimeout(pollTimer);
-        pollTimer = null;
-      }
-      if (!document.hidden) {
-        await fetchDashboardData(lastHeavyFetchAt === 0);
-      } else {
-        const rateBadge = document.getElementById('obsRefreshRateBadge');
-        if (rateBadge) rateBadge.textContent = 'Poll: PAUSED (Tab Hidden)';
-      }
-      pollTimer = setTimeout(scheduleNextRefresh, currentPollMs);
-    }
+async function cancelUnifiedDraft() {
+  const ok = await askConfirm("Discard Draft?", "Discard unsaved schedule draft changes and restore the active schedule?");
+  if (!ok) return;
+  await Promise.all([
+    apiJson("/api/control-center/schedule/draft", { method: "DELETE" }),
+    apiJson("/api/control-center/publication-schedule/cancel", { method: "POST" })
+  ]);
+  stateCache.uniDirty = false;
+  stateCache.uniValidated = false;
+  const vBox = document.getElementById("uniValidationBox");
+  if (vBox) vBox.style.display = "none";
+  showToast("Draft discarded.");
+  await refreshUnifiedSchedule();
+}
 
-    if (!window.__crazzydocsPollInitialized) {
-      window.__crazzydocsPollInitialized = true;
-      document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-          scheduleNextRefresh();
-        }
-      });
-      scheduleNextRefresh();
-    }
-  </script>
+function renderStorageFields(cfg) {
+  const wrap = document.getElementById("storageFieldsWrap");
+  wrap.innerHTML = STORAGE_KEYS.map(([key, label]) => `
+    <div>
+      <label class="field-label">${label}</label>
+      <div style="display:flex;gap:6px;">
+        <input type="text" id="storage_${key}" value="${cfg[key] || ""}" />
+        <button class="btn sm" onclick="openBrowseModal('${key}')">Browse</button>
+        <button class="btn sm" onclick="openStorageFolder('${key}')">Open</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function collectStorageCfg() {
+  const out = {};
+  STORAGE_KEYS.forEach(([key]) => {
+    out[key] = document.getElementById(`storage_${key}`).value.trim();
+  });
+  return out;
+}
+
+async function validateStoragePaths() {
+  try {
+    const res = await apiJson("/api/control-center/storage-config/validate", {
+      method: "POST",
+      body: JSON.stringify({ ...collectStorageCfg(), confirm: true })
+    });
+    document.getElementById("storageDiskFree").textContent = `Disk: ${res.disk_free_gb ?? "--"} GB free`;
+    if (!res.valid) showToast("Storage validation failed: " + (res.errors || []).join("; "), true);
+    else showToast("All storage directories verified writable!");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function saveStoragePaths() {
+  const ok = await askConfirm("Save Canonical Storage Paths?", "Applies to future productions and outputs. Historical files stay intact.");
+  if (!ok) return;
+  try {
+    const res = await apiJson("/api/control-center/storage-config", {
+      method: "POST",
+      body: JSON.stringify({ ...collectStorageCfg(), confirm: true })
+    });
+    document.getElementById("storageDiskFree").textContent = `Disk: ${(res.validation || {}).disk_free_gb ?? "--"} GB free`;
+    showToast("Storage paths saved!");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function openStorageFolder(key) {
+  const p = document.getElementById(`storage_${key}`).value.trim();
+  try {
+    await apiJson("/api/control-center/storage/open-folder", {
+      method: "POST",
+      body: JSON.stringify({ path: p })
+    });
+    showToast("Opened folder in Explorer.");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function openBrowseModal(key) {
+  stateCache.browseTargetKey = key;
+  const startPath = document.getElementById(`storage_${key}`).value.trim();
+  await loadBrowseDir(startPath);
+  document.getElementById("browseModal").style.display = "flex";
+}
+
+async function loadBrowseDir(path) {
+  const res = await apiJson(`/api/control-center/storage/browse?path=${encodeURIComponent(path || "")}`);
+  stateCache.browseCurrent = res.current;
+  stateCache.browseParent = res.parent;
+  document.getElementById("browseCurrentPath").textContent = res.current;
+  const list = document.getElementById("browseDirList");
+  list.innerHTML = (res.directories || []).map(d => `
+    <div style="padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--border);" onclick="loadBrowseDir('${d.replace(/\\/g, "\\\\")}')">${d}</div>
+  `).join("") || `<div style="padding:8px;color:var(--muted);">No subdirectories</div>`;
+}
+
+function browseUp() { loadBrowseDir(stateCache.browseParent); }
+function closeBrowseModal() { document.getElementById("browseModal").style.display = "none"; }
+function selectBrowsedPath() {
+  if (stateCache.browseTargetKey) {
+    document.getElementById(`storage_${stateCache.browseTargetKey}`).value = stateCache.browseCurrent;
+  }
+  closeBrowseModal();
+}
+
+async function saveProductionConfig() {
+  const ok = await askConfirm("Save Production Config?", "Updates renderer/concurrency/QC settings for future jobs. Renderer remains pinned to Lemo-Opuscar.");
+  if (!ok) return;
+  try {
+    await apiJson("/api/control-center/production-config", {
+      method: "POST",
+      body: JSON.stringify({
+        renderer: "lemo-opuscar",
+        concurrency: Number(document.getElementById("selectConcurrency").value),
+        duration_target_sec: Number(document.getElementById("cfgDuration").value),
+        resolution: "1080x1920",
+        fps: 30,
+        beat_count: Number(document.getElementById("cfgBeats").value),
+        diversity_min_assets: Number(document.getElementById("cfgDiversity").value),
+        qc_strictness: document.getElementById("cfgQcStrictness").value,
+        recovery_policy: document.getElementById("cfgRecoveryPolicy").value,
+        max_cpu_pct: Number(document.getElementById("cfgMaxCpu").value),
+        max_ram_pct: Number(document.getElementById("cfgMaxRam").value),
+        retry_limit: 2,
+        confirm: true
+      })
+    });
+    showToast("Production configuration saved!");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function applyOperatingMode() {
+  const mode = document.getElementById("selectOperatingMode").value;
+  const ok = await askConfirm(`Switch Operating Mode to ${mode}?`, "Immediate effect on upcoming scheduled cycles. No restart required.");
+  if (!ok) return;
+  try {
+    await apiJson("/api/control-center/operating-mode/activate", {
+      method: "POST",
+      body: JSON.stringify({ mode, confirm: true })
+    });
+    showToast(`Operating mode switched to ${mode}.`);
+    refreshOverviewAndHealth();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function applyPubPolicy() {
+  const policy = document.getElementById("selectPubPolicy").value;
+  const ok = await askConfirm(`Switch Publishing Policy to ${policy}?`, "Automatic mode uploads QC-passed videos as private + UTC publishAt with zero manual clicks.");
+  if (!ok) return;
+  try {
+    await apiJson("/api/control-center/publishing/policy", {
+      method: "PUT",
+      body: JSON.stringify({ mode: policy, confirm: true })
+    });
+    showToast(`Publishing policy updated to ${policy}.`);
+    refreshOverviewAndHealth();
+    refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function toggleScheduler(enable) {
+  const ok = await askConfirm(`${enable ? "Enable" : "Disable"} Production Scheduler?`, "Updates Windows Scheduled Task CrazzyDocs-Production-Scheduler.");
+  if (!ok) return;
+  try {
+    await apiJson(enable ? "/api/control-center/scheduler/enable" : "/api/control-center/scheduler/disable", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true })
+    });
+    showToast(`Scheduler ${enable ? "enabled" : "disabled"}.`);
+    refreshOverviewAndHealth();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function controlProduction(action) {
+  const ok = await askConfirm(`Send ${action.toUpperCase()} signal?`, `Applies to the active production pipeline.`);
+  if (!ok) return;
+  try {
+    await apiJson(`/api/control-center/production/${action}`, { method: "POST", body: JSON.stringify({ reason: "Dashboard operator" }) });
+    showToast(`Production ${action} signal sent.`);
+    refreshPipeline();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function approveManualUpload(ledgerId) {
+  const ok = await askConfirm(`Approve Upload #${ledgerId}?`, "Uploads video to YouTube as private (or scheduled publishAt if configured).");
+  if (!ok) return;
+  try {
+    await apiJson(`/api/stage-3-22/publishing/${ledgerId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ confirmed: true })
+    });
+    showToast(`Upload #${ledgerId} submitted.`);
+    refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function verifyScheduledNow() {
+  try {
+    const res = await apiJson("/api/publishing/verify-scheduled", { method: "POST" });
+    showToast(`Verified ${res.checked || 0} scheduled video(s), promoted ${res.promoted || 0}.`);
+    refreshPublishing();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function refreshProcesses() {
+  try {
+    const res = await apiJson("/api/control-center/processes");
+    const procs = res.processes || [];
+    document.getElementById("processTableBody").innerHTML = procs.map(p => `
+      <tr>
+        <td>${p.pid}</td>
+        <td><strong>${p.name}</strong></td>
+        <td>${p.role}</td>
+        <td>${p.memory_mb} MB</td>
+        <td>${p.status}</td>
+        <td><span class="chip completed">${p.window_mode}</span></td>
+      </tr>
+    `).join("") || `<tr><td colspan="6" style="color:var(--muted)">No matching CrazzyDocs processes detected.</td></tr>`;
+  } catch (err) {
+    showToast("Process monitor error: " + err.message, true);
+  }
+}
+
+async function refreshLogs() {
+  try {
+    const lvl = document.getElementById("logLevelFilter").value;
+    const q = document.getElementById("logSearchInput").value;
+    const res = await apiJson(`/api/control-center/logs?level=${encodeURIComponent(lvl)}&search=${encodeURIComponent(q)}&limit=100`);
+    const box = document.getElementById("logsContainer");
+    const entries = res.entries || [];
+    box.innerHTML = entries.map(e => `<div class="log-line"><strong>[${e.file}]</strong> ${e.message.replace(/</g, "&lt;")}</div>`).join("")
+      || `<div style="color:var(--muted)">No matching log lines.</div>`;
+  } catch (err) {
+    showToast("Logs fetch error: " + err.message, true);
+  }
+}
+
+async function refreshAll() {
+  await Promise.all([
+    refreshOverviewAndHealth(),
+    refreshControlAndCycles(),
+    refreshPipeline(),
+    refreshPublishing()
+  ]);
+}
+
+refreshAll();
+setInterval(() => {
+  refreshOverviewAndHealth();
+  refreshPipeline();
+}, 8000);
+</script>
 </body>
 </html>

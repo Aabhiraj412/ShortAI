@@ -116,6 +116,8 @@ class ContentIntegrityGate:
         rendering_engine: Optional[str] = None,
         storyboard_beats: Optional[List[Dict]] = None,
         production_workspace_dir: Optional[str] = None,
+        execution_context: Optional[str] = None,
+        render_telemetry: Optional[Dict[str, Any]] = None,
     ) -> ContentIntegrityReport:
         """
         Executes complete 11-point Content Integrity Audit (A through K).
@@ -314,6 +316,23 @@ class ContentIntegrityGate:
             topic_title=topic_title,
         )
         rend_ok, rend_issues = CreativeIdentityPolicy.validate_renderer_selection(rendering_engine or "CleanSlateRenderer")
+        prod_rend_ok, prod_rend_issues = CreativeIdentityPolicy.validate_production_renderer(
+            rendering_engine or "",
+            execution_context=execution_context,
+            telemetry=render_telemetry,
+        )
+        if not prod_rend_ok:
+            report.add_result(
+                "CHECK_N_RENDERER_COMPLIANCE",
+                False,
+                "; ".join(prod_rend_issues),
+            )
+        else:
+            report.add_result(
+                "CHECK_N_RENDERER_COMPLIANCE",
+                True,
+                f"Approved renderer verified ({rendering_engine or 'test-mode'}).",
+            )
 
         all_violations = rend_issues + policy_res.violations
         if manifest_assets:

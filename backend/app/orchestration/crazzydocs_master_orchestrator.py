@@ -20,15 +20,25 @@ Executes the unified 14-stage autonomous production lifecycle:
 """
 
 import asyncio
+from collections import Counter
+from contextvars import ContextVar
+from backend.app.core.async_helpers import run_coro_sync
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import time
 from typing import Dict, List, Optional, Tuple
+from unittest.mock import NonCallableMock
+from zoneinfo import ZoneInfo
+
+suppress_orchestrator_completion_email: ContextVar[bool] = ContextVar(
+    "suppress_orchestrator_completion_email", default=False
+)
 
 from backend.app.core.config import settings
 from backend.app.core.execution_context import (
@@ -85,6 +95,10 @@ FFMPEG_EXE = os.path.join(WORKSPACE, "tools", "ffmpeg", "bin", "ffmpeg.exe")
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 os.makedirs(AUDIT_DIR, exist_ok=True)
+
+
+class ProductionGracefulStop(Exception):
+    """Raised cleanly at safe stage boundaries when an operator requests graceful stop."""
 
 
 class CrazzyDocsMasterOrchestrator:
@@ -207,6 +221,25 @@ class CrazzyDocsMasterOrchestrator:
                     job.current_stage = stage
                     job.progress_pct = progress
                     job.heartbeat_at = datetime.utcnow()
+                    try:
+                        from backend.app.services.lifecycle_events import record_lifecycle_event
+                        cid = "_".join(job_id.split("_")[:2]) if "_" in job_id else None
+                        record_lifecycle_event(
+                            "PIPELINE_STAGE_CHANGED",
+                            "RUNNING",
+                            cycle_id=cid,
+                            job_id=job_id,
+                            details={"stage": stage, "progress_pct": progress},
+                        )
+                    except Exception:
+                        pass
+                    if stage_data.get("topic_title"):
+                        job.topic_title = str(stage_data["topic_title"])[:255]
+                    try:
+                        from backend.app.services.control_center_service import get_publishing_policy
+                        job.publishing_mode = get_publishing_policy().upper()
+                    except Exception:
+                        pass
                     cur_data = {}
                     if job.checkpoint_data_json:
                         try:
@@ -218,6 +251,20 @@ class CrazzyDocsMasterOrchestrator:
                     db_session.commit()
         except Exception as e:
             logger.warning("[CHECKPOINT] Failed to persist stage %s checkpoint: %s", stage, e)
+
+    def _check_control_signal(self, job_id: str, persist_to_db: bool) -> None:
+        """Honors operator pause/graceful-stop signals cleanly between stages."""
+        try:
+            from backend.app.services import control_center_service
+            signal = control_center_service.wait_or_check_production_control(
+                job_id=job_id if persist_to_db else None,
+            )
+            if signal == "STOP":
+                raise ProductionGracefulStop("Operator requested graceful stop")
+        except ProductionGracefulStop:
+            raise
+        except Exception:
+            pass
 
     def execute_production_pipeline(
         self,
@@ -251,6 +298,10 @@ class CrazzyDocsMasterOrchestrator:
             f"val_3_21j_{now_str}" if execution_context == ExecutionContext.VALIDATION else f"job_{now_str}"
         )
         t_start = time.perf_counter()
+        start_time_ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
+        attrib_json_path = ""
+        subtitle_path = ""
+        winning_thumb_score: Optional[float] = None
         logger.info(
             "=== STARTING AUTONOMOUS PRODUCTION RUN: %s (Context: %s, LivePipeline: %s) ===",
             job_id,
@@ -298,12 +349,17 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             if existing_cp.get("topic_title") and existing_cp.get("hook_text"):
                 logger.info("[CHECKPOINT RECOVERY] Resuming with saved topic: '%s'", existing_cp["topic_title"])
+                fallback_wiki = f"https://en.wikipedia.org/wiki/{existing_cp['topic_title'].replace(' ', '_')}"
                 selected_topic = ScoredTopic(
                     id=f"topic_{job_id}",
                     title=existing_cp["topic_title"],
                     category=existing_cp.get("category", "history"),
                     category_code="H",
                     summary=existing_cp.get("topic_summary", existing_cp["topic_title"]),
+                    extended_extract=existing_cp.get("extended_extract", ""),
+                    factual_bullets=existing_cp.get("factual_bullets", []),
+                    coordinates=existing_cp.get("coordinates"),
+                    discovery_source=existing_cp.get("discovery_source", "checkpoint_recovery"),
                     curiosity=9.5,
                     surprise=9.0,
                     storytelling=9.2,
@@ -311,7 +367,7 @@ class CrazzyDocsMasterOrchestrator:
                     emotional_connection=9.0,
                     factual_reliability=9.5,
                     composite_score=9.3,
-                    sources=existing_cp.get("sources", ["https://en.wikipedia.org/wiki/Tsutomu_Yamaguchi"]),
+                    sources=existing_cp.get("sources") or [fallback_wiki],
                     key_entities=existing_cp.get("key_entities", []),
                 )
                 from backend.app.content.curiosity_topic_engine import HookCandidate
@@ -402,6 +458,11 @@ class CrazzyDocsMasterOrchestrator:
                     self._update_checkpoint(job_id, "STORY_DEVELOPMENT", 30.0, {
                         "topic_title": selected_topic.title,
                         "topic_summary": selected_topic.summary,
+                        "extended_extract": getattr(selected_topic, "extended_extract", ""),
+                        "factual_bullets": getattr(selected_topic, "factual_bullets", []),
+                        "sources": getattr(selected_topic, "sources", []),
+                        "coordinates": getattr(selected_topic, "coordinates", None),
+                        "discovery_source": getattr(selected_topic, "discovery_source", "live"),
                         "hook_text": best_hook.hook_text,
                         "category": selected_topic.category,
                         "key_entities": selected_topic.key_entities,
@@ -410,6 +471,7 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 5 & 6 & 7: Creative Direction, Media & Storyboard
             # -------------------------------------------------------------
+            self._check_control_signal(job_id, persist_to_db)
             production_observability.update_topic(job_id, selected_topic.title)
             production_observability.complete_stage(job_id, "topic_discovery", f"Selected '{selected_topic.title}'")
             obs_stage = "research"
@@ -584,16 +646,32 @@ class CrazzyDocsMasterOrchestrator:
                 storyboard_beats = list((plan.metadata or {}).get("storyboard_beats", []))
                 sb_meta = plan.metadata or {}
                 src_sum = dict(sb_meta.get("visual_sourcing_summary") or {})
-                total_reused_slots = max(0, len([b for b in storyboard_beats if b.get("visual_type") in ("historical_photo", "documentary_image")]) - len({b.get("asset_hash") for b in storyboard_beats if b.get("visual_type") in ("historical_photo", "documentary_image")}))
+                total_reused_slots = int(src_sum.get("reused_source_images", 0))
+                visual_diversity = {
+                    key: src_sum.get(key, 0)
+                    for key in (
+                        "total_visual_beats",
+                        "unique_photographic_assets",
+                        "unique_video_assets",
+                        "unique_maps",
+                        "unique_diagrams",
+                        "generated_images",
+                        "animations",
+                        "reused_source_images",
+                        "near_duplicate_groups",
+                        "max_source_photo_reuse",
+                    )
+                }
+                c_policy = get_creative_production_policy(execution_context)
                 production_observability.update_assets(
                     job_id,
-                    unique_images=int(src_sum.get("authentic_images_acquired", sb_meta.get("unique_images", unique_img_count))),
-                    generated_images=int(src_sum.get("priority_d_generated_image_beats", 0)),
-                    animations=int(sb_meta.get("unique_animations", 0)),
+                    unique_images=int(src_sum.get("unique_photographic_assets", src_sum.get("authentic_images_acquired", unique_img_count))),
+                    generated_images=int(src_sum.get("generated_images", 0)),
+                    animations=int(src_sum.get("unique_video_assets", sb_meta.get("unique_animations", 0))),
                     reused_images=total_reused_slots,
+                    max_allowed_reuse=c_policy.visual_policy.max_image_reuse,
                     status="COMPLETE",
                 )
-                c_policy = get_creative_production_policy(execution_context)
                 attr_complete_count = sum(
                     1 for ma in manifest_assets
                     if ma.get("license") and ma.get("source_url") and ma.get("creator")
@@ -605,6 +683,15 @@ class CrazzyDocsMasterOrchestrator:
                     supported_categories_count=len(c_policy.list_categories()),
                     category_distribution=CategoryDistributionTracker().get_distribution_counts(window=20),
                     topic_score_breakdown=getattr(selected_topic, "score_breakdown", {}) or {},
+                    visual_style_distribution=dict(src_sum.get("visual_style_distribution") or {}),
+                    scene_layout_distribution=dict(src_sum.get("scene_layout_distribution") or {}),
+                    primary_creative_direction=str(src_sum.get("primary_creative_direction") or "documentary"),
+                    composer_distribution=dict(Counter(
+                        str(beat.get("composer_id") or "legacy_adaptive_composer")
+                        for beat in (sb_meta.get("storyboard_beats") or [])
+                    )),
+                    film_treatment=(sb_meta.get("film_treatment") or {}),
+                    visual_diversity=visual_diversity,
                     authentic_images_acquired=int(src_sum.get("authentic_images_acquired", unique_img_count)),
                     existing_animations_acquired=int(src_sum.get("existing_animations_acquired", existing_anim_count)),
                     animated_authentic_composites=int(src_sum.get("priority_c_animated_authentic_beats", 0)),
@@ -616,7 +703,7 @@ class CrazzyDocsMasterOrchestrator:
                 )
                 production_observability.complete_stage(job_id, "image_generation", "Analytical illustrations saved in assets/generated/")
                 production_observability.complete_stage(job_id, "animation_generation", f"Rendered {sb_meta.get('unique_animations', 0)} 30 FPS explainer animations")
-                production_observability.complete_stage(job_id, "storyboard_generation", f"20-beat storyboard verified ({sb_meta.get('distinct_visual_assets', 0)} distinct visual assets)")
+                production_observability.complete_stage(job_id, "storyboard_generation", f"20-beat adaptive storyboard verified ({sb_meta.get('distinct_visual_assets', 0)} distinct visual assets)")
 
                 timeline_json_path = os.path.join(prod_ws.visual_timeline_dir, f"storyboard_{job_id}.json")
                 if os.path.isfile(timeline_json_path):
@@ -633,12 +720,17 @@ class CrazzyDocsMasterOrchestrator:
                             "beat_count": len(storyboard_beats),
                             "distinct_visual_assets": sb_meta.get("distinct_visual_assets", 0),
                             "max_image_reuse_observed": sb_meta.get("max_image_reuse_observed", 0),
+                            "visual_diversity": visual_diversity,
+                            "visual_style_distribution": src_sum.get("visual_style_distribution", {}),
+                            "scene_layout_distribution": src_sum.get("scene_layout_distribution", {}),
+                            "primary_creative_direction": src_sum.get("primary_creative_direction", "documentary"),
                         },
                         "acquired_assets": manifest_assets,
                         "beats": storyboard_beats,
                     }, f, indent=2)
                 prod_ws.register_artifact("STAGE_07_ASSET_INVENTORY", "audit", asset_inv_path, copy_into_workspace=False)
-                rendered_engine_name = "HybridVisualEngine"
+                rendered_engine_name = "lemo-opuscar"
+                render_telemetry: Dict[str, Any] = {}
             else:
                 narration_text = self._synthesize_topic_script(selected_topic, best_hook.hook_text)
                 dur = max(50.5, min(58.5, round(len(narration_text.split()) / 2.3, 2)))
@@ -675,56 +767,142 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 9: Video Rendering & Composition (Canonical Workspace Only)
             # -------------------------------------------------------------
+            self._check_control_signal(job_id, persist_to_db)
             obs_stage = "video_rendering"
             production_observability.start_stage(job_id, "video_rendering", "Preparing FFmpeg video rendering pipeline...", progress=2.0)
             final_video_path = prod_ws.get_canonical_video_path()
+            _reuse_video = False
             if prod_ws.has_verified_deliverable():
+                try:
+                    from backend.app.services.animation_service import probe_video as _probe_cached_video
+                    _cached_dur = float((_probe_cached_video(final_video_path) or {}).get("duration", 0.0))
+                    _cached_manifest = prod_ws.load_manifest() or {}
+                    _cached_renderer = str(_cached_manifest.get("renderer") or "").strip().lower()
+                    _renderer_ok = (not is_full_live) or (_cached_renderer == "lemo-opuscar")
+                    if _renderer_ok and (not is_full_live or (50.0 <= _cached_dur < 60.0)) and abs(_cached_dur - dur) <= 1.5:
+                        _reuse_video = True
+                    else:
+                        logger.warning(
+                            "[PRODUCTION WORKSPACE IDEMPOTENCY] Ignoring stale deliverable %s (probed=%.2fs, expected=%.2fs, renderer=%s).",
+                            final_video_path, _cached_dur, dur, _cached_renderer or "unknown",
+                        )
+                except Exception:
+                    _reuse_video = False
+
+            if _reuse_video:
                 logger.info("[PRODUCTION WORKSPACE IDEMPOTENCY] Reusing canonical deliverable: %s", final_video_path)
                 production_observability.complete_stage(job_id, "video_rendering", "Reused verified canonical video deliverable")
-            elif existing_cp.get("video_path") and os.path.isfile(existing_cp["video_path"]) and os.path.getsize(existing_cp["video_path"]) > 1024:
+            elif (
+                not is_full_live
+                and existing_cp.get("video_path")
+                and os.path.isfile(existing_cp["video_path"])
+                and os.path.getsize(existing_cp["video_path"]) > 1024
+            ):
                 final_video_path = existing_cp["video_path"]
                 logger.info("[CHECKPOINT RECOVERY] Reusing verified video render: %s", final_video_path)
                 production_observability.complete_stage(job_id, "video_rendering", "Resumed verified video render")
             elif is_full_live and plan is not None:
-                logger.info("[STAGE 9] Rendering %d-beat 1080x1920 @ 30 FPS documentary Short via HybridVisualEngine...", len(plan.scenes))
-                hybrid_engine = HybridVisualEngine(workspace_root=WORKSPACE)
-                render_work_dir = os.path.join(prod_ws.prod_dir, "render_work")
+                from backend.app.content.creative_identity_policy import CreativeIdentityPolicy
+                from backend.app.core.process_utils import hidden_subprocess_kwargs
+                from backend.app.rendering.lemo_opuscar_adapter import LemoOpuscarAdapter, PINNED_COMMIT
+                from backend.app.rendering.lemo_opuscar_film_builder import LemoOpuscarFilmBuilder
 
-                def _render_progress_cb(
-                    completed_scenes: int,
-                    total_scenes: int,
-                    beat_id: str,
-                    operation: str,
-                    ffmpeg_status: str,
-                ) -> None:
-                    tot = max(1, int(total_scenes or len(plan.scenes)))
-                    pct = round((min(completed_scenes, tot) / tot) * 90.0, 1)
-                    if ffmpeg_status == "COMPOSITING":
-                        pct = 93.0
-                    elif ffmpeg_status == "FINALIZING_ENCODE":
-                        pct = 97.0
-                    production_observability.update_rendering(
-                        job_id,
-                        current_operation=str(operation),
-                        current_beat_index=min(tot, int(completed_scenes) + (1 if completed_scenes < tot else 0)),
-                        current_beat_id=str(beat_id),
-                        completed_scenes=int(completed_scenes),
-                        total_scenes=tot,
-                        progress_pct=pct,
-                        ffmpeg_status=str(ffmpeg_status),
-                    )
-
-                render_telemetry = asyncio.run(
-                    hybrid_engine.render_storyboard(
-                        plan=plan,
-                        output_final_mp4=final_video_path,
-                        work_dir=render_work_dir,
-                        progress_callback=_render_progress_cb,
-                    )
+                rend_ok, rend_issues = CreativeIdentityPolicy.validate_production_renderer(
+                    rendered_engine_name,
+                    execution_context=execution_context.value,
                 )
+                if not rend_ok:
+                    raise RuntimeError(f"Renderer compliance error: {'; '.join(rend_issues)}")
+
+                logger.info(
+                    "[STAGE 9] Rendering %d-beat 1080x1920 @ 30 FPS documentary Short via Lemo-Opuscar (%s)...",
+                    len(plan.scenes), PINNED_COMMIT[:10],
+                )
+                production_observability.update_rendering(
+                    job_id,
+                    current_operation="Building Lemo-Opuscar deterministic film package",
+                    current_beat_index=1,
+                    current_beat_id="beat_01",
+                    completed_scenes=0,
+                    total_scenes=len(plan.scenes),
+                    progress_pct=15.0,
+                    ffmpeg_status="PREPARING_LEMO_FILM",
+                )
+                film_manifest = LemoOpuscarFilmBuilder.build_film_package(
+                    prod_dir=Path(prod_ws.prod_dir),
+                    job_id=job_id,
+                    topic=selected_topic.title,
+                    script_data=script_data or {"title": selected_topic.title, "hook": best_hook.hook_text},
+                    storyboard=storyboard_beats,
+                    section_timings={"sections": section_timings} if isinstance(section_timings, list) else (section_timings or {}),
+                    duration_sec=dur,
+                    category=selected_topic.category,
+                )
+                production_observability.update_rendering(
+                    job_id,
+                    current_operation="Rendering frames via Lemo-Opuscar video.mjs",
+                    current_beat_index=max(1, len(plan.scenes) // 2),
+                    current_beat_id="lemo_render",
+                    completed_scenes=max(1, len(plan.scenes) // 2),
+                    total_scenes=len(plan.scenes),
+                    progress_pct=55.0,
+                    ffmpeg_status="LEMO_OPUSCAR_RENDERING",
+                )
+                lemo_adapter = LemoOpuscarAdapter()
+                silent_lemo_mp4 = Path(prod_ws.prod_dir) / "lemo_film" / f"silent_{job_id}.mp4"
+                lemo_adapter.render_video(
+                    workspace=Path(WORKSPACE),
+                    demo_dir=Path(film_manifest["demo_dir"]),
+                    output_path=silent_lemo_mp4,
+                    fps=30,
+                    size=(1080, 1920),
+                )
+                production_observability.update_rendering(
+                    job_id,
+                    current_operation="Muxing calibrated narration & finalizing 1080x1920 MP4",
+                    current_beat_index=len(plan.scenes),
+                    current_beat_id="mux",
+                    completed_scenes=len(plan.scenes),
+                    total_scenes=len(plan.scenes),
+                    progress_pct=92.0,
+                    ffmpeg_status="FINALIZING_ENCODE",
+                )
+                mux_cmd = [
+                    FFMPEG_EXE, "-y",
+                    "-i", str(silent_lemo_mp4),
+                    "-i", str(voice_path),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+                    "-shortest", "-movflags", "+faststart",
+                    final_video_path,
+                ]
+                mux_proc = subprocess.run(
+                    mux_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    **hidden_subprocess_kwargs(),
+                )
+                if mux_proc.returncode != 0 or not os.path.isfile(final_video_path):
+                    raise RuntimeError(f"FFmpeg audio mux failed after Lemo-Opuscar render: {mux_proc.stderr[-500:]}")
+
                 from backend.app.services.animation_service import probe_video
                 probed = probe_video(final_video_path)
                 dur = round(float(probed.get("duration", dur)), 2)
+                render_telemetry = {
+                    "renderer": "lemo-opuscar",
+                    "engine": f"Lemo-Opuscar ({PINNED_COMMIT[:10]})",
+                    "pinned_commit": PINNED_COMMIT,
+                    "fallback_used": False,
+                    "demo_dir": film_manifest["demo_dir"],
+                    "beat_count": film_manifest["beat_count"],
+                    "unique_asset_count": film_manifest["unique_asset_count"],
+                }
+                manifest_data = prod_ws.load_manifest() or {}
+                manifest_data["renderer"] = "lemo-opuscar"
+                manifest_data["pinned_commit"] = PINNED_COMMIT
+                manifest_data["fallback_used"] = False
+                prod_ws.save_manifest(manifest_data)
                 render_meta_path = os.path.join(prod_ws.reports_dir, f"render_telemetry_{job_id}.json")
                 with open(render_meta_path, "w", encoding="utf-8") as f:
                     json.dump({"render_telemetry": render_telemetry, "probed_video": probed}, f, indent=2)
@@ -770,6 +948,7 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 10: Professional Thumbnail Generation (Canonical Workspace Only)
             # -------------------------------------------------------------
+            self._check_control_signal(job_id, persist_to_db)
             obs_stage = "thumbnail_generation"
             production_observability.start_stage(job_id, "thumbnail_generation", "Initializing multi-candidate thumbnail generator...", progress=10.0)
             thumb_path = prod_ws.get_canonical_thumbnail_path()
@@ -839,11 +1018,13 @@ class CrazzyDocsMasterOrchestrator:
                     progress_callback=_thumb_progress_cb,
                 )
                 winning_headline = winning_thumb.headline_text
+                winning_thumb_score = getattr(getattr(winning_thumb, "score", None), "composite_score", None)
                 production_observability.complete_stage(job_id, "thumbnail_generation", f"Selected winning thumbnail '{winning_headline}' (Score {winning_thumb.score.composite_score:.1f})")
                 if persist_to_db:
                     self._update_checkpoint(job_id, "THUMBNAIL", 85.0, {
                         "thumbnail_path": thumb_path,
                         "winning_thumbnail": winning_headline,
+                        "thumbnail_score": winning_thumb_score,
                     })
             prod_ws.register_artifact("STAGE_10_THUMBNAIL", "thumbnail", thumb_path, copy_into_workspace=False, format="png")
 
@@ -889,6 +1070,8 @@ class CrazzyDocsMasterOrchestrator:
                     storyboard_beats=storyboard_beats,
                     workspace_dir=prod_ws.prod_dir,
                     topic_title=selected_topic.title,
+                    rendering_engine=rendered_engine_name,
+                    execution_context=execution_context.value,
                 )
                 qc_report_path = os.path.join(prod_ws.reports_dir, f"qc_report_{job_id}.json")
                 with open(qc_report_path, "w", encoding="utf-8") as f:
@@ -913,6 +1096,8 @@ class CrazzyDocsMasterOrchestrator:
                 rendering_engine=rendered_engine_name,
                 storyboard_beats=storyboard_beats,
                 production_workspace_dir=prod_ws.prod_dir,
+                execution_context=execution_context.value,
+                render_telemetry=locals().get("render_telemetry"),
             )
 
             integrity_audit_path = os.path.join(prod_ws.prod_dir, "audit", f"integrity_report_{job_id}.json")
@@ -954,6 +1139,14 @@ class CrazzyDocsMasterOrchestrator:
             # -------------------------------------------------------------
             # Stage 12: Production Database Persistence
             # -------------------------------------------------------------
+            resolved_visual_style = existing_cp.get("storytelling_style") or "adaptive_multi_style"
+            resolved_narrative_archetype = existing_cp.get("narrative_archetype") or "Documentary Short"
+            resolved_attrib_path = attrib_json_path or existing_cp.get("attribution_manifest_path") or prod_ws.manifest_path
+            resolved_subtitle_path = subtitle_path or existing_cp.get("subtitle_path") or "Burned-in / Embedded in Video"
+            resolved_thumb_score = winning_thumb_score if winning_thumb_score is not None else existing_cp.get("thumbnail_score")
+            elapsed = time.perf_counter() - t_start
+            completion_time_ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
+
             if persist_to_db:
                 logger.info("[STAGE 12] Recording publication state in database...")
                 with SessionLocal() as db_session:
@@ -963,14 +1156,25 @@ class CrazzyDocsMasterOrchestrator:
                         job.current_stage = "COMPLETED"
                         job.topic_title = selected_topic.title
                         job.progress_pct = 100.0
-                        job.checkpoint_data_json = json.dumps({
+                        completed_checkpoint = json.loads(job.checkpoint_data_json or "{}")
+                        completed_checkpoint.update({
                             "video_path": final_video_path,
                             "thumbnail_path": thumb_path,
                             "duration_sec": dur,
+                            "total_duration_sec": round(elapsed, 2),
                             "topic": selected_topic.title,
+                            "video_title": meta.title,
+                            "storytelling_style": resolved_visual_style,
+                            "narrative_archetype": resolved_narrative_archetype,
+                            "start_time": start_time_ist,
+                            "completion_time": completion_time_ist,
+                            "subtitle_path": resolved_subtitle_path,
+                            "attribution_manifest_path": resolved_attrib_path,
+                            "thumbnail_score": resolved_thumb_score,
                             "hook": best_hook.hook_text,
                             "winning_thumbnail": winning_headline,
                         })
+                        job.checkpoint_data_json = json.dumps(completed_checkpoint)
                         job.completed_at = datetime.utcnow()
                         db_session.commit()
             else:
@@ -982,14 +1186,15 @@ class CrazzyDocsMasterOrchestrator:
                         "execution_context": execution_context.value,
                         "status": "COMPLETED",
                         "topic": selected_topic.title,
+                        "video_title": meta.title,
                         "duration_sec": dur,
+                        "total_duration_sec": round(elapsed, 2),
                         "video_path": final_video_path,
                         "thumbnail_path": thumb_path,
                     }, f, indent=2)
                 prod_ws.register_artifact("STAGE_12_VALIDATION_SUMMARY", "report", val_cp_path, copy_into_workspace=False)
 
             # Record category balance & ledger (TopicLedger strictly skipped outside PRODUCTION)
-            resolved_visual_style = f"{selected_topic.category.lower().replace(' ', '_')}_documentary"
             if is_full_live and not job_id.startswith("test_") and not os.environ.get("PYTEST_CURRENT_TEST"):
                 try:
                     CategoryDistributionTracker().record_selection(
@@ -1035,44 +1240,78 @@ class CrazzyDocsMasterOrchestrator:
                 )
 
             # -------------------------------------------------------------
-            # Stage 13: Notification Dispatch
+            # Stage 14 (pre-notification): YouTube Publishing Queue Enqueueing
             # -------------------------------------------------------------
-            logger.info("[STAGE 13] Dispatching success notifications...")
-            notif_res = self.notifier.send_success(
-                video_title=selected_topic.title,
-                topic=selected_topic.title,
-                storytelling_style=resolved_visual_style,
-                duration_sec=dur,
-                video_path=final_video_path,
-                thumbnail_path=thumb_path,
-                qc_status="PASSED",
-                job_id=job_id,
-                execution_context=execution_context,
-            )
-
-            # -------------------------------------------------------------
-            # Stage 14: YouTube Publishing Queue Enqueueing
-            # -------------------------------------------------------------
-            is_auto_public = getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
+            from backend.app.services.control_center_service import is_automatic_publishing_authorized
+            auto_authorized, _ = is_automatic_publishing_authorized()
+            is_auto_public = (getattr(settings, "PUBLISHING_MODE", "") == "automatic_public") or auto_authorized
             target_visibility = "public" if is_auto_public else "private"
             publishing_status = f"enqueued_{target_visibility}"
 
             if execution_context == ExecutionContext.PRODUCTION and not job_id.startswith("test_") and not job_id.startswith("mock_"):
                 logger.info("[STAGE 14] Enqueueing to YouTube Publishing Queue in PRODUCTION context...")
+                from backend.app.scheduler.schedule_profiles import get_active_profile
+                from backend.app.services.control_center_service import (
+                    compute_next_publication_slot,
+                    is_automatic_publishing_authorized,
+                )
+                active_prod_prof = get_active_profile()
+                prod_cycle_id = "_".join(job_id.split("_")[:2]) if "_" in job_id else job_id
+                matched_cycle = next((c for c in active_prod_prof.cycles if job_id.startswith(c.cycle_id + "_")), None)
+                if matched_cycle:
+                    prod_cycle_id = matched_cycle.cycle_id
+                prod_sched_ver = int(getattr(active_prod_prof, "schedule_version", 1))
+                meta_payload = asdict(meta)
+                meta_payload["_schedule_context"] = {
+                    "production_cycle_id": prod_cycle_id,
+                    "production_schedule_version": prod_sched_ver,
+                    "publishing_mode": "user_controlled_schedule",
+                }
+                if persist_to_db:
+                    self._save_checkpoint(
+                        job_id,
+                        "STAGE_14_PUBLISHING_QUEUE",
+                        meta_payload["_schedule_context"],
+                    )
+                try:
+                    from backend.app.services.lifecycle_events import record_lifecycle_event
+                    record_lifecycle_event("VIDEO_GENERATED", "QC_PENDING", cycle_id=prod_cycle_id, job_id=job_id, details={"video_path": final_video_path})
+                    record_lifecycle_event("QC_PASSED", "QC_PASSED", cycle_id=prod_cycle_id, job_id=job_id)
+                except Exception:
+                    pass
                 pub_record = PublicationRecord(
                     id=None,
                     topic_title=selected_topic.title,
                     video_path=final_video_path,
                     thumbnail_path=thumb_path,
-                    metadata_json=json.dumps(asdict(meta)),
+                    metadata_json=json.dumps(meta_payload),
                     youtube_video_id=None,
                     upload_status="pending_queue",
-                    visibility=target_visibility,
+                    visibility="private",
                     video_hash=compute_file_sha256(final_video_path),
                     upload_timestamp=None,
-                    scheduled_timestamp="10:00 AM IST",
+                    scheduled_timestamp=None,
                 )
-                self.publishing_engine.db.record_publication(pub_record, execution_context=execution_context)
+                ledger_id = self.publishing_engine.db.record_publication(pub_record, execution_context=execution_context)
+                publishing_status = "queued_for_user_scheduling"
+                try:
+                    from backend.app.services.lifecycle_events import record_lifecycle_event
+                    record_lifecycle_event(
+                        "PUBLISHING_QUEUE_ENTRY_CREATED",
+                        "COMPLETED",
+                        cycle_id=prod_cycle_id,
+                        job_id=job_id,
+                        details={"ledger_id": ledger_id},
+                    )
+                    record_lifecycle_event(
+                        "PRODUCTION_CYCLE_COMPLETED",
+                        "COMPLETED",
+                        cycle_id=prod_cycle_id,
+                        job_id=job_id,
+                        details={"ledger_id": ledger_id, "video_path": final_video_path},
+                    )
+                except Exception:
+                    pass
             else:
                 publishing_status = (
                     "suppressed_validation_execution"
@@ -1085,28 +1324,90 @@ class CrazzyDocsMasterOrchestrator:
                     job_id,
                 )
 
-            elapsed = time.perf_counter() - t_start
-            production_observability.complete_production(
-                job_id,
-                f"Completed '{selected_topic.title}' in {elapsed:.1f}s ({len(visual_beats)} beats)",
-            )
-            logger.info("=== MASTER PIPELINE COMPLETED IN %.1fs ===", elapsed)
-            return {
+            # -------------------------------------------------------------
+            # Stage 13: Canonical Notification Dispatch
+            # -------------------------------------------------------------
+            logger.info("[STAGE 13] Coordinating canonical completion notification...")
+            canonical_payload = {
                 "job_id": job_id,
                 "production_id": prod_ws.production_id,
                 "production_dir": prod_ws.prod_dir,
                 "manifest_path": prod_ws.manifest_path,
                 "status": "COMPLETED",
                 "topic": selected_topic.title,
+                "video_title": meta.title,
+                "storytelling_style": resolved_visual_style,
+                "narrative_archetype": resolved_narrative_archetype,
+                "start_time": start_time_ist,
+                "completion_time": completion_time_ist,
+                "total_duration_sec": round(elapsed, 2),
                 "video_path": final_video_path,
                 "thumbnail_path": thumb_path,
+                "subtitle_path": resolved_subtitle_path,
+                "attribution_manifest_path": resolved_attrib_path,
+                "thumbnail_score": resolved_thumb_score,
                 "duration_sec": dur,
                 "beat_count": len(visual_beats),
                 "elapsed_sec": round(elapsed, 1),
                 "qc_checks": qc_checks_report,
                 "integrity_report": integrity_audit_path,
-                "notifications": notif_res,
                 "publishing_status": publishing_status,
+            }
+            if suppress_orchestrator_completion_email.get():
+                logger.info("[STAGE 13] Orchestrator notification deferred to scheduler canonical summary report.")
+                notif_res = {"status": "DEFERRED_TO_CANONICAL_CYCLE_REPORT", "job_id": job_id}
+            elif (
+                execution_context == ExecutionContext.PRODUCTION
+                and not job_id.startswith(("test_", "mock_"))
+                and not isinstance(self.notifier.send_success, NonCallableMock)
+            ):
+                from backend.app.services.email_monitoring_service import email_monitoring_service
+                inferred_cycle = "_".join(job_id.split("_")[:2]) if job_id.startswith("cycle_") else "manual_production"
+                notif_res = email_monitoring_service.send_cycle_summary_report(
+                    cycle_id=inferred_cycle,
+                    job_id=job_id,
+                    result=canonical_payload,
+                )
+            else:
+                notif_res = self.notifier.send_success(
+                    video_title=meta.title or selected_topic.title,
+                    topic=selected_topic.title,
+                    storytelling_style=resolved_visual_style,
+                    duration_sec=dur,
+                    video_path=final_video_path,
+                    thumbnail_path=thumb_path,
+                    qc_status="PASSED",
+                    job_id=job_id,
+                    execution_context=execution_context,
+                )
+
+            production_observability.complete_production(
+                job_id,
+                f"Completed '{selected_topic.title}' in {elapsed:.1f}s ({len(visual_beats)} beats)",
+            )
+            logger.info("=== MASTER PIPELINE COMPLETED IN %.1fs ===", elapsed)
+            canonical_payload["notifications"] = notif_res
+            return canonical_payload
+
+        except ProductionGracefulStop:
+            logger.warning("[GRACEFUL STOP] Halting pipeline cleanly at stage boundary for job %s", job_id)
+            if persist_to_db:
+                with SessionLocal() as db_session:
+                    job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                    if job:
+                        job.status = "INTERRUPTED"
+                        job.recovery_reason = "Operator requested graceful stop"
+                        job.heartbeat_at = datetime.utcnow()
+                        db_session.commit()
+            try:
+                from backend.app.services import control_center_service
+                control_center_service.set_production_control_state("IDLE", reason="Graceful stop complete")
+            except Exception:
+                pass
+            return {
+                "job_id": job_id,
+                "status": "INTERRUPTED",
+                "stopped_gracefully": True,
             }
 
         except Exception as e:
@@ -1159,46 +1460,89 @@ class CrazzyDocsMasterOrchestrator:
         quota_used = self.publishing_engine.db.get_quota_used_today()
         logger.info("Daily YouTube quota consumed: %d units", quota_used)
 
-        is_auto_public = getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
+        from backend.app.services.control_center_service import (
+            get_publishing_policy,
+            is_automatic_publishing_authorized,
+        )
+        auto_authorized, auto_info = is_automatic_publishing_authorized()
+        active_policy = (
+            "automatic_public"
+            if getattr(settings, "PUBLISHING_MODE", "") == "automatic_public"
+            else get_publishing_policy()
+        )
+        is_auto_public = (getattr(settings, "PUBLISHING_MODE", "") == "automatic_public") or auto_authorized
         should_upload = execute_upload and is_auto_public
 
         if not should_upload:
-            logger.info("Publishing mode is '%s'. Upload withheld at safety gate.", settings.PUBLISHING_MODE)
+            logger.info("Publishing mode is '%s'. Upload withheld at safety gate.", active_policy)
             return {
                 "status": "withheld_safety_gate",
-                "publishing_mode": settings.PUBLISHING_MODE,
+                "publishing_mode": active_policy,
                 "quota_used": quota_used,
-                "message": "Videos remain staged safely for manual approval."
+                "message": (
+                    "Videos remain staged safely for manual approval."
+                    if active_policy == "manual_approval"
+                    else f"Automatic upload withheld: {auto_info.get('reason')}"
+                ),
             }
 
         target_visibility = "public" if is_auto_public else "private"
 
-        # If upload authorized, fetch next pending video
+        # Only process items that have an explicit user-scheduled future timestamp
         conn = sqlite3.connect(self.publishing_engine.db.db_path)
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, topic_title, video_path, thumbnail_path, metadata_json
+            SELECT id, topic_title, video_path, thumbnail_path, metadata_json, scheduled_timestamp
             FROM publishing_ledger
-            WHERE upload_status = 'pending_queue'
+            WHERE upload_status = 'approved' AND scheduled_timestamp IS NOT NULL AND scheduled_timestamp != ''
             ORDER BY id ASC LIMIT 1
         """)
         row = cur.fetchone()
         conn.close()
 
         if not row:
-            return {"status": "queue_empty", "message": "No pending videos in publishing queue."}
+            return {
+                "status": "awaiting_user_schedule",
+                "message": "Videos remain in Publishing Queue until user schedules or publishes them.",
+            }
 
-        p_id, title, v_path, t_path, m_json = row
+        p_id, title, v_path, t_path, m_json, sched_ts = row
+        if not v_path or not os.path.isfile(v_path):
+            return {
+                "status": "blocked_missing_artifact",
+                "ledger_id": p_id,
+                "message": f"Video artifact missing on disk: {v_path}",
+            }
         meta_dict = json.loads(m_json)
+        meta_dict.pop("_schedule_context", None)
         metadata = YouTubeMetadata(**meta_dict)
 
+        publish_at_iso: Optional[str] = None
+        if sched_ts and ("T" in str(sched_ts)):
+            try:
+                parsed_dt = datetime.fromisoformat(str(sched_ts).replace("Z", "+00:00"))
+                if parsed_dt.tzinfo is not None and parsed_dt > datetime.now(parsed_dt.tzinfo):
+                    publish_at_iso = str(sched_ts)
+            except Exception:
+                publish_at_iso = None
+        if not publish_at_iso:
+            return {
+                "status": "awaiting_user_schedule",
+                "ledger_id": p_id,
+                "message": "A valid future user-selected publication time is required.",
+            }
+
+        upload_visibility = "private"
         res = self.publishing_engine.upload_short(
             video_path=v_path,
             topic_title=title,
             metadata=metadata,
             thumbnail_path=t_path,
-            visibility=target_visibility,
-            allow_public_bypass=is_auto_public,
+            visibility=upload_visibility,
+            ledger_id=p_id,
+            allow_public_bypass=False,
+            publish_at_iso=publish_at_iso,
+            auto_policy_authorized=False,
         )
         return res
 

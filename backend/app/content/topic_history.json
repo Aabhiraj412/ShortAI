@@ -159,5 +159,26 @@
     "visual_style": "historical_documentary",
     "created_at": "2026-11-10T17:37:06.643130Z",
     "publication_status": "produced"
+  },
+  {
+    "topic_id": "topic_cycle_3_20261112_1200",
+    "topic_title": "SoHo Weekly News",
+    "opening_hook": "The SoHo Weekly News (SWN) was a weekly alternative newspaper founded by American music publicist Michael Goldstein and published in New York City from 1973 to 1982.",
+    "main_subject": "SoHo Weekly News",
+    "key_entities": [
+      "SoHo Weekly News",
+      "The SoHo Weekly",
+      "News",
+      "SWN",
+      "American",
+      "Michael Goldstein",
+      "New York City",
+      "Goldstein"
+    ],
+    "script_fingerprint": "22962c9138a3e40fe652b4f4705a6ca75c755074cc743856e6ddf0984106dfae",
+    "category": "History",
+    "visual_style": "adaptive_multi_style",
+    "created_at": "2026-11-12T07:53:56.509151Z",
+    "publication_status": "produced"
   }
 ]

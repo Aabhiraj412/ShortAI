@@ -26,9 +26,12 @@ logger = logging.getLogger(__name__)
 
 SCHEDULER_TASK_NAME = "CrazzyDocs-Production-Scheduler"
 DASHBOARD_TASK_NAME = "CrazzyDocs-Health-Dashboard"
+STARTUP_MANAGER_TASK_NAME = "CrazzyDocs-Startup-Manager"
+MONITORING_TASK_NAME = "CrazzyDocs-Health-Monitoring"
 LEGACY_TASK_NAME = "CrazzyDocsStudioScheduler"
 TASK_NAME = SCHEDULER_TASK_NAME
 DEFAULT_LAUNCHER_BAT = os.path.join(WORKSPACE_ROOT, "start_studio.bat")
+PYTHONW_EXE = os.path.join(WORKSPACE_ROOT, ".venv", "Scripts", "pythonw.exe")
 
 
 def get_opt_in_setting() -> bool:
@@ -139,29 +142,125 @@ _tasks_cache_time: float = 0.0
 
 
 def get_all_tasks_status(ttl_seconds: float = 30.0) -> Dict[str, Any]:
-    """Queries both CrazzyDocs production scheduled tasks with in-memory TTL caching."""
+    """Queries all 4 CrazzyDocs production scheduled tasks with in-memory TTL caching."""
     global _tasks_cache, _tasks_cache_time
     now = time.time()
     if _tasks_cache and (now - _tasks_cache_time < ttl_seconds):
         return _tasks_cache
 
+    sm_info = query_task_details(STARTUP_MANAGER_TASK_NAME)
     s_info = query_task_details(SCHEDULER_TASK_NAME)
     d_info = query_task_details(DASHBOARD_TASK_NAME)
+    m_info = query_task_details(MONITORING_TASK_NAME)
 
-    # Check if either or both are registered
-    any_registered = s_info.get("is_registered", False) or d_info.get("is_registered", False)
+    any_registered = any(
+        t.get("is_registered", False) for t in (sm_info, s_info, d_info, m_info)
+    )
 
     res = {
         "task_name": SCHEDULER_TASK_NAME,
         "is_registered": any_registered,
         "opt_in_enabled": get_opt_in_setting(),
+        "startup_manager_task": sm_info,
         "scheduler_task": s_info,
         "dashboard_task": d_info,
-        "details": f"Scheduler: {s_info.get('status')}; Dashboard: {d_info.get('status')}",
+        "monitoring_task": m_info,
+        "details": (
+            f"StartupManager: {sm_info.get('status')}; "
+            f"Dashboard: {d_info.get('status')}; "
+            f"Scheduler: {s_info.get('status')}; "
+            f"Monitoring: {m_info.get('status')}"
+        ),
     }
     _tasks_cache = res
     _tasks_cache_time = now
     return res
+
+
+def _register_user_logon_task(
+    task_name: str,
+    executable: str,
+    arguments: str,
+    enabled: bool = True,
+) -> Tuple[bool, str]:
+    """Registers a user-scoped ONLOGON task via ScheduledTasks PowerShell module without requiring admin."""
+    ps_script = (
+        f"$user = \"$env:USERDOMAIN\\$env:USERNAME\"; "
+        f"$action = New-ScheduledTaskAction -Execute '{executable}' -Argument '{arguments}' -WorkingDirectory '{WORKSPACE_ROOT}'; "
+        f"$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; "
+        f"$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; "
+        f"$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0); "
+        f"$task = Register-ScheduledTask -TaskName '{task_name}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force; "
+        + ("" if enabled else f"Disable-ScheduledTask -TaskName '{task_name}' | Out-Null; ")
+        + "Write-Output 'REGISTERED'"
+    )
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            **_get_subprocess_flags(),
+        )
+        ok = res.returncode == 0 and "REGISTERED" in (res.stdout or "")
+        return ok, (res.stdout.strip() or res.stderr.strip())
+    except Exception as exc:
+        return False, str(exc)
+
+
+def install_all_studio_tasks(enable_scheduler: bool = False) -> Dict[str, Any]:
+    """Registers all 4 user-level Windows Scheduled Tasks under current Windows user (/RL LIMITED)."""
+    global _tasks_cache, _tasks_cache_time
+    pyw = PYTHONW_EXE if os.path.exists(PYTHONW_EXE) else sys.executable
+    tasks_spec = [
+        (
+            STARTUP_MANAGER_TASK_NAME,
+            pyw,
+            f'"{os.path.join(WORKSPACE_ROOT, "backend", "scripts", "startup_manager.py")}" --boot',
+            True,
+        ),
+        (
+            DASHBOARD_TASK_NAME,
+            pyw,
+            f'"{os.path.join(WORKSPACE_ROOT, "backend", "scripts", "run_dashboard.py")}" --open-browser',
+            True,
+        ),
+        (
+            MONITORING_TASK_NAME,
+            pyw,
+            f'"{os.path.join(WORKSPACE_ROOT, "backend", "scripts", "startup_manager.py")}" --monitor',
+            True,
+        ),
+        (
+            SCHEDULER_TASK_NAME,
+            pyw,
+            f'"{os.path.join(WORKSPACE_ROOT, "backend", "scripts", "run_scheduler_daemon.py")}"',
+            enable_scheduler,
+        ),
+    ]
+    results: Dict[str, Any] = {}
+    all_ok = True
+    for tname, exe_path, exe_args, should_enable in tasks_spec:
+        ok, msg = _register_user_logon_task(tname, exe_path, exe_args, enabled=should_enable)
+        results[tname] = {
+            "ok": ok,
+            "enabled": should_enable if ok else False,
+            "message": msg,
+        }
+        if not ok:
+            all_ok = False
+    _tasks_cache = {}
+    _tasks_cache_time = 0.0
+    if all_ok:
+        set_opt_in_setting(True)
+    return {"all_ok": all_ok, "tasks": results}
+
+
+def invalidate_tasks_cache() -> None:
+    """Clears cached Windows Task Scheduler query results after enable/disable mutations."""
+    global _tasks_cache, _tasks_cache_time
+    _tasks_cache = {}
+    _tasks_cache_time = 0.0
 
 
 def install_startup_task(
@@ -216,10 +315,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manage CrazzyDocs Windows Startup Scheduled Tasks")
     parser.add_argument("--status", action="store_true", help="Check current task status")
     parser.add_argument("--install", action="store_true", help="Opt-in and register task on Windows user logon")
+    parser.add_argument("--install-all", action="store_true", help="Register all 4 user-level studio startup tasks")
+    parser.add_argument("--enable-scheduler", action="store_true", help="Also leave Production Scheduler enabled when used with --install-all")
     parser.add_argument("--uninstall", action="store_true", help="Opt-out and unregister task")
     args = parser.parse_args()
 
-    if args.install:
+    if args.install_all:
+        res = install_all_studio_tasks(enable_scheduler=args.enable_scheduler)
+        print(json.dumps(res, indent=2))
+        sys.exit(0 if res["all_ok"] else 1)
+    elif args.install:
         ok, msg = install_startup_task()
         print(f"Result: {msg}")
         sys.exit(0 if ok else 1)

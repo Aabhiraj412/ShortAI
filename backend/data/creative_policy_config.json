@@ -1,5 +1,5 @@
 {
-  "policy_version": "3.21M",
+  "policy_version": "3.21N",
   "scoring_weights": {
     "curiosity": 0.18,
     "novelty": 0.14,

@@ -20,13 +20,22 @@ import os
 import re
 import smtplib
 import socket
-from typing import Dict, List, Optional, Tuple
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
 from backend.app.core.config import settings
-from backend.app.database.db import SessionLocal, JobModel, PersistentNotificationModel
+from backend.app.database.db import (
+    SessionLocal,
+    JobModel,
+    PersistentNotificationModel,
+    ensure_notification_ledger_schema,
+)
 from backend.app.scheduler.schedule_profiles import (
     IST_TZ,
     get_active_profile,
@@ -122,8 +131,8 @@ class ProductionDetails:
     job_id: str
     topic: str
     video_title: str
-    storytelling_style: str = "Cinematic Documentary"
-    narrative_archetype: str = "Triumph Over Catastrophe"
+    storytelling_style: str = "Adaptive Multi-Style"
+    narrative_archetype: str = "Documentary Short"
     duration_sec: float = 0.0
     start_time: str = ""
     completion_time: str = ""
@@ -145,10 +154,10 @@ class QCDetails:
     """Quality control metrics and verification results."""
     rendering_status: str = "COMPLETED"
     resolution_fps: str = "1080x1920 @ 30 FPS"
-    av_sync_status: str = "SYNCHRONIZED (Offset: 0.0ms)"
-    thumbnail_validation: str = "PASSED (10-Point Score: 9.76/10)"
-    attribution_validation: str = "PASSED (Public Domain Verified)"
-    text_clipping_checks: str = "PASSED (Safe Margin: 120px)"
+    av_sync_status: str = "SYNCHRONIZED"
+    thumbnail_validation: str = "PASSED"
+    attribution_validation: str = "PASSED (License Verified)"
+    text_clipping_checks: str = "PASSED"
     final_qc_result: str = "PASSED"
 
 
@@ -190,17 +199,271 @@ class EmailMonitoringService:
     def __init__(self, workspace_root: str = WORKSPACE_ROOT):
         self.workspace = workspace_root
 
+    def _ensure_ledger_schema(self, db_session) -> None:
+        """Ensures additive notification ledger columns exist on the active SQLAlchemy engine."""
+        try:
+            bind = db_session.get_bind()
+            if bind is not None:
+                ensure_notification_ledger_schema(bind)
+        except Exception as e:
+            logger.debug("Notification schema check skipped: %s", e)
+
+    @staticmethod
+    def _build_notification_identity(job_id: str, notification_type: str, fallback_key: str) -> Tuple[str, str]:
+        """Builds canonical notification identity key from (job_id, notification_type) when job_id exists."""
+        clean_job = (job_id or "").strip()
+        clean_type = (notification_type or "CYCLE_SUMMARY").strip()
+        if clean_job and not clean_job.startswith("digest_"):
+            return f"{clean_job}:{clean_type}", clean_type
+        return fallback_key, clean_type
+
+    def _claim_notification_slot(
+        self,
+        db_session,
+        *,
+        idempotency_key: str,
+        job_id: str,
+        cycle_id: Optional[str],
+        notification_type: str,
+        recipient: str,
+        subject: str,
+        body_plain: str,
+        body_html: str,
+        payload_json: Optional[str] = None,
+        force: bool = False,
+    ) -> Tuple[Optional[PersistentNotificationModel], Optional[Dict[str, Any]]]:
+        """
+        Atomically claims a notification ledger row before touching SMTP.
+        Prevents duplicate sends across duplicate call paths, restarts, and concurrent workers,
+        and suppresses blind retries after DELIVERY_UNKNOWN timeouts.
+        """
+        self._ensure_ledger_schema(db_session)
+        clean_job = (job_id or "").strip()
+
+        def _find_existing() -> Optional[PersistentNotificationModel]:
+            rec = (
+                db_session.query(PersistentNotificationModel)
+                .filter(PersistentNotificationModel.idempotency_key == idempotency_key)
+                .first()
+            )
+            if rec is None and clean_job:
+                rec = (
+                    db_session.query(PersistentNotificationModel)
+                    .filter(
+                        PersistentNotificationModel.job_id == clean_job,
+                        PersistentNotificationModel.notification_type == notification_type,
+                    )
+                    .first()
+                )
+            return rec
+
+        def _suppression_response(rec: PersistentNotificationModel) -> Optional[Dict[str, Any]]:
+            state = (getattr(rec, "delivery_state", None) or "").upper()
+            st = (rec.status or "").upper()
+            if st == "SENT" or state == "CONFIRMED_SENT":
+                return {
+                    "status": "DUPLICATE_SUPPRESSED",
+                    "delivery_state": "CONFIRMED_SENT",
+                    "idempotency_key": rec.idempotency_key,
+                    "notification_id": rec.id,
+                    "email_sent": False,
+                }
+            if st == "DISPATCHING" or state == "DISPATCHING":
+                return {
+                    "status": "DUPLICATE_SUPPRESSED",
+                    "delivery_state": "DISPATCHING",
+                    "reason": "DISPATCH_IN_PROGRESS",
+                    "idempotency_key": rec.idempotency_key,
+                    "notification_id": rec.id,
+                    "email_sent": False,
+                }
+            if st == "DELIVERY_UNKNOWN" or state == "DELIVERY_UNKNOWN":
+                return {
+                    "status": "DELIVERY_UNKNOWN_SUPPRESSED",
+                    "delivery_state": "DELIVERY_UNKNOWN",
+                    "reason": "UNCERTAIN_SMTP_TIMEOUT_NO_AUTO_RESEND",
+                    "idempotency_key": rec.idempotency_key,
+                    "notification_id": rec.id,
+                    "email_sent": False,
+                    "last_error": rec.last_error,
+                }
+            return None
+
+        existing = _find_existing()
+        if existing and not force:
+            suppressed = _suppression_response(existing)
+            if suppressed is not None:
+                logger.info(
+                    "[EMAIL_MONITOR] Notification suppressed (%s) for key='%s', job_id='%s', type='%s'.",
+                    suppressed["status"],
+                    existing.idempotency_key,
+                    clean_job,
+                    notification_type,
+                )
+                return None, suppressed
+
+        if existing is None:
+            notif_id = f"notif_{uuid.uuid4().hex[:16]}"
+            existing = PersistentNotificationModel(
+                id=notif_id,
+                job_id=clean_job,
+                cycle_id=cycle_id,
+                notification_type=notification_type,
+                recipient=recipient,
+                status="PENDING",
+                delivery_state="PENDING",
+                attempt_count=0,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                idempotency_key=idempotency_key,
+                subject=subject[:500],
+                body_plain=body_plain,
+                body_html=body_html,
+                payload_json=payload_json,
+            )
+            db_session.add(existing)
+            try:
+                db_session.commit()
+            except IntegrityError:
+                db_session.rollback()
+                existing = _find_existing()
+                if existing and not force:
+                    suppressed = _suppression_response(existing)
+                    if suppressed is not None:
+                        return None, suppressed
+
+        if existing is None:
+            return None, {"status": "FAILED", "email_sent": False, "last_error": "Could not allocate notification record."}
+
+        now_utc = datetime.utcnow()
+        if force:
+            claim_res = db_session.execute(
+                text(
+                    "UPDATE persistent_notifications "
+                    "SET status='DISPATCHING', delivery_state='DISPATCHING', subject=:subj, "
+                    "body_plain=:bp, body_html=:bh, payload_json=:pj, recipient=:rec, updated_at=:now "
+                    "WHERE id=:nid AND COALESCE(delivery_state, 'PENDING') NOT IN ('DISPATCHING')"
+                ),
+                {
+                    "subj": subject[:500],
+                    "bp": body_plain,
+                    "bh": body_html,
+                    "pj": payload_json,
+                    "rec": recipient,
+                    "now": now_utc,
+                    "nid": existing.id,
+                },
+            )
+        else:
+            claim_res = db_session.execute(
+                text(
+                    "UPDATE persistent_notifications "
+                    "SET status='DISPATCHING', delivery_state='DISPATCHING', subject=:subj, "
+                    "body_plain=:bp, body_html=:bh, payload_json=:pj, recipient=:rec, updated_at=:now "
+                    "WHERE id=:nid AND COALESCE(status, 'PENDING') IN ('PENDING', 'FAILED') "
+                    "AND COALESCE(delivery_state, 'PENDING') IN ('PENDING', 'FAILED_RETRYABLE', '')"
+                ),
+                {
+                    "subj": subject[:500],
+                    "bp": body_plain,
+                    "bh": body_html,
+                    "pj": payload_json,
+                    "rec": recipient,
+                    "now": now_utc,
+                    "nid": existing.id,
+                },
+            )
+        db_session.commit()
+        db_session.refresh(existing)
+        if getattr(claim_res, "rowcount", 0) == 0:
+            suppressed = _suppression_response(existing)
+            if suppressed is not None:
+                return None, suppressed
+            return None, {
+                "status": "DUPLICATE_SUPPRESSED",
+                "delivery_state": getattr(existing, "delivery_state", existing.status),
+                "idempotency_key": existing.idempotency_key,
+                "notification_id": existing.id,
+                "email_sent": False,
+            }
+        return existing, None
+
+    def _execute_smtp_with_state(
+        self,
+        *,
+        subject: str,
+        body_text: str,
+        body_html: str = "",
+        recipient: Optional[str] = None,
+        max_retries: int = 2,
+    ) -> Dict[str, Any]:
+        """
+        Invokes notification_service.notify_email and interprets last_email_receipt or exceptions
+        so send-phase timeouts map to DELIVERY_UNKNOWN instead of blind retry.
+        """
+        notification_service.last_email_receipt = {}
+        try:
+            email_sent = bool(
+                notification_service.notify_email(
+                    subject=subject,
+                    body_text=body_text,
+                    body_html=body_html,
+                    recipient=recipient,
+                    max_retries=max_retries,
+                )
+            )
+            receipt = dict(getattr(notification_service, "last_email_receipt", None) or {})
+            if email_sent:
+                return {
+                    "email_sent": True,
+                    "delivery_state": "CONFIRMED_SENT",
+                    "error_category": None,
+                    "last_error": None,
+                    "provider_response": receipt.get("provider_response") or "250 OK (accepted by SMTP)",
+                }
+            d_state = receipt.get("delivery_state") or "FAILED_RETRYABLE"
+            if d_state == "CONFIRMED_SENT":
+                d_state = "FAILED_RETRYABLE"
+            return {
+                "email_sent": False,
+                "delivery_state": d_state,
+                "error_category": receipt.get("error_category") or "SMTP_DELIVERY_FAILED",
+                "last_error": receipt.get("last_error") or "SMTP delivery failed without confirmation",
+                "provider_response": receipt.get("provider_response"),
+            }
+        except (TimeoutError, socket.timeout, smtplib.SMTPServerDisconnected) as e:
+            return {
+                "email_sent": False,
+                "delivery_state": "DELIVERY_UNKNOWN",
+                "error_category": "SEND_DATA_TIMEOUT",
+                "last_error": f"SMTP timeout/disconnect ({type(e).__name__}): {e}",
+                "provider_response": None,
+            }
+        except Exception as e:
+            err_lower = str(e).lower()
+            if "timed out" in err_lower or "timeout" in err_lower:
+                return {
+                    "email_sent": False,
+                    "delivery_state": "DELIVERY_UNKNOWN",
+                    "error_category": "SEND_DATA_TIMEOUT",
+                    "last_error": str(e),
+                    "provider_response": None,
+                }
+            return {
+                "email_sent": False,
+                "delivery_state": "FAILED_RETRYABLE",
+                "error_category": type(e).__name__,
+                "last_error": str(e),
+                "provider_response": None,
+            }
+
     # -------------------------------------------------------------------------
     # 1. Configuration & Health
     # -------------------------------------------------------------------------
 
     def get_recipient(self) -> str:
         """Retrieves configured recipient email from environment or studio settings."""
-        return (
-            os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT")
-            or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL")
-            or "operator@crazzydocs.local"
-        )
+        return notification_service.get_public_email_configuration().get("recipient") or "operator@crazzydocs.local"
 
     def is_smtp_configured(self) -> bool:
         """Checks if SMTP credentials are configured in local environment."""
@@ -210,6 +473,7 @@ class EmailMonitoringService:
         """Reports notification subsystem health."""
         smtp_configured = self.is_smtp_configured()
         with SessionLocal() as db_session:
+            self._ensure_ledger_schema(db_session)
             pending_count = db_session.query(PersistentNotificationModel).filter(
                 PersistentNotificationModel.status == "PENDING"
             ).count()
@@ -219,10 +483,15 @@ class EmailMonitoringService:
             failed_count = db_session.query(PersistentNotificationModel).filter(
                 PersistentNotificationModel.status == "FAILED"
             ).count()
+            unknown_count = db_session.query(PersistentNotificationModel).filter(
+                PersistentNotificationModel.delivery_state == "DELIVERY_UNKNOWN"
+            ).count()
 
         status_str = "Operational" if smtp_configured else "Local Standby (SMTP Not Configured)"
         if pending_count > 0:
             status_str += f" - {pending_count} Pending Delivery"
+        if unknown_count > 0:
+            status_str += f" - {unknown_count} Delivery Unknown"
 
         return {
             "status": status_str,
@@ -231,7 +500,148 @@ class EmailMonitoringService:
             "pending_notifications": pending_count,
             "sent_notifications": sent_count,
             "failed_notifications": failed_count,
+            "delivery_unknown_notifications": unknown_count,
         }
+
+    def get_notification_configuration(self) -> Dict:
+        """Returns non-secret SMTP configuration suitable for the local control API."""
+        return notification_service.get_public_email_configuration()
+
+    def save_notification_configuration(self, config: Dict[str, Optional[str]]) -> Dict:
+        return notification_service.save_email_configuration(config)
+
+    def dispatch_stage_notification(
+        self,
+        event_type: str,
+        idempotency_key: str,
+        subject: str,
+        details: Dict,
+        recipient: Optional[str] = None,
+    ) -> Dict:
+        """Persists and delivers a deduplicated Stage 3.22 event without raising into workers."""
+        allowed_types = {
+            "PRODUCTION_COMPLETED", "PRODUCTION_FAILED", "UPLOAD_COMPLETED", "UPLOAD_FAILED",
+            "YOUTUBE_AUTH_PROBLEM", "SCHEDULER_FAILED", "CRITICAL_SYSTEM_ERROR",
+        }
+        if event_type not in allowed_types or not idempotency_key:
+            return {"status": "REJECTED", "reason": "INVALID_NOTIFICATION"}
+        destination = recipient or (
+            os.environ.get("CRAZZYDOCS_ALERT_RECIPIENT")
+            or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL")
+            or notification_service.get_public_email_configuration().get("recipient")
+            or ""
+        )
+        if not destination:
+            return {"status": "NOT_CONFIGURED", "email_sent": False}
+
+        payload = dict(details)
+        payload.setdefault("event_type", event_type)
+        payload.setdefault("timestamp_ist", datetime.now(IST_TZ).isoformat())
+        payload_json = json.dumps(payload, ensure_ascii=True, default=str)
+        body = "\n".join(f"{key}: {value}" for key, value in payload.items())
+        job_id = str(payload.get("production_id") or payload.get("upload_id") or payload.get("job_id") or "")
+        try:
+            with SessionLocal() as db_session:
+                record, suppressed = self._claim_notification_slot(
+                    db_session,
+                    idempotency_key=idempotency_key,
+                    job_id=job_id,
+                    cycle_id=payload.get("cycle_id"),
+                    notification_type=event_type,
+                    recipient=destination,
+                    subject=subject[:500],
+                    body_plain=body,
+                    body_html="",
+                    payload_json=payload_json,
+                )
+                if suppressed is not None:
+                    return suppressed
+                notification_id = record.id
+
+            if self.is_smtp_configured():
+                outcome = self._execute_smtp_with_state(
+                    subject=subject[:500],
+                    body_text=body,
+                    recipient=destination,
+                    max_retries=2,
+                )
+            else:
+                outcome = {
+                    "email_sent": False,
+                    "delivery_state": "FAILED_RETRYABLE",
+                    "error_category": "SMTP_NOT_CONFIGURED",
+                    "last_error": "SMTP credentials are not configured.",
+                    "provider_response": None,
+                }
+
+            email_sent = bool(outcome["email_sent"])
+            delivery_state = outcome["delivery_state"]
+            with SessionLocal() as db_session:
+                rec = db_session.query(PersistentNotificationModel).filter(
+                    PersistentNotificationModel.id == notification_id
+                ).first()
+                if rec:
+                    rec.attempt_count = (rec.attempt_count or 0) + 1
+                    rec.delivery_state = delivery_state
+                    rec.error_category = outcome.get("error_category")
+                    rec.provider_response = outcome.get("provider_response")
+                    rec.updated_at = datetime.utcnow()
+                    if email_sent:
+                        rec.status = "SENT"
+                        rec.sent_at = datetime.utcnow()
+                        rec.last_error = None
+                    elif delivery_state == "DELIVERY_UNKNOWN":
+                        rec.status = "DELIVERY_UNKNOWN"
+                        rec.last_error = outcome.get("last_error")
+                    else:
+                        rec.status = "FAILED"
+                        rec.last_error = outcome.get("last_error")
+                    db_session.commit()
+            return {
+                "status": "SENT" if email_sent else ("DELIVERY_UNKNOWN" if delivery_state == "DELIVERY_UNKNOWN" else "SAVED_LOCAL_PENDING"),
+                "delivery_state": delivery_state,
+                "email_sent": email_sent,
+                "notification_id": notification_id,
+            }
+        except Exception:
+            logger.exception("Could not persist Stage 3.22 notification.")
+            return {"status": "FAILED", "email_sent": False}
+
+    def get_notification_history(self, limit: int = 100) -> List[Dict]:
+        limit = max(1, min(int(limit), 500))
+        with SessionLocal() as db_session:
+            records = db_session.query(PersistentNotificationModel).filter(
+                PersistentNotificationModel.notification_type.in_(
+                    [
+                        "PRODUCTION_COMPLETED", "PRODUCTION_FAILED", "UPLOAD_COMPLETED",
+                        "UPLOAD_FAILED", "YOUTUBE_AUTH_PROBLEM", "SCHEDULER_FAILED",
+                        "CRITICAL_SYSTEM_ERROR", "DAILY_SUMMARY", "CYCLE_SUMMARY", "email",
+                    ]
+                )
+            ).order_by(PersistentNotificationModel.created_at.desc()).limit(limit).all()
+            history = []
+            for item in records:
+                created_at = item.created_at
+                sent_at = item.sent_at
+                if created_at and created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if sent_at and sent_at.tzinfo is None:
+                    sent_at = sent_at.replace(tzinfo=timezone.utc)
+                history.append({
+                    "id": item.id,
+                    "job_id": item.job_id,
+                    "type": item.notification_type,
+                    "recipient": item.recipient,
+                    "status": item.status,
+                    "attempt_count": item.attempt_count,
+                    "created_at": created_at.isoformat() if created_at else None,
+                    "created_at_ist": created_at.astimezone(IST_TZ).isoformat() if created_at else None,
+                    "sent_at": sent_at.isoformat() if sent_at else None,
+                    "sent_at_ist": sent_at.astimezone(IST_TZ).isoformat() if sent_at else None,
+                    "last_error": item.last_error,
+                    "subject": item.subject,
+                })
+            return history
 
     # -------------------------------------------------------------------------
     # 2. Daily Production Dashboard Aggregator
@@ -241,10 +651,12 @@ class EmailMonitoringService:
         self,
         date_str: Optional[str] = None,
         test_now_ist: Optional[datetime] = None,
+        current_job_overlay: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         """
         Compiles an accurate four-cycle production snapshot for the specified date
-        from real SQLite database records.
+        from real SQLite database records (optionally overlaid with an active
+        authoritative run payload to guarantee zero stale-read contradictions).
         """
         now_ist = test_now_ist or datetime.now(IST_TZ)
         cur_date_str = date_str or now_ist.strftime("%Y-%m-%d")
@@ -261,6 +673,11 @@ class EmailMonitoringService:
         uploaded_count = 0
         youtube_scheduled_count = 0
         total_prod_seconds = 0.0
+
+        overlay_cycle_id = (current_job_overlay or {}).get("cycle_id")
+        overlay_job_id = (current_job_overlay or {}).get("job_id")
+        overlay_status = str((current_job_overlay or {}).get("status") or "").upper()
+        overlay_topic = (current_job_overlay or {}).get("topic")
 
         with SessionLocal() as db_session:
             # Inspect each of the 4 cycles
@@ -289,27 +706,66 @@ class EmailMonitoringService:
                 if cycle.pub_rollover_days > 0:
                     target_pub_str += " (+1d)"
 
-                if job:
+                overlay_applies = bool(
+                    current_job_overlay
+                    and (
+                        (overlay_cycle_id and overlay_cycle_id == cycle.cycle_id)
+                        or (overlay_job_id and overlay_job_id == expected_job_id)
+                    )
+                )
+
+                effective_status = (job.status or "").upper() if job else ""
+                effective_topic = (job.topic_title if job else None)
+                cp_data: Dict[str, Any] = {}
+                if job and job.checkpoint_data_json:
+                    try:
+                        cp_data = json.loads(job.checkpoint_data_json) or {}
+                    except Exception:
+                        cp_data = {}
+
+                if overlay_applies and overlay_status:
+                    if effective_status in ("", "PENDING", "RUNNING", "RETRYING") or overlay_status in ("COMPLETED", "SUCCESS"):
+                        effective_status = "COMPLETED" if overlay_status in ("COMPLETED", "SUCCESS") else overlay_status
+                    if overlay_topic:
+                        effective_topic = overlay_topic
+
+                if job or overlay_applies:
                     total_started += 1
-                    topic_title = job.topic_title or "Autonomous Selection"
-                    if job.status == "COMPLETED":
+                    topic_title = effective_topic or "Autonomous Selection"
+                    if effective_status in ("COMPLETED", "SUCCESS", "RECOVERED_SUCCESS"):
                         display_status = "SUCCESS"
                         qc_display = "PASS"
                         success_count += 1
-                        awaiting_approval_count += 1
-                        total_prod_seconds += 45.0  # nominal pipeline duration
-                    elif job.status == "RUNNING":
+                        if not (job and job.youtube_video_id):
+                            awaiting_approval_count += 1
+                        run_secs = float(
+                            (current_job_overlay or {}).get("total_duration_sec")
+                            or (current_job_overlay or {}).get("elapsed_sec")
+                            or cp_data.get("total_duration_sec")
+                            or cp_data.get("elapsed_sec")
+                            or cp_data.get("duration_sec")
+                            or 0.0
+                        )
+                        total_prod_seconds += run_secs
+                    elif effective_status == "RUNNING":
                         display_status = "RUNNING"
                         qc_display = "IN_PROGRESS"
-                    elif job.status == "MISSED":
+                    elif effective_status == "MISSED":
                         display_status = "MISSED"
                         qc_display = "N/A"
                         missed_count += 1
-                    elif job.status in ("FAILED", "CANCELLED"):
+                    elif effective_status in ("BLOCKED_QC", "FAILED_QC", "QC_REJECTED"):
+                        display_status = "QC_REJECTED"
+                        qc_display = "FAIL"
+                        failed_count += 1
+                    elif effective_status in ("INTERRUPTED", "PAUSED", "WAITING_FOR_INTERNET"):
+                        display_status = effective_status
+                        qc_display = "PAUSED"
+                    elif effective_status in ("FAILED", "CANCELLED", "RECOVERY_WINDOW_EXPIRED", "ABORTED_PRE_RESET"):
                         display_status = "FAILED"
                         qc_display = "FAIL"
                         failed_count += 1
-                    elif job.status == "RETRYING":
+                    elif effective_status == "RETRYING":
                         display_status = "RETRYING"
                         qc_display = "RETRY"
                 else:
@@ -335,8 +791,25 @@ class EmailMonitoringService:
                     "start_ist": actual_start_str,
                     "target_pub_ist": target_pub_str,
                     "qc": qc_display,
-                    "job_id": job.id if job else None,
+                    "job_id": (job.id if job else overlay_job_id if overlay_applies else None),
                 })
+
+            # Reconcile real YouTube upload / scheduled counts from publishing_ledger if present
+            try:
+                pub_rows = db_session.execute(
+                    text(
+                        "SELECT upload_status, COUNT(*) FROM publishing_ledger "
+                        "WHERE (video_path NOT LIKE '%test_%' OR video_path IS NULL) "
+                        "GROUP BY upload_status"
+                    )
+                ).fetchall()
+                ledger_counts = {str(r[0] or "").lower(): int(r[1] or 0) for r in pub_rows}
+                uploaded_count = ledger_counts.get("uploaded_public", 0) + ledger_counts.get("published", 0)
+                youtube_scheduled_count = ledger_counts.get("scheduled", 0) + ledger_counts.get("scheduled_publish", 0)
+                if ledger_counts.get("pending_queue", 0) > awaiting_approval_count:
+                    awaiting_approval_count = ledger_counts["pending_queue"]
+            except Exception:
+                pass
 
         # Next upcoming cycle
         next_cycle = "Cycle 1 (00:00 IST)"
@@ -351,11 +824,11 @@ class EmailMonitoringService:
             next_cycle = "Cycle 1 (Tomorrow 00:00 IST)"
 
         # Storage consumption (via media lifecycle report if available)
-        storage_mb = 431.5
+        storage_mb = 0.0
         try:
             from backend.app.services.media_lifecycle_manager import media_lifecycle_manager
             rep = media_lifecycle_manager.daily_report()
-            storage_mb = rep.get("total_size_mb", 431.5)
+            storage_mb = float(rep.get("total_size_mb", 0.0))
         except Exception:
             pass
 
@@ -1054,73 +1527,74 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
         body_html: str,
         recipient: Optional[str] = None,
         date_str: Optional[str] = None,
+        force: bool = False,
     ) -> Dict:
         """
         Dispatches end-of-cycle summary notification with strict idempotency,
-        persistent DB ledger, and desktop notification fallback.
+        transactional claim locking, persistent DB ledger, and desktop notification fallback.
         """
         recip = recipient or self.get_recipient()
         cur_date = date_str or datetime.now(IST_TZ).strftime("%Y-%m-%d")
-        idempotency_key = f"cycle_report_{cur_date}_{cycle_id}_{final_status}"
-        notif_id = f"notif_{int(datetime.utcnow().timestamp())}_{cycle_id}"
+        idempotency_key = (
+            f"daily_digest_{cur_date}"
+            if final_status == "DIGEST"
+            else f"cycle_report_{cur_date}_{cycle_id}_{final_status}"
+        )
 
-        # 1. Idempotency Check in Persistent Database
-        with SessionLocal() as db_session:
-            existing = db_session.query(PersistentNotificationModel).filter(
-                PersistentNotificationModel.idempotency_key == idempotency_key
-            ).first()
-
-            if existing and existing.status == "SENT":
-                logger.info(
-                    "[EMAIL_MONITOR] Duplicate notification suppressed for key '%s'.",
-                    idempotency_key,
-                )
-                return {
-                    "status": "DUPLICATE_SUPPRESSED",
-                    "idempotency_key": idempotency_key,
-                    "notification_id": existing.id,
-                }
-
-            if not existing:
-                notif_record = PersistentNotificationModel(
-                    id=notif_id,
-                    job_id=job_id,
-                    cycle_id=cycle_id,
-                    notification_type="CYCLE_SUMMARY",
-                    recipient=recip,
-                    status="PENDING",
-                    attempt_count=0,
-                    created_at=datetime.utcnow(),
-                    idempotency_key=idempotency_key,
-                    subject=subject,
-                    body_plain=body_plain,
-                    body_html=body_html,
-                )
-                db_session.add(notif_record)
-                db_session.commit()
-            else:
-                notif_record = existing
-                notif_id = existing.id
-
-        # 2. Attempt SMTP Dispatch
-        email_sent = False
-        last_err = None
-
-        if self.is_smtp_configured():
-            try:
-                email_sent = notification_service.notify_email(
-                    subject=subject,
-                    body_text=body_plain,
-                    body_html=body_html,
-                    recipient=recip,
-                    max_retries=2,
-                )
-            except Exception as e:
-                last_err = str(e)
-                logger.warning("[EMAIL_MONITOR] SMTP delivery exception: %s", e)
+        if final_status in (STATUS_SUCCESS, STATUS_RECOVERED_SUCCESS, "COMPLETED"):
+            notification_type = "PRODUCTION_COMPLETED"
+        elif final_status in (
+            STATUS_FAILED,
+            STATUS_QC_REJECTED,
+            STATUS_MISSED_DEADLINE,
+            STATUS_PUBLISHING_FAILED,
+        ):
+            notification_type = "PRODUCTION_FAILED"
+        elif final_status == "DIGEST":
+            notification_type = "DAILY_SUMMARY"
         else:
-            last_err = "SMTP credentials not configured"
+            notification_type = "CYCLE_SUMMARY"
+
+        # 1. Atomic Idempotency Check & Transactional DISPATCHING Claim
+        with SessionLocal() as db_session:
+            claimed_record, suppressed = self._claim_notification_slot(
+                db_session,
+                idempotency_key=idempotency_key,
+                job_id=job_id,
+                cycle_id=cycle_id,
+                notification_type=notification_type,
+                recipient=recip,
+                subject=subject,
+                body_plain=body_plain,
+                body_html=body_html,
+                force=force,
+            )
+            if suppressed is not None:
+                return suppressed
+            notif_id = claimed_record.id
+
+        # 2. Attempt SMTP Dispatch (classification distinguishes CONFIRMED_SENT vs FAILED_RETRYABLE vs DELIVERY_UNKNOWN)
+        if self.is_smtp_configured():
+            outcome = self._execute_smtp_with_state(
+                subject=subject,
+                body_text=body_plain,
+                body_html=body_html,
+                recipient=recip,
+                max_retries=2,
+            )
+        else:
+            outcome = {
+                "email_sent": False,
+                "delivery_state": "FAILED_RETRYABLE",
+                "error_category": "SMTP_NOT_CONFIGURED",
+                "last_error": "SMTP credentials not configured",
+                "provider_response": None,
+            }
             logger.info("[EMAIL_MONITOR] SMTP not configured; proceeding to desktop fallback.")
+
+        email_sent = bool(outcome["email_sent"])
+        delivery_state = outcome["delivery_state"]
+        last_err = outcome.get("last_error")
 
         # 3. Update Persistent Notification Ledger
         with SessionLocal() as db_session:
@@ -1129,24 +1603,56 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
             ).first()
             if record:
                 record.attempt_count = (record.attempt_count or 0) + 1
+                record.delivery_state = delivery_state
+                record.error_category = outcome.get("error_category")
+                record.provider_response = outcome.get("provider_response")
+                record.updated_at = datetime.utcnow()
                 if email_sent:
                     record.status = "SENT"
                     record.sent_at = datetime.utcnow()
                     record.last_error = None
+                elif delivery_state == "DELIVERY_UNKNOWN":
+                    record.status = "DELIVERY_UNKNOWN"
+                    record.last_error = last_err
                 else:
                     record.status = "FAILED"
                     record.last_error = last_err
                 db_session.commit()
 
+        # Mirror into legacy delivery ledger when CONFIRMED_SENT or DELIVERY_UNKNOWN
+        if job_id and final_status in (STATUS_SUCCESS, STATUS_RECOVERED_SUCCESS, "COMPLETED"):
+            try:
+                notification_service.record_event_delivered(
+                    f"SUCCESS:{job_id}",
+                    job_id=job_id,
+                    event_type="SUCCESS",
+                    title=subject[:250],
+                    channels_sent=1 if email_sent else 0,
+                    delivery_state=delivery_state,
+                    error_category=outcome.get("error_category") or "",
+                )
+            except Exception as mirror_exc:
+                logger.debug("Legacy ledger mirror skipped: %s", mirror_exc)
+
         # 4. Fallback Desktop Notification (Always triggers if email not sent or for critical alerts)
         is_err = final_status in (STATUS_FAILED, STATUS_QC_REJECTED, STATUS_MISSED_DEADLINE)
         desktop_msg = f"Cycle {cycle_id} finished with status {final_status}."
-        if not email_sent:
+        if delivery_state == "DELIVERY_UNKNOWN":
+            desktop_msg += " (Email SMTP timed out during send — status DELIVERY_UNKNOWN; verify inbox manually)"
+        elif not email_sent:
             desktop_msg += " (Email pending/failed - recorded in studio.db)"
         notification_service.notify_desktop(subject[:60], desktop_msg, is_error=is_err)
 
+        if email_sent:
+            ret_status = "SENT"
+        elif delivery_state == "DELIVERY_UNKNOWN":
+            ret_status = "DELIVERY_UNKNOWN"
+        else:
+            ret_status = "SAVED_LOCAL_PENDING"
+
         return {
-            "status": "SENT" if email_sent else "SAVED_LOCAL_PENDING",
+            "status": ret_status,
+            "delivery_state": delivery_state,
             "email_sent": email_sent,
             "notification_id": notif_id,
             "idempotency_key": idempotency_key,
@@ -1167,10 +1673,33 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
     ) -> Dict:
         """
         Main entry point called by the scheduler when a production cycle finishes.
-        Inspects result dict, prepares data, compiles dashboard, and dispatches email.
+        Inspects authoritative DB job/checkpoint + result dict, compiles dashboard, and dispatches email.
         """
         now_ist = test_now_ist or datetime.now(IST_TZ)
         cur_date_str = now_ist.strftime("%Y-%m-%d")
+        res = dict(result or {})
+
+        # Authoritative enrichment from JobModel & checkpoint if any fields were omitted
+        job_cp: Dict[str, Any] = {}
+        db_job_topic: Optional[str] = None
+        db_youtube_id: Optional[str] = None
+        db_start_ist: Optional[str] = None
+        with SessionLocal() as db_session:
+            db_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+            if db_job:
+                db_job_topic = db_job.topic_title
+                db_youtube_id = db_job.youtube_video_id
+                if db_job.actual_start_at:
+                    try:
+                        utc_dt = db_job.actual_start_at.replace(tzinfo=timezone.utc)
+                        db_start_ist = utc_dt.astimezone(IST_TZ).strftime("%H:%M:%S IST")
+                    except Exception:
+                        pass
+                if db_job.checkpoint_data_json:
+                    try:
+                        job_cp = json.loads(db_job.checkpoint_data_json) or {}
+                    except Exception:
+                        job_cp = {}
 
         # Determine cycle number
         profile = get_active_profile()
@@ -1182,52 +1711,102 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
                     c_num = idx
                     break
 
-        dashboard = self.generate_daily_dashboard(date_str=cur_date_str, test_now_ist=now_ist)
-        res_status = result.get("status", STATUS_FAILED)
+        res_status = res.get("status", STATUS_FAILED)
+        resolved_topic = (
+            res.get("topic")
+            or job_cp.get("topic")
+            or db_job_topic
+            or (f"Production {job_id}" if res_status in (STATUS_SUCCESS, "COMPLETED") else "Autonomous Selection")
+        )
+        resolved_title = (
+            res.get("video_title")
+            or job_cp.get("video_title")
+            or resolved_topic
+        )
+
+        overlay_payload = {
+            "cycle_id": cycle_id,
+            "job_id": job_id,
+            "status": res_status,
+            "topic": resolved_topic,
+            "total_duration_sec": res.get("total_duration_sec") or res.get("elapsed_sec") or res.get("duration_sec") or 0.0,
+        }
+        dashboard = self.generate_daily_dashboard(
+            date_str=cur_date_str,
+            test_now_ist=now_ist,
+            current_job_overlay=overlay_payload,
+        )
 
         # Encode thumbnail base64 if available (lightweight preview for email)
-        t_path = result.get("thumbnail_path") or ""
+        t_path = res.get("thumbnail_path") or job_cp.get("thumbnail_path") or ""
         t_b64 = _encode_thumbnail_for_email(t_path)
 
         if res_status in (STATUS_SUCCESS, "COMPLETED"):
+            dur_val = float(res.get("duration_sec") or job_cp.get("duration_sec") or 0.0)
+            tot_val = float(res.get("total_duration_sec") or res.get("elapsed_sec") or job_cp.get("total_duration_sec") or dur_val)
+            start_str = res.get("start_time") or job_cp.get("start_time") or db_start_ist or now_ist.strftime("%H:%M:%S IST")
+            comp_str = res.get("completion_time") or now_ist.strftime("%H:%M:%S IST")
+
+            qc_data = res.get("qc_checks") if isinstance(res.get("qc_checks"), dict) else {}
+            thumb_score = res.get("thumbnail_score") or job_cp.get("thumbnail_score") or qc_data.get("thumbnail_score")
+            thumb_val_str = f"PASSED (Score: {float(thumb_score):.2f}/10)" if thumb_score is not None else "PASSED"
+
+            yt_id = res.get("youtube_video_id") or db_youtube_id
+            pub_mode = str(getattr(settings, "PUBLISHING_MODE", "manual_approval"))
+            if yt_id:
+                yt_status_str = f"uploaded ({res.get('publishing_status') or pub_mode})"
+                vis_str = "Public" if pub_mode == "automatic_public" else "Private / Unlisted"
+                pub_state_str = "UPLOADED_TO_YOUTUBE"
+                approval_str = "APPROVED" if pub_mode == "manual_approval" else f"AUTO ({pub_mode})"
+            elif pub_mode == "manual_approval":
+                yt_status_str = "manual_approval - Withheld at safety gate (Zero unauthorized public uploads)"
+                vis_str = "Private / Pending Manual Authorization"
+                pub_state_str = "AWAITING_MANUAL_APPROVAL"
+                approval_str = "REQUIRED (settings.PUBLISHING_MODE = 'manual_approval')"
+            else:
+                yt_status_str = str(res.get("publishing_status") or f"pending_queue ({pub_mode})")
+                vis_str = "Queued for Upload"
+                pub_state_str = "QUEUED_NOT_YET_UPLOADED"
+                approval_str = f"MODE ({pub_mode})"
+
             prod = ProductionDetails(
                 date_str=cur_date_str,
                 cycle_id=cycle_id,
                 cycle_number=c_num,
                 job_id=job_id,
-                topic=result.get("topic") or "Tsutomu Yamaguchi — The Man Who Survived Two Atomic Bombs",
-                video_title=result.get("video_title") or "He Survived Both Atomic Bombs",
-                storytelling_style=result.get("storytelling_style") or "Cinematic Documentary",
-                narrative_archetype=result.get("narrative_archetype") or "Triumph Over Catastrophe",
-                duration_sec=float(result.get("duration_sec", 42.0)),
-                start_time=result.get("start_time") or (now_ist - timedelta(seconds=45)).strftime("%H:%M:%S IST"),
-                completion_time=now_ist.strftime("%H:%M:%S IST"),
-                total_duration_sec=float(result.get("total_duration_sec", 45.2)),
+                topic=resolved_topic,
+                video_title=resolved_title,
+                storytelling_style=res.get("storytelling_style") or job_cp.get("storytelling_style") or "Adaptive Multi-Style",
+                narrative_archetype=res.get("narrative_archetype") or job_cp.get("narrative_archetype") or "Documentary Short",
+                duration_sec=dur_val,
+                start_time=start_str,
+                completion_time=comp_str,
+                total_duration_sec=tot_val,
             )
             deliv = DeliverablesDetails(
-                video_path=result.get("video_path") or "",
+                video_path=res.get("video_path") or job_cp.get("video_path") or "",
                 thumbnail_path=t_path or "",
-                subtitle_path=result.get("subtitle_path") or "",
-                attribution_manifest_path=result.get("attribution_manifest_path") or "",
+                subtitle_path=res.get("subtitle_path") or job_cp.get("subtitle_path") or "Burned-in / Embedded in Video",
+                attribution_manifest_path=res.get("attribution_manifest_path") or job_cp.get("attribution_manifest_path") or res.get("manifest_path") or "",
                 thumbnail_base64=t_b64,
             )
             qc = QCDetails(
                 rendering_status="COMPLETED",
                 resolution_fps="1080x1920 @ 30 FPS",
-                av_sync_status="SYNCHRONIZED (Offset: 0.0ms)",
-                thumbnail_validation="PASSED (10-Point Score: 9.76/10)",
-                attribution_validation="PASSED (Public Domain Verified)",
-                text_clipping_checks="PASSED (Safe Margin: 120px)",
+                av_sync_status=qc_data.get("av_sync", "SYNCHRONIZED"),
+                thumbnail_validation=thumb_val_str,
+                attribution_validation=qc_data.get("attribution", "PASSED (License Verified)"),
+                text_clipping_checks=qc_data.get("text_clipping", "PASSED"),
                 final_qc_result="PASSED",
             )
             pub = PublishingDetails(
-                target_pub_timestamp=result.get("target_pub_timestamp") or f"{cycle_obj.target_pub_hour_ist:02d}:00 IST" if cycle_obj else "06:00 IST",
+                target_pub_timestamp=res.get("target_pub_timestamp") or (f"{cycle_obj.target_pub_hour_ist:02d}:00 IST" if cycle_obj else "N/A"),
                 timezone_name="Asia/Kolkata",
-                youtube_upload_status="manual_approval - Withheld at safety gate (Zero unauthorized public uploads)",
-                visibility="Private / Pending Manual Authorization",
-                youtube_video_id=result.get("youtube_video_id"),
-                scheduled_publication_status="AWAITING_MANUAL_APPROVAL",
-                manual_approval_status="REQUIRED (settings.PUBLISHING_MODE = 'manual_approval')",
+                youtube_upload_status=yt_status_str,
+                visibility=vis_str,
+                youtube_video_id=yt_id,
+                scheduled_publication_status=pub_state_str,
+                manual_approval_status=approval_str,
             )
 
             subject, plain_body, html_body = self.build_success_email(
@@ -1237,9 +1816,9 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
         else:
             # Failure / QC Rejected / Missed Deadline
             terminal_status = STATUS_FAILED
-            if res_status == "MISSED" or result.get("error") == "DEADLINE_EXCEEDED":
+            if res_status == "MISSED" or res.get("error") == "DEADLINE_EXCEEDED":
                 terminal_status = STATUS_MISSED_DEADLINE
-            elif "qc" in str(result.get("error", "")).lower() or res_status == "QC_REJECTED":
+            elif "qc" in str(res.get("error", "")).lower() or res_status in ("QC_REJECTED", "BLOCKED_QC"):
                 terminal_status = STATUS_QC_REJECTED
 
             prod = ProductionDetails(
@@ -1247,22 +1826,22 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
                 cycle_id=cycle_id,
                 cycle_number=c_num,
                 job_id=job_id,
-                topic=result.get("topic") or "Autonomous Selection",
-                video_title=result.get("video_title") or "Production Run Aborted",
+                topic=resolved_topic,
+                video_title=res.get("video_title") or (f"{resolved_topic} (Aborted)" if resolved_topic != "Autonomous Selection" else "Production Run Aborted"),
             )
             fail = FailureDetails(
-                last_completed_stage=result.get("last_completed_stage") or "STAGE_8_TTS",
-                failed_stage=result.get("failed_stage") or result.get("current_stage") or "RENDERING",
-                error_message=result.get("error") or "Pipeline exception encountered during stage execution.",
+                last_completed_stage=res.get("last_completed_stage") or "UNKNOWN",
+                failed_stage=res.get("failed_stage") or res.get("current_stage") or "PIPELINE_EXECUTION",
+                error_message=res.get("error") or "Pipeline exception encountered during stage execution.",
                 error_timestamp=now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
-                retry_count=int(result.get("retry_count", 2)),
-                recovery_attempts=int(result.get("recovery_attempts", 2)),
-                recovery_outcome=result.get("recovery_outcome") or "Execution Halted",
-                can_resume=bool(result.get("checkpoint_saved", True)),
+                retry_count=int(res.get("retry_count", 0)),
+                recovery_attempts=int(res.get("recovery_attempts", 0)),
+                recovery_outcome=res.get("recovery_outcome") or "Execution Halted",
+                can_resume=bool(res.get("checkpoint_saved", True)),
                 deadline_missed=(terminal_status == STATUS_MISSED_DEADLINE),
-                unapproved_artifacts=result.get("unapproved_artifacts") or [],
-                log_paths=result.get("log_paths") or ["logs/development.log", "logs/ffmpeg_render.log"],
-                recommended_next_action=result.get("recommended_action") or "Check stage error logs and restart cycle.",
+                unapproved_artifacts=res.get("unapproved_artifacts") or [],
+                log_paths=res.get("log_paths") or ["logs/development.log"],
+                recommended_next_action=res.get("recommended_action") or "Check stage error logs and restart cycle.",
             )
 
             subject, plain_body, html_body = self.build_failure_email(
@@ -1285,43 +1864,89 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
 
     def retry_pending_notifications(self) -> Dict:
         """
-        Retries all unsent or failed notifications from SQLite.
-        Survives application restarts and transient SMTP outages.
+        Retries only genuinely unsent or retryable notifications from SQLite.
+        Never automatically resends CONFIRMED_SENT, DISPATCHING, or DELIVERY_UNKNOWN rows.
         """
         if not self.is_smtp_configured():
             return {"status": "SKIPPED", "reason": "SMTP_NOT_CONFIGURED", "retried": 0}
 
         retried = 0
         succeeded = 0
+        skipped_unknown = 0
         with SessionLocal() as db_session:
-            pending = db_session.query(PersistentNotificationModel).filter(
-                PersistentNotificationModel.status.in_(["PENDING", "FAILED"])
+            self._ensure_ledger_schema(db_session)
+            candidates = db_session.query(PersistentNotificationModel).filter(
+                PersistentNotificationModel.status.in_(["PENDING", "FAILED", "DELIVERY_UNKNOWN"])
             ).all()
+            candidate_ids = []
+            for notif in candidates:
+                d_state = (getattr(notif, "delivery_state", None) or "").upper()
+                if notif.status == "DELIVERY_UNKNOWN" or d_state in ("DELIVERY_UNKNOWN", "CONFIRMED_SENT", "DISPATCHING"):
+                    if d_state == "DELIVERY_UNKNOWN" or notif.status == "DELIVERY_UNKNOWN":
+                        skipped_unknown += 1
+                    continue
+                candidate_ids.append(notif.id)
 
-            for notif in pending:
-                retried += 1
-                try:
-                    ok = notification_service.notify_email(
-                        subject=notif.subject,
-                        body_text=notif.body_plain,
-                        body_html=notif.body_html,
-                        recipient=notif.recipient,
-                        max_retries=1,
-                    )
-                    if ok:
+        for nid in candidate_ids:
+            with SessionLocal() as db_session:
+                claim_res = db_session.execute(
+                    text(
+                        "UPDATE persistent_notifications "
+                        "SET status='DISPATCHING', delivery_state='DISPATCHING', updated_at=:now "
+                        "WHERE id=:nid AND status IN ('PENDING', 'FAILED') "
+                        "AND COALESCE(delivery_state, 'PENDING') IN ('PENDING', 'FAILED_RETRYABLE', '')"
+                    ),
+                    {"now": datetime.utcnow(), "nid": nid},
+                )
+                db_session.commit()
+                if getattr(claim_res, "rowcount", 0) == 0:
+                    continue
+                notif = db_session.query(PersistentNotificationModel).filter(
+                    PersistentNotificationModel.id == nid
+                ).first()
+                if not notif:
+                    continue
+                subj, b_plain, b_html, recip = notif.subject, notif.body_plain, notif.body_html, notif.recipient
+
+            retried += 1
+            outcome = self._execute_smtp_with_state(
+                subject=subj,
+                body_text=b_plain,
+                body_html=b_html or "",
+                recipient=recip,
+                max_retries=1,
+            )
+            email_sent = bool(outcome["email_sent"])
+            delivery_state = outcome["delivery_state"]
+            with SessionLocal() as db_session:
+                notif = db_session.query(PersistentNotificationModel).filter(
+                    PersistentNotificationModel.id == nid
+                ).first()
+                if notif:
+                    notif.attempt_count = (notif.attempt_count or 0) + 1
+                    notif.delivery_state = delivery_state
+                    notif.error_category = outcome.get("error_category")
+                    notif.provider_response = outcome.get("provider_response")
+                    notif.updated_at = datetime.utcnow()
+                    if email_sent:
                         notif.status = "SENT"
                         notif.sent_at = datetime.utcnow()
                         notif.last_error = None
                         succeeded += 1
+                    elif delivery_state == "DELIVERY_UNKNOWN":
+                        notif.status = "DELIVERY_UNKNOWN"
+                        notif.last_error = outcome.get("last_error")
                     else:
-                        notif.attempt_count = (notif.attempt_count or 0) + 1
-                except Exception as e:
-                    notif.last_error = str(e)
-                    notif.attempt_count = (notif.attempt_count or 0) + 1
+                        notif.status = "FAILED"
+                        notif.last_error = outcome.get("last_error")
+                    db_session.commit()
 
-            db_session.commit()
-
-        return {"status": "COMPLETED", "retried": retried, "succeeded": succeeded}
+        return {
+            "status": "COMPLETED",
+            "retried": retried,
+            "succeeded": succeeded,
+            "skipped_delivery_unknown": skipped_unknown,
+        }
 
     # -------------------------------------------------------------------------
     # 7. Optional Daily Consolidated Digest
@@ -1345,11 +1970,16 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
         idempotency_key = f"daily_digest_{cur_date}"
 
         with SessionLocal() as db_session:
+            self._ensure_ledger_schema(db_session)
             existing = db_session.query(PersistentNotificationModel).filter(
                 PersistentNotificationModel.idempotency_key == idempotency_key
             ).first()
-            if existing and existing.status == "SENT":
-                return {"status": "DUPLICATE_SUPPRESSED", "idempotency_key": idempotency_key}
+            if existing and not force:
+                d_state = (getattr(existing, "delivery_state", None) or "").upper()
+                if existing.status == "SENT" or d_state == "CONFIRMED_SENT":
+                    return {"status": "DUPLICATE_SUPPRESSED", "idempotency_key": idempotency_key}
+                if existing.status == "DELIVERY_UNKNOWN" or d_state == "DELIVERY_UNKNOWN":
+                    return {"status": "DELIVERY_UNKNOWN_SUPPRESSED", "idempotency_key": idempotency_key}
 
         dashboard = self.generate_daily_dashboard(date_str=cur_date)
         subject = f"CrazzyDocs | Daily Production Digest | {cur_date}"

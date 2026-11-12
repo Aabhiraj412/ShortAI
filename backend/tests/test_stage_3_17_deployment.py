@@ -38,13 +38,13 @@ from backend.app.orchestration.crazzydocs_master_orchestrator import master_orch
 PROJECT_ROOT = Path(settings.BASE_DIR)
 
 
-def test_automatic_public_mode_configuration():
-    """Verifies automatic_public mode is active across all subsystems."""
-    assert settings.PUBLISHING_MODE == "automatic_public"
+def test_manual_approval_mode_configuration():
+    """Verifies publishing remains behind the manual-approval gate."""
+    assert settings.PUBLISHING_MODE == "manual_approval"
     agent_id = get_agent_identity()
-    assert agent_id.publishing_mode == "automatic_public"
+    assert agent_id.publishing_mode == "manual_approval"
     profile = get_active_profile()
-    assert profile.publishing_mode == "automatic_public"
+    assert profile.publishing_mode == "manual_approval"
 
 
 def test_title_and_description_metadata_generation():
@@ -103,6 +103,7 @@ def test_thumbnail_upload_handling(tmp_path):
     mock_req = MagicMock()
     mock_req.next_chunk.return_value = (None, {"id": "test_video_123"})
     mock_service.videos().insert.return_value = mock_req
+    mock_service.videos().list.return_value.execute.return_value = {"items": [{"id": "test_video_123"}]}
 
     # Mock thumbnail set response
     mock_thumb_req = MagicMock()
@@ -188,6 +189,7 @@ def test_network_retry_safety(tmp_path):
         (None, {"id": "retry_success_id"}),
     ]
     mock_service.videos().insert.return_value = mock_req
+    mock_service.videos().list.return_value.execute.return_value = {"items": [{"id": "retry_success_id"}]}
 
     engine = YouTubePublishingEngine(oauth_manager=mock_oauth, db=db)
     meta = YouTubeMetadata(

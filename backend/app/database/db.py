@@ -61,7 +61,7 @@ class JobModel(Base):
 
     # Stage 3.10 Resilient Recovery & Slot Management
     recovery_reason = Column(String(100), nullable=True) # STARTUP_RECONCILIATION, INTERNET_RESTORED, CHECKPOINT_RESUMED
-    recovery_policy = Column(String(50), default="CATCH_UP") # STRICT_WINDOW, CATCH_UP
+    recovery_policy = Column(String(50), default="STRICT_WINDOW")
     original_target_pub = Column(String(100), nullable=True)
     revised_target_pub = Column(String(100), nullable=True)
     actual_start_at = Column(DateTime, nullable=True)
@@ -183,9 +183,13 @@ class PersistentNotificationModel(Base):
     cycle_id = Column(String(50), index=True, nullable=True)
     notification_type = Column(String(50), default="CYCLE_SUMMARY") # CYCLE_SUMMARY, DAILY_DIGEST, ALERT
     recipient = Column(String(255), nullable=False)
-    status = Column(String(50), default="PENDING", index=True) # PENDING, SENT, FAILED, SUPPRESSED
+    status = Column(String(50), default="PENDING", index=True) # PENDING, DISPATCHING, SENT, FAILED, DELIVERY_UNKNOWN, SUPPRESSED
+    delivery_state = Column(String(50), default="PENDING", index=True) # PENDING, DISPATCHING, CONFIRMED_SENT, FAILED_RETRYABLE, DELIVERY_UNKNOWN, SUPPRESSED
+    error_category = Column(String(50), nullable=True)
+    provider_response = Column(Text, nullable=True)
     attempt_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
     idempotency_key = Column(String(255), unique=True, index=True, nullable=False)
@@ -193,6 +197,43 @@ class PersistentNotificationModel(Base):
     body_plain = Column(Text, nullable=False)
     body_html = Column(Text, nullable=True)
     payload_json = Column(Text, default="{}")
+
+
+def ensure_notification_ledger_schema(db_engine=None):
+    """Safely applies backward-compatible columns to persistent_notifications without modifying existing rows."""
+    target_engine = db_engine or engine
+    try:
+        from sqlalchemy import text
+        with target_engine.begin() as conn:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(persistent_notifications)")).fetchall()}
+            if not cols:
+                return
+            additions = [
+                ("delivery_state", "VARCHAR(50) DEFAULT 'PENDING'"),
+                ("error_category", "VARCHAR(50)"),
+                ("provider_response", "TEXT"),
+                ("updated_at", "DATETIME"),
+            ]
+            for col_name, col_type in additions:
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE persistent_notifications ADD COLUMN {col_name} {col_type}"))
+            conn.execute(text("""
+                UPDATE persistent_notifications
+                SET delivery_state = CASE
+                    WHEN status = 'SENT' THEN 'CONFIRMED_SENT'
+                    WHEN status = 'FAILED' THEN 'FAILED_RETRYABLE'
+                    WHEN status = 'DELIVERY_UNKNOWN' THEN 'DELIVERY_UNKNOWN'
+                    ELSE COALESCE(delivery_state, 'PENDING')
+                END
+                WHERE delivery_state IS NULL
+                   OR delivery_state = ''
+                   OR (status = 'SENT' AND delivery_state = 'PENDING')
+                   OR (status = 'FAILED' AND delivery_state = 'PENDING')
+                   OR (status = 'DELIVERY_UNKNOWN' AND delivery_state != 'DELIVERY_UNKNOWN')
+            """))
+    except Exception as e:
+        print(f"Notification ledger migration note: {e}")
+
 
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -206,7 +247,7 @@ def init_db():
         
         new_cols = [
             ("recovery_reason", "VARCHAR(100)"),
-            ("recovery_policy", "VARCHAR(50) DEFAULT 'CATCH_UP'"),
+            ("recovery_policy", "VARCHAR(50) DEFAULT 'STRICT_WINDOW'"),
             ("original_target_pub", "VARCHAR(100)"),
             ("revised_target_pub", "VARCHAR(100)"),
             ("actual_start_at", "DATETIME"),
@@ -218,4 +259,5 @@ def init_db():
         con.close()
     except Exception as e:
         print(f"Migration note: {e}")
+    ensure_notification_ledger_schema(engine)
     print("Database tables initialized successfully.")

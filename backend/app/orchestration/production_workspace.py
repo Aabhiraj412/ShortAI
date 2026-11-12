@@ -25,11 +25,16 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE_ROOT
+from backend.app.core.paths import (
+    MEDIA_THUMBNAIL_DIR,
+    MEDIA_VIDEO_DIR,
+    PROJECT_ROOT_STR as WORKSPACE_ROOT,
+)
 PRODUCTIONS_BASE_DIR = os.path.join(WORKSPACE_ROOT, "media", "productions")
 
 
@@ -138,6 +143,86 @@ class ProductionWorkspace:
         """Returns the authoritative final thumbnail destination for this production."""
         fname = filename or f"thumb_{self.production_id}.png"
         return os.path.join(self.thumbnails_dir, fname)
+
+    def deliver_approved_sample(self, video_source: str, thumbnail_source: str) -> Dict[str, Any]:
+        """Atomically stage and create-only link an approved sample in the canonical output folders."""
+        assets = (
+            ("video", os.path.abspath(video_source), os.path.join(str(MEDIA_VIDEO_DIR), "crazzydocs_black_hole_final.mp4")),
+            ("thumbnail", os.path.abspath(thumbnail_source), os.path.join(str(MEDIA_THUMBNAIL_DIR), "crazzydocs_black_hole_thumbnail.jpg")),
+        )
+        pending: List[Dict[str, Any]] = []
+        results: Dict[str, Dict[str, Any]] = {}
+        for asset_type, source, destination in assets:
+            if not os.path.isfile(source) or os.path.getsize(source) == 0:
+                raise FileNotFoundError(f"Approved {asset_type} source is missing or empty: {source}")
+            if os.path.commonpath((os.path.abspath(self.prod_dir), source)) != os.path.abspath(self.prod_dir):
+                raise ValueError(f"Approved {asset_type} source must remain inside its production workspace: {source}")
+            source_hash = compute_file_sha256(source)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            if os.path.exists(destination):
+                if compute_file_sha256(destination) != source_hash:
+                    raise FileExistsError(f"Refusing to overwrite a different canonical {asset_type}: {destination}")
+                results[asset_type] = {
+                    "workspace_path": source,
+                    "canonical_path": destination,
+                    "sha256": source_hash,
+                    "file_size_bytes": os.path.getsize(destination),
+                    "delivery_status": "already_present",
+                }
+                continue
+            pending.append({
+                "type": asset_type,
+                "source": source,
+                "destination": destination,
+                "sha256": source_hash,
+                "file_size_bytes": os.path.getsize(source),
+            })
+
+        staged: List[Dict[str, Any]] = []
+        linked: List[Dict[str, Any]] = []
+        try:
+            for asset in pending:
+                descriptor, temporary_path = tempfile.mkstemp(
+                    prefix=f".{os.path.basename(asset['destination'])}.",
+                    suffix=".tmp",
+                    dir=os.path.dirname(asset["destination"]),
+                )
+                with os.fdopen(descriptor, "wb") as target, open(asset["source"], "rb") as source_file:
+                    shutil.copyfileobj(source_file, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                staged.append({**asset, "temporary_path": temporary_path})
+
+            for asset in staged:
+                try:
+                    os.link(asset["temporary_path"], asset["destination"])
+                except FileExistsError:
+                    if compute_file_sha256(asset["destination"]) != asset["sha256"]:
+                        raise FileExistsError(
+                            f"Refusing to overwrite a different canonical {asset['type']}: {asset['destination']}"
+                        )
+                    delivery_status = "already_present"
+                else:
+                    linked.append(asset)
+                    delivery_status = "created"
+                results[asset["type"]] = {
+                    "workspace_path": asset["source"],
+                    "canonical_path": asset["destination"],
+                    "sha256": asset["sha256"],
+                    "file_size_bytes": asset["file_size_bytes"],
+                    "delivery_status": delivery_status,
+                }
+        except OSError:
+            for asset in reversed(linked):
+                if compute_file_sha256(asset["destination"]) == asset["sha256"]:
+                    os.unlink(asset["destination"])
+            raise
+        finally:
+            for asset in staged:
+                if os.path.exists(asset["temporary_path"]):
+                    os.unlink(asset["temporary_path"])
+
+        return results
 
     def has_verified_deliverable(self) -> bool:
         """Idempotency check: verifies if production already has valid non-empty deliverables."""

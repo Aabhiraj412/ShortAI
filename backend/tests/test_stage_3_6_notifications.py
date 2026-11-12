@@ -24,13 +24,17 @@ TEST_LOG_PATH = os.path.join(WORKSPACE, "logs", "test_notifications.jsonl")
 
 
 @pytest.fixture
-def test_notifier():
+def test_notifier(tmp_path):
     if os.path.exists(TEST_LOG_PATH):
         try:
             os.remove(TEST_LOG_PATH)
         except Exception:
             pass
-    return NotificationManager(alert_log_path=TEST_LOG_PATH, cooldown_seconds=2.0)
+    return NotificationManager(
+        alert_log_path=TEST_LOG_PATH,
+        cooldown_seconds=2.0,
+        db_path=str(tmp_path / "notification-test.db"),
+    )
 
 
 def test_success_alert_formatting(test_notifier):

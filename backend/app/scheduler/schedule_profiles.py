@@ -27,6 +27,7 @@ class ProductionCycle:
     pub_rollover_days: int = 0         # 1 if target pub is next calendar day
     window_hours: float = 6.0          # Max generation SLA window before missed deadline
     recovery_window_hours: float = 4.0 # Time after cycle start within which recovery is valid (00-04, 06-10, 12-16, 18-22)
+    active_weekdays: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
 
     def calculate_datetimes(self, current_dt_ist: Optional[datetime] = None) -> Tuple[datetime, datetime, str, str]:
         """
@@ -59,16 +60,16 @@ class ProductionCycle:
         return now_dt > deadline
 
     def is_within_recovery_window(self, cycle_start_dt: datetime, check_dt: Optional[datetime] = None) -> bool:
-        """Returns True if check time is between cycle start and start + recovery_window_hours."""
+        """Returns True during the half-open recovery interval [start, expiration)."""
         now_dt = check_dt or datetime.now(IST_TZ)
         rec_end = cycle_start_dt + timedelta(hours=self.recovery_window_hours)
-        return cycle_start_dt <= now_dt <= rec_end
+        return cycle_start_dt <= now_dt < rec_end
 
     def is_past_recovery_window(self, cycle_start_dt: datetime, check_dt: Optional[datetime] = None) -> bool:
-        """Returns True if check time is strictly after cycle start + recovery_window_hours."""
+        """Returns True at or after recovery expiration."""
         now_dt = check_dt or datetime.now(IST_TZ)
         rec_end = cycle_start_dt + timedelta(hours=self.recovery_window_hours)
-        return now_dt > rec_end
+        return now_dt >= rec_end
 
 
 @dataclass
@@ -78,7 +79,9 @@ class ScheduleProfile:
     description: str
     timezone_name: str = "Asia/Kolkata"
     cycles: List[ProductionCycle] = field(default_factory=list)
-    publishing_mode: str = "automatic_public"
+    publishing_mode: str = "manual_approval"
+    schedule_version: int = 1
+    revision: str = ""
 
     @property
     def tz(self) -> ZoneInfo:
@@ -140,7 +143,7 @@ PROFILE_FOUR_CYCLES_DAILY = ScheduleProfile(
             recovery_window_hours=4.0,
         ),
     ],
-    publishing_mode="automatic_public",
+    publishing_mode="manual_approval",
 )
 
 # Recovery policies
@@ -148,8 +151,8 @@ POLICY_STRICT_WINDOW = "STRICT_WINDOW"
 POLICY_CATCH_UP = "CATCH_UP"
 
 def get_recovery_policy() -> str:
-    """Returns active recovery policy: 'CATCH_UP' (default) or 'STRICT_WINDOW'."""
-    return os.environ.get("CRAZZYDOCS_RECOVERY_POLICY", POLICY_CATCH_UP).upper()
+    """Return the enforced no-backfill recovery policy."""
+    return POLICY_STRICT_WINDOW
 
 # Profile 2: SINGLE_DAILY_2300 (Single Overnight Production Pipeline)
 PROFILE_SINGLE_DAILY_2300 = ScheduleProfile(
@@ -169,7 +172,7 @@ PROFILE_SINGLE_DAILY_2300 = ScheduleProfile(
             recovery_window_hours=4.0,
         ),
     ],
-    publishing_mode="automatic_public",
+    publishing_mode="manual_approval",
 )
 
 AVAILABLE_PROFILES: Dict[str, ScheduleProfile] = {
@@ -179,33 +182,55 @@ AVAILABLE_PROFILES: Dict[str, ScheduleProfile] = {
 
 # Runtime active profile selection (Default: FOUR_CYCLES_DAILY)
 _CURRENT_PROFILE_NAME = os.environ.get("CRAZZYDOCS_SCHEDULE_PROFILE", "FOUR_CYCLES_DAILY")
+_RUNTIME_PROFILE: Optional[ScheduleProfile] = None
 
 
 def get_active_profile() -> ScheduleProfile:
     """Returns currently active schedule profile."""
+    if _RUNTIME_PROFILE is not None:
+        return _RUNTIME_PROFILE
     global _CURRENT_PROFILE_NAME
     return AVAILABLE_PROFILES.get(_CURRENT_PROFILE_NAME, PROFILE_FOUR_CYCLES_DAILY)
 
 
 def set_active_profile(profile_name: str) -> ScheduleProfile:
     """Switches active schedule profile at runtime."""
+    global _RUNTIME_PROFILE
     global _CURRENT_PROFILE_NAME
     if profile_name not in AVAILABLE_PROFILES:
         raise ValueError(
             f"Unknown profile '{profile_name}'. Available profiles: {list(AVAILABLE_PROFILES.keys())}"
         )
+    _RUNTIME_PROFILE = None
     _CURRENT_PROFILE_NAME = profile_name
     return AVAILABLE_PROFILES[profile_name]
 
 
+def set_runtime_profile(profile: ScheduleProfile) -> ScheduleProfile:
+    """Installs an explicitly activated custom schedule in the current process."""
+    global _CURRENT_PROFILE_NAME, _RUNTIME_PROFILE
+    _RUNTIME_PROFILE = profile
+    _CURRENT_PROFILE_NAME = profile.name
+    return profile
+
+
 def list_profiles() -> List[Dict]:
     """Returns metadata for all available schedule profiles."""
-    return [
+    profiles = [
         {
             "name": p.name,
             "description": p.description,
             "cycle_count": len(p.cycles),
-            "is_active": (p.name == _CURRENT_PROFILE_NAME),
+            "is_active": (p.name == get_active_profile().name),
         }
         for p in AVAILABLE_PROFILES.values()
     ]
+    active = get_active_profile()
+    if active.name not in AVAILABLE_PROFILES:
+        profiles.append({
+            "name": active.name,
+            "description": active.description,
+            "cycle_count": len(active.cycles),
+            "is_active": True,
+        })
+    return profiles

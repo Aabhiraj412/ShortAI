@@ -34,6 +34,8 @@ class QualityControlEngine:
         storyboard_beats: Optional[List[Dict]] = None,
         workspace_dir: Optional[str] = None,
         topic_title: str = "",
+        rendering_engine: Optional[str] = None,
+        execution_context: Optional[str] = None,
     ) -> Tuple[bool, List[str], Dict]:
         """
         Runs 15 validation checks on rendered video and assets.
@@ -181,6 +183,19 @@ class QualityControlEngine:
                     f"PASS (distinct={div_audit.distinct_assets}, max_reuse={div_audit.max_reuse_observed})"
                 )
                 checks["canonical_asset_persistence"] = "PASS (All canonical storyboard assets verified on disk)"
+
+        # 17. Stage 3.23.4 Approved Renderer Compliance Check
+        if rendering_engine or execution_context:
+            from backend.app.content.creative_identity_policy import CreativeIdentityPolicy
+            r_ok, r_issues = CreativeIdentityPolicy.validate_production_renderer(
+                rendering_engine or "",
+                execution_context=execution_context,
+            )
+            if not r_ok:
+                errors.extend(r_issues)
+                checks["renderer_compliance"] = f"FAIL ({'; '.join(r_issues)})"
+            else:
+                checks["renderer_compliance"] = f"PASS ({rendering_engine})"
         
         passed = len(errors) == 0
         return passed, errors, checks

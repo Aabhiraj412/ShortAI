@@ -1,9 +1,9 @@
 """
-Style Consistency System & Single-Style Architecture.
+Style Consistency System & Adaptive Per-Beat Style Architecture.
 
 Defines the complete design identity, typography families, color palettes,
 and transition languages for each of the four core visual styles,
-enforcing strict single-style cohesion across all video scenes.
+enforcing approved, narratively justified per-beat style changes across each video.
 """
 
 from dataclasses import dataclass, field
@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 
 class VisualStyle(str, Enum):
-    """The four exclusive primary visual styles."""
+    """The legacy primary styles retained for existing plan callers."""
     POP_INFO = "pop_info"
     DATA_STORY = "data_story"
     CHALK_TALK = "chalk_talk"
@@ -121,7 +121,7 @@ THEMES: Dict[VisualStyle, StyleTheme] = {
 
 
 class StyleConsistencyValidator:
-    """Validates that a storyboard plan adheres to a single primary visual style."""
+    """Validates legacy single-style plans and justified per-beat adaptive style plans."""
 
     @staticmethod
     def validate_plan(primary_style: VisualStyle, scenes: List[Dict]) -> Tuple[bool, List[str]]:
@@ -134,10 +134,35 @@ class StyleConsistencyValidator:
         if not theme:
             return False, [f"Unknown visual style: {primary_style}"]
 
+        previous_beat_style: Optional[str] = None
         for i, scene in enumerate(scenes):
             scene_id = scene.get("id", f"scene_{i+1}")
             modality = scene.get("modality")
-            
+            params = scene.get("params") if isinstance(scene.get("params"), dict) else {}
+            beat_style = scene.get("visual_style") or params.get("visual_style")
+
+            if beat_style:
+                style_value = getattr(beat_style, "value", str(beat_style)).lower()
+                approved_styles = {
+                    "documentary",
+                    "pop_info",
+                    "chalk_talk",
+                    "creator_motion_graphics",
+                    "creator_motion",
+                    "data_story",
+                    "cinematic_explainer",
+                    "map_based_storytelling",
+                }
+                if style_value not in approved_styles:
+                    violations.append(f"Scene {i+1} [{scene_id}] specifies unsupported visual style '{style_value}'")
+                if (
+                    previous_beat_style is not None
+                    and style_value != previous_beat_style
+                    and not str(scene.get("style_transition_rationale") or params.get("style_transition_rationale") or "").strip()
+                ):
+                    violations.append(f"Scene {i+1} [{scene_id}] changes visual style without a narrative transition rationale")
+                previous_beat_style = style_value
+
             # 1. Check style modality compliance
             # If the modality is one of the 4 styles, it MUST match primary_style
             style_modalities = {
@@ -146,7 +171,7 @@ class StyleConsistencyValidator:
                 "chalk_talk": VisualStyle.CHALK_TALK,
                 "creator_motion": VisualStyle.CREATOR_MOTION,
             }
-            if modality in style_modalities and style_modalities[modality] != primary_style:
+            if not beat_style and modality in style_modalities and style_modalities[modality] != primary_style:
                 violations.append(
                     f"Scene {i+1} [{scene_id}] specifies modality '{modality}' which conflicts "
                     f"with the video's primary visual style '{primary_style.value}'"

@@ -93,6 +93,7 @@ class VisualDirector:
             dur = round(et - st, 2)
             headline = default_headlines[min(i, len(default_headlines) - 1)]
 
+            prev_style = scenes[-1]["visual_style"] if scenes else None
             scene_dict = {
                 "id": i + 1,
                 "start_time": round(st, 2),
@@ -101,6 +102,12 @@ class VisualDirector:
                 "badge": badge,
                 "background": chosen_bg,
                 "visual_style": visual_style,
+                "style_selection_rationale": f"Selected {visual_style} to match narrative beat focus: {headline[:60]}",
+                "style_transition_rationale": (
+                    f"Transitioned from {prev_style} to {visual_style} for visual pacing."
+                    if prev_style and prev_style != visual_style
+                    else None
+                ),
                 "camera_zoom_speed": 0.02,
                 "particles": True,
                 "transition": trans,

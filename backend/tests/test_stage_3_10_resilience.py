@@ -114,8 +114,8 @@ def test_laptop_starts_at_1300(clean_test_db):
     assert len(report["queued_cycles"]) == 1  # Cycle 4 queued
 
 
-def test_laptop_starts_at_2300_strict_vs_catch_up(clean_test_db):
-    """Simulates laptop starting at 23:00 IST (Cycle 4 window 18:00-22:00 expired)."""
+def test_laptop_starts_at_2300_never_backfills_expired_cycles(clean_test_db):
+    """Simulates a late startup after all four production recovery windows expired."""
     test_date = clean_test_db
     now_2300 = datetime(2026, 11, 10, 23, 0, 0, tzinfo=IST_TZ)
 
@@ -133,13 +133,14 @@ def test_laptop_starts_at_2300_strict_vs_catch_up(clean_test_db):
         db_session.query(JobModel).filter(JobModel.date_str == test_date).delete()
         db_session.commit()
 
-    # 2. Under CATCH_UP: exactly 1 cycle recovered with revised publication slot
-    report_catchup = reconciler.reconcile_on_startup(test_now_ist=now_2300, recovery_policy=POLICY_CATCH_UP)
-    assert len(report_catchup["recovered_cycles"]) == 1
-    assert len(report_catchup["missed_cycles"]) == 3
-    rec = report_catchup["recovered_cycles"][0]
-    assert rec["recovery_type"] == "CATCH_UP_POLICY"
-    assert rec["rescheduled"] is True
+    # Legacy CATCH_UP requests are ignored; expired cycles remain expired.
+    report_requested_catchup = reconciler.reconcile_on_startup(
+        test_now_ist=now_2300,
+        recovery_policy=POLICY_CATCH_UP,
+    )
+    assert report_requested_catchup["policy"] == POLICY_STRICT_WINDOW
+    assert report_requested_catchup["recovered_cycles"] == []
+    assert len(report_requested_catchup["missed_cycles"]) == 4
 
 
 def test_internet_restored_after_outage(clean_test_db):
