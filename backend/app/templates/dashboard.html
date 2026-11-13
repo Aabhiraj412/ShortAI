@@ -457,6 +457,14 @@
         <div class="meta-item"><strong>Last activity</strong><span id="monActivity">--</span></div>
         <div class="meta-item"><strong>Recovery</strong><span id="monRecovery">--</span></div>
       </div>
+      <div class="meta-grid" id="monitorRetryMeta" style="margin-top:10px;">
+        <div class="meta-item"><strong>Retry policy</strong><span id="monPolicy">--</span></div>
+        <div class="meta-item"><strong>Attempt</strong><span id="monAttempt">--</span></div>
+        <div class="meta-item"><strong>Next retry</strong><span id="monNextRetry">--</span></div>
+        <div class="meta-item"><strong>Recovery deadline</strong><span id="monDeadline">--</span></div>
+        <div class="meta-item"><strong>Last failure</strong><span id="monLastFailure">--</span></div>
+        <div class="meta-item"><strong>Automatic retry</strong><span id="monAutoRetry">--</span></div>
+      </div>
       <div class="progress-bar" style="margin-top:12px;"><div class="progress-fill" id="pipelineProgressFill" style="width: 0%;"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);">
         <span id="pipelineSummary">Idle — awaiting next scheduled cycle</span>
@@ -1482,7 +1490,8 @@ async function refreshMonitor() {
     set("ovLastSuccess", ls ? (ls.topic || ls.job_id) : "None yet");
     set("ovLastSuccessSub", ls ? `${ls.completed_at_ist || ""}${ls.publishing_state ? " · " + ls.publishing_state : ""}` : "--");
     const errBox = document.getElementById("monError");
-    renderRetryOffer(m.retry_offer, !!j);
+    renderRetryState(m.recovery_policy, j || (m.recent_jobs || [])[0]);
+    renderRetryOffer(m.retry_offer, !!j && !(j.retry && j.retry.waiting_for_change));
     if (!j) {
       set("ovActiveJob", "None"); set("ovActiveJobSub", "No production running");
       set("monStage", "Idle"); set("monProgress", "--"); set("monActivity", "--"); set("monRecovery", "--");
@@ -1496,9 +1505,11 @@ async function refreshMonitor() {
     const ago = j.seconds_since_activity;
     set("monActivity", j.last_activity_ist ? `${shortIst(j.last_activity_ist)} (${ago < 120 ? ago + " s" : Math.round(ago / 60) + " min"} ago)` : "--");
     const r = j.recovery || {};
+    const rt = j.retry || {};
+    const limit = rt.policy === "unlimited_until_recovery_deadline" ? "until deadline" : r.max_production_attempts;
     set("monRecovery", r.next_retry_at_ist
-      ? `Retry at ${shortIst(r.next_retry_at_ist)} · attempt ${r.production_attempts}/${r.max_production_attempts}`
-      : (j.status === "HANDOFF_PENDING" ? `Publishing retry ${r.publish_attempts}` : `Attempt ${r.production_attempts + 1}/${r.max_production_attempts}`));
+      ? `Retry at ${shortIst(r.next_retry_at_ist)} · ${r.production_attempts} failed (${limit})`
+      : (j.status === "HANDOFF_PENDING" ? `Publishing retry ${r.publish_attempts}` : `Attempt ${r.production_attempts + 1} (${limit})`));
     document.getElementById("pipelineProgressFill").style.width = `${j.progress_pct}%`;
     set("pipelinePct", `${Math.round(j.progress_pct)}%`);
     set("pipelineSummary", `${j.topic || j.job_id} · ${j.stage || j.status}`);
@@ -1507,15 +1518,41 @@ async function refreshMonitor() {
   } catch (err) { /* overview keeps last values */ }
 }
 
+function fmtDuration(sec) {
+  if (sec === null || sec === undefined) return "--";
+  if (sec <= 0) return "passed";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? `${h} h ${m} min` : (m ? `${m} min` : `${sec} s`);
+}
+
+function renderRetryState(policy, j) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? "--"; };
+  set("monPolicy", policy ? policy.policy_label : "--");
+  const rt = j && j.retry;
+  if (!rt) { ["monAttempt", "monNextRetry", "monDeadline", "monLastFailure", "monAutoRetry"].forEach(id => set(id, "--")); return; }
+  set("monAttempt", `${rt.current_attempt ?? "--"} of ${rt.max_attempts_label} · ${rt.total_attempts} total (${j.job_id})`);
+  set("monNextRetry", rt.next_retry_at_ist
+    ? `${shortIst(rt.next_retry_at_ist)}${rt.current_backoff_seconds != null ? " · backoff " + fmtDuration(rt.current_backoff_seconds) : ""}`
+    : (rt.current_backoff_seconds != null ? `-- (last backoff ${fmtDuration(rt.current_backoff_seconds)})` : "--"));
+  set("monDeadline", rt.recovery_deadline_ist ? `${shortIst(rt.recovery_deadline_ist)} · ${fmtDuration(rt.remaining_seconds)} left` : "--");
+  set("monLastFailure", rt.last_failure
+    ? `${rt.classification || "?"} at ${shortIst(rt.last_failure_at_ist)}: ${rt.last_failure.slice(0, 160)}` : "None");
+  set("monAutoRetry", rt.auto_retry_status + (rt.operator_action_needed ? " · operator action needed" : ""));
+}
+
 function renderRetryOffer(offer, busy) {
   const box = document.getElementById("monRetry");
   if (!box) return;
-  if (busy || !offer || offer.status !== "FAILED") { box.style.display = "none"; return; }
+  if (busy || !offer || !(offer.status === "FAILED" || offer.waiting_for_change)) { box.style.display = "none"; return; }
   box.style.display = "block";
   if (offer.eligible) {
-    box.innerHTML = `<div style="margin-bottom:6px;">${offer.job_id} failed (${offer.classification}, ${offer.attempts}/${offer.max_retries} attempts). `
-      + `One extra attempt is allowed until the recovery window ends at ${shortIst(offer.recovery_ends_ist)}; target publication ${shortIst(offer.target_publication_ist)}.</div>`
-      + `<button class="btn warn sm" onclick="requestOperatorRetry('${offer.job_id}')">Retry once</button>`;
+    const used = offer.operator_retries_used || 0;
+    const what = offer.waiting_for_change
+      ? `${offer.job_id} is waiting for a change after a ${offer.classification} failure. Retrying confirms the cause was fixed.`
+      : `${offer.job_id} failed (${offer.classification}, ${offer.attempts} attempts).`;
+    box.innerHTML = `<div style="margin-bottom:6px;">${what} Manual retries used: ${used}. `
+      + `The recovery window ends at ${shortIst(offer.recovery_ends_ist)}; target publication ${shortIst(offer.target_publication_ist)}.</div>`
+      + `<button class="btn warn sm" onclick="requestOperatorRetry('${offer.job_id}')">Retry now</button>`;
   } else {
     box.innerHTML = `<span style="color:var(--muted);">Retry of ${offer.job_id} not available: ${(offer.reasons || []).join(" ")}</span>`;
   }
@@ -1523,7 +1560,7 @@ function renderRetryOffer(offer, busy) {
 
 async function requestOperatorRetry(jobId) {
   const policy = "If it succeeds, the video follows the current publishing policy (with automatic private scheduling it is uploaded to YouTube as private and scheduled for the target time).";
-  if (!confirm(`Retry ${jobId} once with the current renderer?\n\n${policy}\n\nIf it fails again it stays FAILED.`)) return;
+  if (!confirm(`Retry ${jobId} now with the current renderer?\n\n${policy}\n\nIf it fails again, automatic retries continue under the recovery policy until the recovery deadline.`)) return;
   try {
     const res = await apiJson(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST", body: JSON.stringify({ confirm: true }) });
     alert(res.message || "Retry scheduled.");

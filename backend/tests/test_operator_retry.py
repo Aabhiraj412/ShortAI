@@ -379,4 +379,4 @@ def test_retry_endpoints_are_local_and_confirmed(sched_db):
     assert r.status_code == 409 and "Job not found" in r.json()["detail"]
     g = client.get("/api/production/jobs/nope/retry")
     assert g.status_code == 200 and g.json()["eligible"] is False
-    assert "Retry once" in client.get("/dashboard").text
+    assert "Retry now" in client.get("/dashboard").text      # manual retry control (3.28 label)

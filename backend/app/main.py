@@ -1996,6 +1996,31 @@ class OperatorRetryRequest(ConfirmedActionRequest):
     confirm: bool = False
 
 
+class RecoveryPolicyRequest(ConfirmedActionRequest):
+    confirm: bool = False
+    settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/api/production/recovery-policy")
+async def api_recovery_policy(_: None = Depends(require_local_control)):
+    from backend.app.services import production_monitor_service
+    return production_monitor_service._policy_summary()
+
+
+@app.post("/api/production/recovery-policy")
+async def api_recovery_policy_save(req: RecoveryPolicyRequest, _: None = Depends(require_local_control)):
+    """Validated change of the retry/recovery policy (config/recovery_policy.json). Requires confirm."""
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to change the recovery policy.")
+    from backend.app.scheduler.recovery_settings import save_settings
+    from backend.app.services import production_monitor_service
+    try:
+        save_settings(req.settings)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return production_monitor_service._policy_summary()
+
+
 @app.get("/api/production/jobs/{job_id}/retry")
 async def api_operator_retry_eligibility(job_id: str, _: None = Depends(require_local_control)):
     from backend.app.services import operator_retry_service

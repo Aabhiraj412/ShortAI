@@ -28,6 +28,89 @@ def _ist(dt: Optional[datetime]) -> Optional[str]:
     return dt.astimezone(IST_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
+POLICY_LABELS = {
+    "unlimited_until_recovery_deadline": "Unlimited until recovery deadline",
+    "bounded": "Bounded (fixed attempt count)",
+}
+
+
+def _parse_utc(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def retry_view(job, cs: dict, now_utc: datetime, settings=None) -> dict[str, Any]:
+    """Retry-policy state of one job, for the Production Monitor."""
+    from backend.app.scheduler import retry_policy as rp
+    from backend.app.scheduler.recovery_settings import POLICY_UNLIMITED, load_settings
+
+    s = settings or load_settings()
+    policy = cs.get("retry_policy") or s.retry_policy
+    unlimited = policy == POLICY_UNLIMITED
+    hist = [h for h in (cs.get("attempt_history") or []) if h.get("kind") in ("production", "publish")]
+    failures = int(job.retry_count or 0)
+    running = job.status in ("RUNNING", "RETRYING", "QUEUED")
+    deadline = rp.recovery_deadline_utc(job)
+    remaining = int((deadline - now_utc).total_seconds()) if deadline else None
+    next_at = _parse_utc(cs.get("next_retry_at_utc"))
+    last = hist[-1] if hist else None
+    backoff = None
+    if last and last.get("next_retry_at_utc") and last.get("failed_at_utc"):
+        a, b = _parse_utc(last["failed_at_utc"]), _parse_utc(last["next_retry_at_utc"])
+        if a and b:
+            backoff = max(0, int((b - a).total_seconds()))
+    waiting_for_change = bool(cs.get("requires_change")) and not cs.get("change_acknowledged")
+    status = job.status
+    if status in ("COMPLETED",):
+        auto = "stopped: production succeeded"
+    elif status == rp.STATUS_RECOVERY_EXPIRED:
+        auto = "stopped: recovery deadline reached"
+    elif running:
+        auto = "attempt in progress"
+    elif status == "HANDOFF_PENDING":
+        auto = "publishing retry pending (no re-render, no re-upload)"
+    elif status == rp.STATUS_RETRY_SCHEDULED and waiting_for_change:
+        auto = "waiting for a code or configuration change"
+    elif status == rp.STATUS_RETRY_SCHEDULED:
+        auto = "scheduled"
+    elif status in ("FAILED", "BLOCKED_QC"):
+        auto = "stopped: " + ("recovery deadline reached" if remaining is not None and remaining <= 0
+                              else "failure needs operator action" if cs.get("retry_terminal") else "failed")
+    else:
+        auto = "idle"
+    operator_needed = (status in ("FAILED", "BLOCKED_QC") and (remaining is None or remaining > 0)) or (
+        status == rp.STATUS_RETRY_SCHEDULED and waiting_for_change)
+    return {
+        "policy": policy,
+        "policy_label": POLICY_LABELS.get(policy, policy),
+        "max_attempts_label": "No fixed limit (until recovery deadline)" if unlimited else str(int(job.max_retries or 3)),
+        "failed_attempts": failures,
+        "current_attempt": failures + 1 if running else (failures if failures else None),
+        "total_attempts": failures + (1 if running else 0),
+        "next_retry_at_ist": _ist(next_at) if next_at and status == rp.STATUS_RETRY_SCHEDULED else None,
+        "current_backoff_seconds": backoff,
+        "recovery_deadline_ist": _ist(deadline) if deadline else None,
+        "remaining_seconds": remaining,
+        "last_failure_at_ist": _ist(_parse_utc(cs.get("last_failure_at_utc"))),
+        "last_failure": (cs.get("last_error_message") or "")[:400] or None,
+        "classification": cs.get("error_classification"),
+        "requires_change": bool(cs.get("requires_change")),
+        "waiting_for_change": waiting_for_change,
+        "auto_retry_status": auto,
+        "operator_action_needed": bool(operator_needed),
+        "operator_retries_used": int(cs.get("operator_retries", 0)),
+        "operator_retry_allowance": int(s.operator_retry_allowance) if unlimited else 1,
+        "history": (cs.get("attempt_history") or [])[-10:],
+    }
+
+
 def _job_view(job, now_utc: datetime) -> dict[str, Any]:
     try:
         cp = json.loads(job.checkpoint_data_json or "{}")
@@ -60,6 +143,7 @@ def _job_view(job, now_utc: datetime) -> dict[str, Any]:
             "preserved_artifacts": sorted((cs.get("preserved_artifacts") or {}).keys()),
             "recovery_deadline_ist": cs.get("recovery_expiration_at"),
         },
+        "retry": retry_view(job, cs, now_utc),
         "target_publication_ist": cs.get("target_publication_at_ist"),
         "publishing_state": publishing.get("state"),
         "completed_at_ist": _ist(job.completed_at),
@@ -81,7 +165,14 @@ def monitor_view(now_utc: Optional[datetime] = None) -> dict[str, Any]:
         last_failed = real.filter(JobModel.status == "FAILED").order_by(JobModel.updated_at.desc()).first()
         last_failed_id = last_failed.id if last_failed else None
     retry_offer = None
-    if not active and last_failed_id:
+    waiting = next((a for a in active if a["retry"]["waiting_for_change"]), None)
+    if waiting:
+        try:
+            from backend.app.services import operator_retry_service
+            retry_offer = operator_retry_service.evaluate(waiting["job_id"])
+        except Exception:
+            retry_offer = None
+    elif not active and last_failed_id:
         try:
             from backend.app.services import operator_retry_service
             retry_offer = operator_retry_service.evaluate(last_failed_id)
@@ -102,4 +193,11 @@ def monitor_view(now_utc: Optional[datetime] = None) -> dict[str, Any]:
         "last_success": last_success,
         "publishing_queue_count": queue_count,
         "retry_offer": retry_offer,
+        "recovery_policy": _policy_summary(),
     }
+
+
+def _policy_summary() -> dict[str, Any]:
+    from backend.app.scheduler.recovery_settings import load_settings
+    s = load_settings()
+    return {**s.to_dict(), "policy_label": POLICY_LABELS.get(s.retry_policy, s.retry_policy)}
