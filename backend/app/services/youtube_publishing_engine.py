@@ -30,6 +30,7 @@ from backend.app.core.execution_context import ExecutionContext, require_product
 from backend.app.core.config import settings
 from backend.app.core.secure_storage import protect_text, read_protected_file, unprotect_text, write_protected_file
 
+from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -672,6 +673,32 @@ def invalidate_auth_status_cache() -> None:
         _auth_status_cache.update(at=0.0, key=None, value=None)
 
 
+def _record_connection_event(kind: str, **fields) -> None:
+    """Persists non-secret connection history (verification, refresh, connect); never raises."""
+    try:
+        from backend.app.services import youtube_connection_service
+        youtube_connection_service.record_event(kind, **fields)
+    except Exception:
+        logger.debug("Could not record YouTube connection event %s.", kind)
+
+
+def _classify_connect_error(exc: BaseException) -> Tuple[str, str]:
+    """Maps an interactive-authorization failure to (code, safe message). Never includes codes or URLs."""
+    name = type(exc).__name__
+    text = str(exc).lower()
+    if name == "AccessDeniedError" or "access_denied" in text:
+        return "CANCELLED", "Authorization was cancelled in the Google consent screen."
+    if name == "MismatchingStateError" or "state not equal" in text:
+        return "INVALID_STATE", "The authorization response did not match this request (state check failed); nothing was saved."
+    if name == "InvalidGrantError" or "invalid_grant" in text:
+        return "CODE_EXPIRED", "The authorization code was expired or already used; start the connection again."
+    if "Timeout" in name or isinstance(exc, TimeoutError) or "timed out" in text:   # incl. WSGITimeoutError
+        return "TIMED_OUT", "No response from the Google consent screen before the time limit; nothing was saved."
+    if isinstance(exc, (TransportError, ConnectionError, OSError)):
+        return "NETWORK", "Google could not be reached to complete authorization; existing credentials were kept."
+    return "FAILED", f"Authorization failed ({name}); existing credentials were kept."
+
+
 def _google_error_reason(exc) -> Optional[str]:
     """The `reason` of a Google API HttpError (e.g. quotaExceeded), never the response body."""
     try:
@@ -740,8 +767,16 @@ class YouTubeOAuthManager:
             return None
         token_data = json.loads(data.decode("utf-8"))
         creds = Credentials.from_authorized_user_info(token_data, self.scopes)
-        if data.lstrip().startswith(b"{"):
-            self.save_credentials(creds)
+        # read_protected_file returns decrypted bytes, which always start with "{".
+        # Only a file that is plaintext ON DISK needs migrating to protected storage;
+        # checking the decrypted bytes rewrote the token on every load.
+        try:
+            with open(self.token_file, "rb") as raw:
+                on_disk_plaintext = raw.read(64).lstrip().startswith(b"{")
+        except OSError:
+            on_disk_plaintext = False
+        if on_disk_plaintext:
+            self.save_credentials(creds, event="migrate")
         return creds
 
     def _load_client_config(self) -> Dict[str, Any]:
@@ -781,7 +816,7 @@ class YouTubeOAuthManager:
         token_expiry = None
         channel_info = None
         auth_problem = None
-        error_detail = None
+        error_detail = None  # set by refresh or channel verification failures
 
         if token_exist:
             try:
@@ -800,8 +835,19 @@ class YouTubeOAuthManager:
                                 self.save_credentials(creds)
                                 if not is_valid:
                                     auth_problem = "refresh_failed"
-                            except Exception:
+                            except RefreshError as exc:
+                                # Google rejected the refresh token (revoked/expired): reconnect.
                                 auth_problem = "refresh_failed"
+                                error_detail = {"kind": "refresh", "exception": type(exc).__name__,
+                                                "reason": "refresh_token_rejected"}
+                            except (TransportError, ConnectionError, OSError) as exc:
+                                # Google could not be reached; the stored credentials stay valid.
+                                auth_problem = "api_unavailable"
+                                error_detail = {"kind": "network", "exception": type(exc).__name__,
+                                                "message": "Token refresh could not reach Google."}
+                            except Exception as exc:
+                                auth_problem = "refresh_failed"
+                                error_detail = {"kind": "refresh", "exception": type(exc).__name__}
                         else:
                             auth_problem = "reconnect_required"
             except Exception:
@@ -861,7 +907,7 @@ class YouTubeOAuthManager:
             if error_detail:
                 logger.warning("YouTube channel verification failed: %s", error_detail)
 
-        return {
+        result = {
             "secrets_installed": secrets_exist,
             "token_installed": token_exist,
             "is_authenticated": is_valid,
@@ -877,6 +923,11 @@ class YouTubeOAuthManager:
             "status": auth_problem or ("connected" if channel_info else "not_connected"),
             "error_detail": error_detail,
         }
+        _record_connection_event("verification", status=result["status"],
+                                 channel_connected=result["channel_connected"],
+                                 channel_title=(channel_info or {}).get("title"),
+                                 error_detail=error_detail)
+        return result
 
     def refresh_token_safely(self) -> Tuple[bool, Optional[str]]:
         """
@@ -931,16 +982,24 @@ class YouTubeOAuthManager:
                 access_type="offline",
                 prompt="consent",
             )
-            self.save_credentials(creds)
+            self.save_credentials(creds, event="connect")
             invalidate_auth_status_cache()   # newly connected channel
             auth_status = self.get_auth_status()
             if auth_status.get("channel_connected"):
+                self.last_connect_error_code = None
+                _record_connection_event("connect", ok=True, code="CONNECTED")
                 return True, auth_status.get("channel_info"), None
-            else:
-                return True, None, "Authorized, but could not retrieve channel details."
+            self.last_connect_error_code = "CHANNEL_VERIFICATION_FAILED"
+            _record_connection_event("connect", ok=True, code="CHANNEL_VERIFICATION_FAILED",
+                                     message="Authorized, but the YouTube channel could not be verified.")
+            return True, None, "Authorized, but could not retrieve channel details."
         except Exception as exc:
-            logger.warning("OAuth authentication failed (%s).", type(exc).__name__)
-            return False, None, "OAuth authorization failed. Check local configuration and retry."
+            # Never log the exception text: it can carry the redirect URL with the code.
+            code, message = _classify_connect_error(exc)
+            self.last_connect_error_code = code
+            logger.warning("OAuth authorization did not complete (%s, %s).", code, type(exc).__name__)
+            _record_connection_event("connect", ok=False, code=code, message=message)
+            return False, None, message
 
     def get_authenticated_service(self):
         """Builds and returns the authenticated YouTube Data API client."""
@@ -962,10 +1021,24 @@ class YouTubeOAuthManager:
             logger.warning("Could not build authenticated YouTube client (%s).", type(exc).__name__)
         return None
 
-    def save_credentials(self, creds: Credentials):
-        """Persists refreshed credentials securely to token.json."""
-        write_protected_file(self.token_file, creds.to_json().encode("utf-8"))
-        logger.info("Saved protected OAuth credentials.")
+    def save_credentials(self, creds: Credentials, event: str = "refresh"):
+        """
+        Persists credentials securely to token.json. Google may omit refresh_token on a
+        refresh or a repeat consent; the stored one is then kept, never erased.
+        """
+        data = json.loads(creds.to_json())
+        if not data.get("refresh_token"):
+            try:
+                existing = read_protected_file(self.token_file)
+                previous = json.loads(existing.decode("utf-8")).get("refresh_token") if existing else None
+            except Exception:
+                previous = None
+            if previous:
+                data["refresh_token"] = previous
+        write_protected_file(self.token_file, json.dumps(data).encode("utf-8"))
+        logger.info("Saved protected OAuth credentials (%s).", event)
+        if event in ("refresh", "connect"):
+            _record_connection_event("token_saved", event=event)
 
     def disconnect_channel(self) -> bool:
         """Revokes and safely removes the local token.json file."""

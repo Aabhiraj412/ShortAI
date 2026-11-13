@@ -390,6 +390,29 @@
       </div>
     </div>
 
+    <div class="card" id="ytConnCard">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">YouTube Connection</h2>
+          <p class="card-desc" id="ytConnMessage">Checking…</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span class="pill" id="ytConnStatus">--</span>
+          <button class="btn primary sm" id="ytBtnConnect" style="display:none" onclick="ytConnect(false)">Connect YouTube</button>
+          <button class="btn warn sm" id="ytBtnReconnect" style="display:none" onclick="ytConnect(true)">Reconnect YouTube</button>
+          <button class="btn sm" id="ytBtnRetry" style="display:none" onclick="ytRetryCheck()">Retry Connection Check</button>
+        </div>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Channel</strong><span id="ytConnChannel">--</span></div>
+        <div class="meta-item"><strong>Channel verification</strong><span id="ytConnVerify">--</span></div>
+        <div class="meta-item"><strong>Last successful verification</strong><span id="ytConnVerifiedAt">--</span></div>
+        <div class="meta-item"><strong>Last token refresh</strong><span id="ytConnRefreshAt">--</span></div>
+      </div>
+      <div id="ytConnError" style="display:none;margin-top:10px;color:#fca5a5;font-size:13px;"></div>
+      <div style="margin-top:8px;color:var(--muted);font-size:12px;">Permissions: upload videos and read channel details (youtube.upload, youtube.readonly). Tokens never leave this computer.</div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <div>
@@ -1482,6 +1505,71 @@ async function requestOperatorRetry(jobId) {
   refreshMonitor();
 }
 
+const YT_STATUS_STYLE = {
+  CONNECTED: "ok", DISCONNECTED: "err", REAUTHENTICATION_REQUIRED: "err", REFRESHING: "warn",
+  CHANNEL_VERIFICATION_FAILED: "warn", API_UNAVAILABLE: "warn", QUOTA_EXCEEDED: "warn",
+};
+
+function ytLocalTime(iso) {
+  if (!iso) return "Never";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) + " IST";
+}
+
+function renderYouTubeConnection(v) {
+  if (!v) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const pill = document.getElementById("ytConnStatus");
+  pill.textContent = v.status.replace(/_/g, " ");
+  pill.className = "pill " + (YT_STATUS_STYLE[v.status] || "");
+  set("ytConnMessage", v.message || "");
+  set("ytConnChannel", v.channel_title || "--");
+  set("ytConnVerify", v.channel_verification || "--");
+  set("ytConnVerifiedAt", ytLocalTime(v.last_verified_at));
+  set("ytConnRefreshAt", ytLocalTime(v.last_token_refresh_at));
+  const a = v.actions || {};
+  document.getElementById("ytBtnConnect").style.display = a.connect ? "" : "none";
+  document.getElementById("ytBtnReconnect").style.display = a.reconnect ? "" : "none";
+  document.getElementById("ytBtnRetry").style.display = a.retry_check ? "" : "none";
+  const errBox = document.getElementById("ytConnError");
+  const e = v.last_error;
+  if (e && v.status !== "CONNECTED") {
+    const parts = [e.status, e.http_status ? `HTTP ${e.http_status}` : null, e.reason, e.message].filter(Boolean);
+    errBox.textContent = `Last error (${ytLocalTime(e.at)}): ${parts.join(" · ")}`;   // textContent: never HTML
+    errBox.style.display = "block";
+  } else {
+    errBox.style.display = "none";
+  }
+}
+
+async function refreshYouTubeConnection() {
+  try { renderYouTubeConnection(await apiJson("/api/youtube/connection")); } catch (err) { /* keep last view */ }
+}
+
+async function ytRetryCheck() {
+  document.getElementById("ytBtnRetry").disabled = true;
+  try { renderYouTubeConnection(await apiJson("/api/youtube/connection/check", { method: "POST" })); }
+  catch (err) { showToast(`Connection check failed: ${err.message || err}`, true); }
+  finally { document.getElementById("ytBtnRetry").disabled = false; }
+}
+
+async function ytConnect(isReconnect) {
+  const ok = await askConfirm(isReconnect ? "Reconnect YouTube?" : "Connect YouTube?",
+    "Google's sign-in page opens in this computer's browser. Choose the account that owns the channel and allow access. " +
+    "Your current connection is kept unless the new authorization succeeds.");
+  if (!ok) return;
+  renderYouTubeConnection({ status: "REFRESHING", message: "Waiting for you to finish Google authorization in the browser…",
+                            actions: {}, channel_verification: "PENDING" });
+  try {
+    const res = await apiJson("/api/youtube/connection/connect", { method: "POST", body: JSON.stringify({ confirm: true }) });
+    showToast(res.ok ? `YouTube connected: ${res.channel_title || "channel verified"}` : (res.message || "Authorization did not complete."), !res.ok);
+    renderYouTubeConnection(res.connection);
+  } catch (err) {
+    showToast(`YouTube connection failed: ${err.message || err}`, true);
+    refreshYouTubeConnection();
+  }
+}
+
 function renderStorageFields(cfg) {
   const wrap = document.getElementById("storageFieldsWrap");
   wrap.innerHTML = STORAGE_KEYS.map(([key, label]) => `
@@ -1775,6 +1863,8 @@ setInterval(() => {
   refreshPipeline();
 }, 8000);
 setInterval(refreshDeployment, 30000);
+setInterval(refreshYouTubeConnection, 30000);
+refreshYouTubeConnection();
 setInterval(() => { refreshSchedule(); refreshMonitor(); }, 15000);
 </script>
 </body>

@@ -163,7 +163,17 @@ def test_3b_requeue_with_one_extra_attempt_dispatches_once_with_18_00_target_and
 # 4. Publication target no longer valid ----------------------------------------
 @pytest.mark.parametrize("now_ist, expected", [(T(17, 40), "SCHEDULED"), (T(17, 50), "NEEDS_PUBLICATION_TIME"),
                                                (T(18, 5), "NEEDS_PUBLICATION_TIME")])
-def test_4_publish_after_qc_respects_the_18_00_target_and_15_minute_lead(pub, now_ist, expected):
+def test_4_publish_after_qc_respects_the_18_00_target_and_15_minute_lead(pub, now_ist, expected, monkeypatch):
+    # upload_short also checks publishAt against the clock: freeze it at the scenario time
+    # (otherwise the SCHEDULED case silently depends on the real time of day).
+    import backend.app.services.youtube_publishing_engine as ype
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now_ist.astimezone(tz) if tz else now_ist.replace(tzinfo=None)
+
+    monkeypatch.setattr(ype, "datetime", _Frozen)
     lid = _queue(pub)
     res = pub["svc"].publish_after_qc(lid, "2026-11-13T12:30:00Z", now_utc=now_ist.astimezone(timezone.utc))
     assert res["state"] == expected

@@ -209,6 +209,27 @@ def require_local_control(request: Request) -> None:
         raise HTTPException(status_code=403, detail="This control API is available only from localhost.")
 
 
+DASHBOARD_ORIGINS = {"http://127.0.0.1:8000", "http://localhost:8000"}
+
+
+def require_same_origin(request: Request) -> None:
+    """
+    CSRF guard for account-level actions (YouTube connect). Loopback alone is not enough:
+    any website open in the local browser can send a simple POST to 127.0.0.1. Browsers
+    always send Origin / Sec-Fetch-Site on such requests, so a cross-site one is refused.
+    Non-browser local clients (curl, tests) send neither and stay allowed.
+    """
+    require_local_control(request)
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    if site in ("cross-site", "same-site"):
+        raise HTTPException(status_code=403, detail="Cross-site requests are not allowed for this action.")
+    origin = request.headers.get("origin")
+    if origin is not None:
+        own = f"{request.url.scheme}://{request.url.netloc}"
+        if origin not in DASHBOARD_ORIGINS and origin != own:
+            raise HTTPException(status_code=403, detail="Requests from other origins are not allowed for this action.")
+
+
 def _resolve_local_media_file(path: Optional[str], required: bool = True) -> Optional[str]:
     if not path and not required:
         return None
@@ -425,11 +446,14 @@ async def stage_322_install_youtube_config(
 
 
 @app.post("/api/stage-3-22/youtube/connect")
-async def stage_322_connect_youtube(_: None = Depends(require_local_control)):
-    service = YouTubePublisherService()
-    ok, channel, error = await asyncio.to_thread(
-        service.oauth.start_interactive_auth, timeout_sec=180, open_browser=True
-    )
+async def stage_322_connect_youtube(_: None = Depends(require_local_control), __: None = Depends(require_same_origin)):
+    from backend.app.services import youtube_connection_service as ycs
+    try:
+        res = await asyncio.to_thread(ycs.connect, 180)
+    except ycs.ConnectInProgress as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    ok, channel, error = res["authorized"], ({"title": res["channel_title"]} if res["ok"] else None), (
+        None if res["ok"] else res["message"])
     if not ok:
         try:
             from backend.app.services.email_monitoring_service import email_monitoring_service
@@ -444,6 +468,36 @@ async def stage_322_connect_youtube(_: None = Depends(require_local_control)):
             logging.getLogger(__name__).exception("Could not dispatch OAuth problem notification.")
         raise HTTPException(status_code=400, detail=error or "OAuth authorization failed.")
     return {"status": "connected" if channel else "authorized", "channel": channel}
+
+
+class YouTubeConnectRequest(ConfirmedActionRequest):
+    confirm: bool = False
+
+
+@app.get("/api/youtube/connection")
+async def api_youtube_connection(_: None = Depends(require_local_control)):
+    """Canonical connection status for the dashboard card (no tokens, no secrets)."""
+    from backend.app.services import youtube_connection_service as ycs
+    return await asyncio.to_thread(ycs.connection_view)
+
+
+@app.post("/api/youtube/connection/check")
+async def api_youtube_connection_check(_: None = Depends(require_local_control), __: None = Depends(require_same_origin)):
+    """Retry Connection Check: bypasses the status cache; never changes credentials."""
+    from backend.app.services import youtube_connection_service as ycs
+    return await asyncio.to_thread(ycs.connection_view, True)
+
+
+@app.post("/api/youtube/connection/connect")
+async def api_youtube_connection_connect(req: YouTubeConnectRequest, _: None = Depends(require_local_control), __: None = Depends(require_same_origin)):
+    """Connect / Reconnect: opens Google's consent page in this computer's browser."""
+    from backend.app.services import youtube_connection_service as ycs
+    if req.confirm is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required.")
+    try:
+        return await asyncio.to_thread(ycs.connect, 180)
+    except ycs.ConnectInProgress as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.post("/api/stage-3-22/youtube/disconnect")
