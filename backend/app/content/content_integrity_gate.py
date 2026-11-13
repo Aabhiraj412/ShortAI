@@ -19,6 +19,7 @@ J. Outro uses original channel branding.
 K. Strictly prohibits stick-figure & cartoon character animation; enforces authentic documentary/scientific standards.
 """
 
+import re
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -132,7 +133,9 @@ class ContentIntegrityGate:
         # CHECK A: Topic matches Narration
         # -------------------------------------------------------------
         # Check topic entities in narration
-        topic_words = [w for w in title_lower.replace(",", "").replace("-", " ").split() if len(w) > 3]
+        # words only: "Regulus (Turner)" must yield "turner", not "(turner)", which no narration can contain
+        # (cycle_1_20261114 failed QC on exactly that while its narration named Turner)
+        topic_words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z]+)?", title_lower) if len(w) > 3]
         matches = [w for w in topic_words if w in narr_lower]
         if len(matches) < 2 and len(topic_words) >= 2:
             report.add_result("CHECK_A_TOPIC_NARRATION", False, f"Narration lacks topic keywords (found {matches} out of {topic_words}).")
