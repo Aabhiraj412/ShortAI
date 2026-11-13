@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -38,7 +39,44 @@ _COLUMNS = (
     "hook_fingerprint", "script_fingerprint", "storyboard_fingerprint",
     "asset_fingerprints_json", "visual_sequence_fingerprint", "renderer_config_json",
     "video_sha256", "status", "created_at", "updated_at",
+    # Stage 3.27 creative identity (added by migration; old rows keep the defaults)
+    "hook_type", "narrative_structure", "script_text", "hook_text", "ending_text",
+    "scene_sequence_json", "visual_concepts_json", "visual_concepts_fingerprint", "typography",
+    "animation_json", "transition_sequence_json", "audio_treatment", "thumbnail_concept",
+    "visual_engine", "script_source",
 )
+_ADDED_COLUMNS = {
+    "hook_type": "''", "narrative_structure": "''", "script_text": "''", "hook_text": "''", "ending_text": "''",
+    "scene_sequence_json": "'[]'", "visual_concepts_json": "'[]'", "visual_concepts_fingerprint": "''",
+    "typography": "''", "animation_json": "'[]'", "transition_sequence_json": "'[]'", "audio_treatment": "''",
+    "thumbnail_concept": "''", "visual_engine": "''", "script_source": "''",
+}
+HOOK_NEAR_DUP = 0.6          # word-set Jaccard of two hooks
+ENDING_NEAR_DUP = 0.7
+SCRIPT_NEAR_DUP = 0.5        # 3-word shingle Jaccard of two scripts
+VISUAL_NEAR_DUP = 0.85       # Jaccard of template:subject concept sets
+_CTA_RE = re.compile(r"[^.!?]*\b(subscribe|follow|for more)\b[^.!?]*[.!?]?", re.I)
+
+
+def _words(text: str) -> set:
+    return set(re.findall(r"[a-z0-9']+", (text or "").lower())) - _STOP
+
+
+def _shingles(text: str, n: int = 3) -> set:
+    w = re.findall(r"[a-z0-9']+", (text or "").lower())
+    return {" ".join(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
+
+
+def jaccard(a: set, b: set) -> float:
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def _ending_core(text: str, topic: str) -> set:
+    """An ending without its call to action and without the topic's own words."""
+    return _words(_CTA_RE.sub(" ", text or "")) - _words(topic)
+
+
+_STOP = set("a an the and or but of in on at to for from by with is are was were be it its this that as so how why what".split())
 _UPDATABLE = frozenset(_COLUMNS) - {"job_id", "created_at"}
 
 
@@ -81,6 +119,10 @@ class CreativeIdentityRegistry:
                     updated_at TEXT NOT NULL
                 )"""
             )
+            have = {r[1] for r in conn.execute("PRAGMA table_info(creative_identity_registry)")}
+            for col, default in _ADDED_COLUMNS.items():
+                if col not in have:
+                    conn.execute(f"ALTER TABLE creative_identity_registry ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS ix_cir_topic ON creative_identity_registry(normalized_topic)"
             )
@@ -212,6 +254,46 @@ class CreativeIdentityRegistry:
                         days: int = SCRIPT_COOLDOWN_DAYS, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
         hits = self._recent("script_fingerprint", script_fingerprint, exclude_job=exclude_job, days=days, now=now)
         return hits[0] if hits else None
+
+    def near_duplicates(self, *, job_id: str, topic_title: str = "", script_text: str = "", hook_text: str = "",
+                        ending_text: str = "", visual_concepts: Sequence[str] = (), script_source: str = "",
+                        days: int = 180, now: Optional[datetime] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Meaningful near-duplication against earlier productions, split into blocking and advisory.
+
+        Blocking: a near-identical script, a reused hook, or the same visual composition sequence.
+        Advisory: a repeated ending when the script came from the labelled extractive fallback, whose
+        closing line is a fixed template; blocking it would stop every production until a model key
+        exists, so it is recorded instead. Shared channel branding is never compared.
+        """
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+        blocking: List[Dict[str, Any]] = []
+        advisory: List[Dict[str, Any]] = []
+        s_sh, h_w = _shingles(script_text), _words(hook_text)
+        e_core, v_set = _ending_core(ending_text, topic_title), set(visual_concepts)
+        with self._connect() as conn:
+            rows = [dict(r) for r in conn.execute("SELECT * FROM creative_identity_registry WHERE job_id<>?", (job_id,))]
+        for r in rows:
+            if (_parse(r["created_at"]) or cutoff) < cutoff:
+                continue
+            ref = {"job_id": r["job_id"], "topic_title": r["topic_title"]}
+            if s_sh and r.get("script_text"):
+                sim = jaccard(s_sh, _shingles(r["script_text"]))
+                if sim >= SCRIPT_NEAR_DUP:
+                    blocking.append({**ref, "kind": "script", "similarity": round(sim, 2)})
+            if h_w and r.get("hook_text"):
+                sim = jaccard(h_w, _words(r["hook_text"]))
+                if sim >= HOOK_NEAR_DUP:
+                    blocking.append({**ref, "kind": "hook", "similarity": round(sim, 2)})
+            if v_set and r.get("visual_concepts_json") not in (None, "", "[]"):
+                sim = jaccard(v_set, set(json.loads(r["visual_concepts_json"])))
+                if sim >= VISUAL_NEAR_DUP:
+                    blocking.append({**ref, "kind": "visual_sequence", "similarity": round(sim, 2)})
+            if e_core and r.get("ending_text"):
+                sim = jaccard(e_core, _ending_core(r["ending_text"], r["topic_title"]))
+                if sim >= ENDING_NEAR_DUP:
+                    (advisory if script_source == "extractive_fallback" else blocking).append(
+                        {**ref, "kind": "ending", "similarity": round(sim, 2)})
+        return {"blocking": blocking, "advisory": advisory}
 
     def filter_fresh(self, candidates: Sequence[Any], *, job_id: str,
                      now: Optional[datetime] = None) -> tuple[List[Any], List[Dict[str, str]]]:

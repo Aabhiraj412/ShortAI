@@ -136,6 +136,15 @@ class CrazzyDocsMasterOrchestrator:
         self.publishing_engine = publishing_engine or youtube_publishing_engine
         self.integrity_gate = integrity_gate or ContentIntegrityGate(workspace_root=WORKSPACE)
 
+    @staticmethod
+    def _check_visual_identity(registry, job_id: str, fingerprints: Dict) -> None:
+        """Rejects a film whose scene composition repeats an earlier production (before rendering)."""
+        dups = registry.near_duplicates(job_id=job_id, visual_concepts=fingerprints.get("visual_concepts", []))
+        visual = [d for d in dups["blocking"] if d["kind"] == "visual_sequence"]
+        if visual:
+            registry.update(job_id, status="REJECTED_VISUAL_DUPLICATE")
+            raise DuplicateCreativeIdentity(f"integrity gate: scene composition repeats {visual[:2]}")
+
     def _identity_registry(self, execution_context, is_full_live: bool, job_id: Optional[str]):
         """The creative identity registry for real productions; None for tests and validation runs.
 
@@ -267,6 +276,8 @@ class CrazzyDocsMasterOrchestrator:
                 if attempt > 1:
                     logger.info("[RENDER RECOVERY] Render succeeded on in-stage attempt %d/%d.", attempt, attempts)
                 return result
+            except DuplicateCreativeIdentity:
+                raise   # a creative-identity rejection is final; re-rendering cannot change it
             except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
                 errors.append(str(exc))
                 logger.warning(
@@ -917,6 +928,27 @@ class CrazzyDocsMasterOrchestrator:
                 )
                 if (script_data or {}).get("angle"):
                     identity_registry.update(job_id, topic_angle=script_data["angle"])
+                sections_ = (script_data or {}).get("sections") or []
+                hook_txt = sections_[0].get("text", "") if sections_ else ""
+                end_txt = sections_[-1].get("text", "") if sections_ else ""
+                dups = identity_registry.near_duplicates(
+                    job_id=job_id, topic_title=selected_topic.title, script_text=narration_text,
+                    hook_text=hook_txt, ending_text=end_txt,
+                    script_source=(script_data or {}).get("script_source", ""),
+                )
+                identity_registry.update(
+                    job_id, script_text=narration_text, hook_text=hook_txt, ending_text=end_txt,
+                    hook_type=(script_data or {}).get("hook_type", ""),
+                    narrative_structure=" > ".join(s.get("stage", "") for s in sections_),
+                    script_source=(script_data or {}).get("script_source", ""),
+                )
+                for adv in dups["advisory"]:
+                    logger.warning("[CREATIVE IDENTITY] advisory near-duplicate %s", adv)
+                if dups["blocking"]:
+                    identity_registry.update(job_id, status="REJECTED_NEAR_DUPLICATE")
+                    raise DuplicateCreativeIdentity(
+                        f"integrity gate: near-duplicate of earlier production: {dups['blocking'][:3]}"
+                    )
 
             # -------------------------------------------------------------
             # Stage 8: Expressive Narration Synthesis
@@ -992,72 +1024,110 @@ class CrazzyDocsMasterOrchestrator:
                     progress_pct=15.0,
                     ffmpeg_status="PREPARING_LEMO_FILM",
                 )
-                film_manifest = LemoOpuscarFilmBuilder.build_film_package(
-                    prod_dir=Path(prod_ws.prod_dir),
-                    job_id=job_id,
-                    topic=selected_topic.title,
-                    script_data=script_data or {"title": selected_topic.title, "hook": best_hook.hook_text},
-                    storyboard=storyboard_beats,
-                    section_timings={"sections": section_timings} if isinstance(section_timings, list) else (section_timings or {}),
-                    duration_sec=dur,
-                    category=selected_topic.category,
+                from backend.app.rendering.pop_info.pipeline import (
+                    active_visual_engine, photos_from_media_assets, render_pop_info,
                 )
-                production_observability.update_rendering(
-                    job_id,
-                    current_operation="Rendering frames via Lemo-Opuscar video.mjs",
-                    current_beat_index=max(1, len(plan.scenes) // 2),
-                    current_beat_id="lemo_render",
-                    completed_scenes=max(1, len(plan.scenes) // 2),
-                    total_scenes=len(plan.scenes),
-                    progress_pct=55.0,
-                    ffmpeg_status="LEMO_OPUSCAR_RENDERING",
-                )
-                lemo_adapter = LemoOpuscarAdapter()
-                silent_lemo_mp4 = Path(prod_ws.prod_dir) / "lemo_film" / f"silent_{job_id}.mp4"
-                self._render_with_bounded_retries(
-                    job_id,
-                    lambda: lemo_adapter.render_video(
-                        workspace=Path(WORKSPACE),
-                        demo_dir=Path(film_manifest["demo_dir"]),
-                        output_path=silent_lemo_mp4,
-                        fps=30,
-                        size=(1080, 1920),
-                    ),
-                    preserved={
-                        "lemo_film_dir": film_manifest["demo_dir"],
-                        "voiceover_path": voice_path,
-                        "stage_cache_dir": os.path.join(prod_ws.reports_dir, "stage_cache"),
-                    },
-                    persist_to_db=persist_to_db,
-                )
-                production_observability.update_rendering(
-                    job_id,
-                    current_operation="Muxing calibrated narration & finalizing 1080x1920 MP4",
-                    current_beat_index=len(plan.scenes),
-                    current_beat_id="mux",
-                    completed_scenes=len(plan.scenes),
-                    total_scenes=len(plan.scenes),
-                    progress_pct=92.0,
-                    ffmpeg_status="FINALIZING_ENCODE",
-                )
-                mux_cmd = [
-                    FFMPEG_EXE, "-y",
-                    "-i", str(silent_lemo_mp4),
-                    "-i", str(voice_path),
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
-                    "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
-                    "-shortest", "-movflags", "+faststart",
-                    final_video_path,
-                ]
-                mux_proc = subprocess.run(
-                    mux_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                    **hidden_subprocess_kwargs(),
-                )
-                if mux_proc.returncode != 0 or not os.path.isfile(final_video_path):
-                    raise RuntimeError(f"FFmpeg audio mux failed after Lemo-Opuscar render: {mux_proc.stderr[-500:]}")
+                # Feature flag: the legacy film builder runs unless the operator sets
+                # CRAZZYDOCS_VISUAL_ENGINE=pop_info_v1 (environment or .env.local).
+                visual_engine = active_visual_engine()
+                if visual_engine != "legacy":
+                    logger.info("[STAGE 9] Visual engine %s selected by feature flag", visual_engine)
+                    pop_info_result = self._render_with_bounded_retries(
+                        job_id,
+                        lambda: render_pop_info(
+                            workspace_root=Path(WORKSPACE), prod_dir=Path(prod_ws.prod_dir), job_id=job_id,
+                            topic=selected_topic.title, category=selected_topic.category,
+                            script_data=script_data or {}, section_timings=section_timings or [],
+                            voice_path=voice_path, duration_sec=dur, output_path=Path(final_video_path),
+                            photos=photos_from_media_assets(acquired_assets),
+                            identity_check=(None if identity_registry is None else
+                                            lambda fp: self._check_visual_identity(identity_registry, job_id, fp)),
+                        ),
+                        preserved={"voiceover_path": voice_path,
+                                   "stage_cache_dir": os.path.join(prod_ws.reports_dir, "stage_cache")},
+                        persist_to_db=persist_to_db,
+                    )
+                    film_manifest = pop_info_result["film"]
+                    if identity_registry is not None:
+                        fp = film_manifest.get("fingerprints", {})
+                        identity_registry.update(
+                            job_id, visual_engine=visual_engine,
+                            scene_sequence_json=fp.get("scene_sequence", []),
+                            visual_concepts_json=fp.get("visual_concepts", []),
+                            visual_concepts_fingerprint=fp.get("visual_concepts_fingerprint", ""),
+                            transition_sequence_json=fp.get("transition_sequence", []),
+                            typography=fp.get("typography", ""), animation_json=fp.get("animation_choices", []),
+                            audio_treatment="synthesized sfx + ducked pad, -14 LUFS",
+                        )
+                    if pop_info_result.get("quality_report_path"):
+                        prod_ws.register_artifact("STAGE_09_VISUAL_QC", "report", pop_info_result["quality_report_path"], copy_into_workspace=False)
+                else:
+                    film_manifest = LemoOpuscarFilmBuilder.build_film_package(
+                        prod_dir=Path(prod_ws.prod_dir),
+                        job_id=job_id,
+                        topic=selected_topic.title,
+                        script_data=script_data or {"title": selected_topic.title, "hook": best_hook.hook_text},
+                        storyboard=storyboard_beats,
+                        section_timings={"sections": section_timings} if isinstance(section_timings, list) else (section_timings or {}),
+                        duration_sec=dur,
+                        category=selected_topic.category,
+                    )
+                    production_observability.update_rendering(
+                        job_id,
+                        current_operation="Rendering frames via Lemo-Opuscar video.mjs",
+                        current_beat_index=max(1, len(plan.scenes) // 2),
+                        current_beat_id="lemo_render",
+                        completed_scenes=max(1, len(plan.scenes) // 2),
+                        total_scenes=len(plan.scenes),
+                        progress_pct=55.0,
+                        ffmpeg_status="LEMO_OPUSCAR_RENDERING",
+                    )
+                    lemo_adapter = LemoOpuscarAdapter()
+                    silent_lemo_mp4 = Path(prod_ws.prod_dir) / "lemo_film" / f"silent_{job_id}.mp4"
+                    self._render_with_bounded_retries(
+                        job_id,
+                        lambda: lemo_adapter.render_video(
+                            workspace=Path(WORKSPACE),
+                            demo_dir=Path(film_manifest["demo_dir"]),
+                            output_path=silent_lemo_mp4,
+                            fps=30,
+                            size=(1080, 1920),
+                        ),
+                        preserved={
+                            "lemo_film_dir": film_manifest["demo_dir"],
+                            "voiceover_path": voice_path,
+                            "stage_cache_dir": os.path.join(prod_ws.reports_dir, "stage_cache"),
+                        },
+                        persist_to_db=persist_to_db,
+                    )
+                    production_observability.update_rendering(
+                        job_id,
+                        current_operation="Muxing calibrated narration & finalizing 1080x1920 MP4",
+                        current_beat_index=len(plan.scenes),
+                        current_beat_id="mux",
+                        completed_scenes=len(plan.scenes),
+                        total_scenes=len(plan.scenes),
+                        progress_pct=92.0,
+                        ffmpeg_status="FINALIZING_ENCODE",
+                    )
+                    mux_cmd = [
+                        FFMPEG_EXE, "-y",
+                        "-i", str(silent_lemo_mp4),
+                        "-i", str(voice_path),
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+                        "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+                        "-shortest", "-movflags", "+faststart",
+                        final_video_path,
+                    ]
+                    mux_proc = subprocess.run(
+                        mux_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                        **hidden_subprocess_kwargs(),
+                    )
+                    if mux_proc.returncode != 0 or not os.path.isfile(final_video_path):
+                        raise RuntimeError(f"FFmpeg audio mux failed after Lemo-Opuscar render: {mux_proc.stderr[-500:]}")
 
                 from backend.app.services.animation_service import probe_video
                 probed = probe_video(final_video_path)
@@ -1067,6 +1137,7 @@ class CrazzyDocsMasterOrchestrator:
                     "engine": f"Lemo-Opuscar ({PINNED_COMMIT[:10]})",
                     "pinned_commit": PINNED_COMMIT,
                     "fallback_used": False,
+                    "visual_engine": visual_engine,
                     "demo_dir": film_manifest["demo_dir"],
                     "beat_count": film_manifest["beat_count"],
                     "unique_asset_count": film_manifest["unique_asset_count"],
@@ -1075,6 +1146,8 @@ class CrazzyDocsMasterOrchestrator:
                 manifest_data["renderer"] = "lemo-opuscar"
                 manifest_data["pinned_commit"] = PINNED_COMMIT
                 manifest_data["fallback_used"] = False
+                manifest_data["visual_engine"] = visual_engine
+                manifest_data["script_source"] = (script_data or {}).get("script_source", "unknown")
                 prod_ws.save_manifest(manifest_data)
                 render_meta_path = os.path.join(prod_ws.reports_dir, f"render_telemetry_{job_id}.json")
                 with open(render_meta_path, "w", encoding="utf-8") as f:
