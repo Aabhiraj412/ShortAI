@@ -109,7 +109,9 @@ def topic_anchor(title: str, script_text: str, key_entities: Sequence[str] = ())
     if len(words) <= 4:
         return " ".join(words)
     low = (script_text or "").lower()
-    pairs = [f"{a} {b}" for a, b in zip(words, words[1:])]
+    # 3.28: a time phrase is never the subject ("years ago" made the queries "Rhine years ago")
+    timey = {"ago", "year", "years", "decade", "decades", "century", "centuries", "day", "days", "today", "now"}
+    pairs = [f"{a} {b}" for a, b in zip(words, words[1:]) if not ({a.lower(), b.lower()} & timey)] or [" ".join(words[:2])]
     best = max(pairs, key=lambda p: (low.count(p.lower()), -pairs.index(p)))
     return best if low.count(best.lower()) else " ".join(words[:3])
 
@@ -138,7 +140,9 @@ def photo_needs(plan: Dict[str, Any], anchor: str, max_photos: Optional[int] = N
         data_scene = sc.get("template") in ("stat", "compare", "timeline")
         # a full name (person, place, organisation) is what a photograph shows best
         ent_weight = sum(2.5 if len(e.split()) > 1 else 1.2 for e in ents[:2])
-        score = ent_weight + 1.0 * min(1, concrete) - (1.0 if data_scene else 0)
+        # 3.28: the film's single typography-led beat is the emphasis; a photo there needs a strong name
+        kinetic_scene = sc.get("template") == "kinetic"
+        score = ent_weight + 1.0 * min(1, concrete) - (1.0 if data_scene else 0) - (1.5 if kinetic_scene else 0)
         if score < 1.0:
             continue
         queries: List[str] = []

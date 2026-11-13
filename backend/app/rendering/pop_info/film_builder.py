@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from backend.app.rendering.pop_info.scene_planner import ENGINE_VERSION, plan_scenes
 
 ENGINE_JS = Path(__file__).with_name("engine.js")
+ENVIRONMENTS_JS = Path(__file__).with_name("environments.js")   # illustrated places (3.28)
 from backend.app.core.paths import TOOLS_DIR
 LEMO_ROOT = TOOLS_DIR / "dependencies" / "lemo-opuscar"
 FONT_FILES = ("f1.woff2", "f2.woff2", "f3.woff2", "f4.woff2", "f5.woff2")   # Fredoka 500-700, Lilita One (latin, latin-ext)
@@ -29,6 +30,7 @@ PAGE = """<!doctype html>
 <style>html,body{{margin:0;background:#F4EEDF;overflow:hidden}}#stage{{display:block;width:100vw;height:100vh}}</style>
 </head><body><canvas id="stage" width="{w}" height="{h}"></canvas>
 <script>window.PLAN = {plan};</script>
+<script src="environments.js"></script>
 <script src="engine.js"></script>
 </body></html>
 """
@@ -94,6 +96,7 @@ def build_pop_info_film(*, prod_dir: Path, job_id: str, topic: str, category: st
                        total_duration=float(duration_sec), photos=usable, scene_photos=usable_by_scene or None)
     fonts = _copy_fonts(film_dir / "fonts")
     shutil.copyfile(ENGINE_JS, film_dir / "engine.js")
+    shutil.copyfile(ENVIRONMENTS_JS, film_dir / "environments.js")
     (film_dir / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
     page = PAGE.format(title=html.escape(topic), w=size[0], h=size[1],
                        plan=json.dumps(plan).replace("</", "<\\/"))
@@ -111,6 +114,8 @@ def build_pop_info_film(*, prod_dir: Path, job_id: str, topic: str, category: st
                                      "attribution_required": ph.get("attribution_required", True)})
         asset_provenance.append({"scene": sc["scene_id"], "kind": "procedural_vector",
                                  "icons": [sc["main_subject"], *sc["supporting_objects"]],
+                                 **({"environment": sc["environment"]} if sc.get("environment") and (
+                                     sc.get("template") == "environment" or sc.get("backdrop") == "environment") else {}),
                                  "license": "original work (CrazzyDocs, drawn in code)"})
     return {
         "renderer": "lemo-opuscar", "engine": ENGINE_VERSION, "job_id": job_id, "topic": topic,

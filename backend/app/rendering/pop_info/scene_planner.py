@@ -20,14 +20,15 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 ENGINE_VERSION = "pop_info_v1"
-ENGINE_REVISION = "3.27.1"   # hybrid photo treatments, reveal split, phrase scoring
+ENGINE_REVISION = "3.28"     # illustrated environments, creative direction, kinetic typography
 
 # Design space is 540 x 960 (rendered at 2x = 1080 x 1920). Shorts overlays cover the right
 # edge (action buttons) and the bottom (title, channel, music); text must stay inside SAFE.
 DESIGN_W, DESIGN_H = 540, 960
 SAFE = {"x0": 36, "x1": 468, "y0": 84, "y1": 780}
 
-TEMPLATES = ("title", "stat", "compare", "timeline", "process", "question", "spotlight", "callout", "photo", "reveal")
+TEMPLATES = ("title", "stat", "compare", "timeline", "process", "question", "spotlight", "callout", "photo", "reveal",
+             "environment", "kinetic")
 TRANSITIONS = ("slide", "circle_reveal", "wipe", "pop_zoom", "split")
 # real photographs are composited in several ways, never the same one twice in a row
 PHOTO_TREATMENTS = ("full_bleed", "card", "circle", "split")
@@ -114,6 +115,9 @@ class SceneBrief:
     photo: Optional[Dict[str, Any]] = None
     sfx: List[Dict[str, Any]] = field(default_factory=list)
     labels: List[str] = field(default_factory=list)
+    environment: str = ""        # illustrated place for this scene (environments.js)
+    backdrop: str = ""           # "environment": the diagram sits on a washed view of the place
+    visual_mode: str = ""        # photo | environment | diagram | typography | illustration
 
 
 def _seed_int(*parts: Any) -> int:
@@ -150,6 +154,48 @@ def extract_numbers(text: str) -> List[NumberFact]:
             unit = unit.upper()
         is_year = (not unit) and raw.isdigit() and len(raw) == 4 and 1000 <= value <= 2100
         out.append(NumberFact(value=value, text=raw, unit=unit, is_year=is_year))
+    out.extend(_spelled_numbers(text))
+    return out
+
+
+_SCALE_WORDS = {"million": "MILLION", "billion": "BILLION", "trillion": "TRILLION"}
+
+
+def _spelled_numbers(text: str) -> List[NumberFact]:
+    """Quantities spelled out for speech ("three million dollars", "five thousand years"). Real Gemini
+    scripts spell numbers for text-to-speech, so a digit-only reader found no data scenes at all
+    (3.28 test renders). Only quantitative claims count: a scale word, a value of 13+, or a measurable
+    unit after the number; "one physics prize" stays words."""
+    from backend.app.content.number_words import _DIGIT, _MULTIPLES, _spelled_runs
+    clean = re.sub(_DIGIT, " ", text or "")
+    low = clean.lower()
+    out: List[NumberFact] = []
+    pos = 0
+    for q in _spelled_runs(clean):
+        if not q.claim or q.text in _MULTIPLES or q.value <= 0:
+            continue
+        m = re.search(r"\b" + r"[\s-]+".join(map(re.escape, q.text.split())) + r"\b", low[pos:])
+        if not m:
+            continue
+        after = low[pos + m.end():].split()[:3]
+        pos += m.end()
+        words = q.text.split()
+        scale = next((w for w in words if w in _SCALE_WORDS), None)
+        tail = []
+        for w in after:
+            w = w.strip(".,;:!?")
+            if w not in _UNITS:
+                break
+            tail.append(w)
+        if scale:
+            lead = q.value / {"million": 1e6, "billion": 1e9, "trillion": 1e12}[scale]
+            value, unit = lead, " ".join([_SCALE_WORDS[scale]] + [t.upper() for t in tail[:2]])
+        else:
+            value, unit = q.value, " ".join(t.upper() for t in tail[:1])
+        if unit == "PERCENT":
+            unit = "%"
+        txt = (f"{value:,.1f}" if value != int(value) else f"{int(value):,}")
+        out.append(NumberFact(value=value, text=txt, unit=unit, is_year=False))
     return out
 
 
@@ -223,7 +269,10 @@ def title_card(topic_title: str, script_text: str) -> str:
         return title
     low = (script_text or "").lower()
     toks = [w.strip(".,:;!?\"'") for w in words]
-    pairs = [f"{a} {b}" for a, b in zip(toks, toks[1:]) if a.lower() not in _STOP and b.lower() not in _STOP]
+    # a time phrase or a number is never the subject's name ("years ago", "5,000 years")
+    timey = {"ago", "year", "years", "decade", "decades", "century", "centuries", "day", "days", "today", "now"}
+    pairs = [f"{a} {b}" for a, b in zip(toks, toks[1:]) if a.lower() not in _STOP and b.lower() not in _STOP
+             and not ({a.lower(), b.lower()} & timey) and not re.search(r"\d", a + b)]
     best = max(pairs, key=lambda q: (low.count(q.lower()), -pairs.index(q)), default="")
     if best and low.count(best.lower()):
         return best[:1].upper() + best[1:]
@@ -416,6 +465,10 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
             cut = s0 + speech * len(head) / total_chars
             chunks[-1:] = [(stage, head, s0, cut), (stage, tail, cut, end)]
 
+    from backend.app.rendering.pop_info import creative_director as cd
+    direction = cd.video_direction(job_id=job_id, topic_title=topic_title, category=category,
+                                   texts=[c[1] for c in chunks], scene_secs=[c[3] - c[2] for c in chunks])
+    prev_env: Optional[str] = None
     base_icon = topic_icon(topic_title, category)
     photos = [p for p in photos if p.get("path")]
     used_photos: set = set()
@@ -438,6 +491,13 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
         if template == "process" and len(node_labels(text)) < 3:
             # three real labels or no process diagram: numbered placeholder nodes say nothing
             template = "callout" if prev_template != "callout" else "spotlight"
+        # story-driven casting: a setting becomes an illustrated place, an emphatic line becomes type
+        template = cd.cast_scene(template, stage=stage, text=text, headline=key_phrase(text)[0],
+                                 previous=prev_template,
+                                 recent_modes=[cd.VISUAL_MODE.get(x.template, "illustration") for x in scenes],
+                                 direction=direction, n_scenes=len(chunks),
+                                 used={k: sum(1 for x in scenes if x.template == k) for k in ("kinetic", "environment")})
+        environment = cd.environment_for(text, stage, direction, prev_env)
         icons = sorted(match_icons(text), key=lambda ic: icon_uses.get(ic, 0) >= 2)
         main = next((ic for ic in icons if ic != prev_icon), None) or (base_icon if base_icon != prev_icon else
                                                                       next((ic for ic in ("lightbulb", "magnifier", "star") if ic != prev_icon)))
@@ -497,14 +557,28 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
             asset_requirements=reqs, fallback=fallback, photo=photo,
             sfx=_sfx_cues(template, transition, start, end, nums, is_last),
             labels=node_labels(text) if template == "process" else [],
+            environment=environment,
         ))
+        prev_env = environment
         prev_template, prev_icon, prev_transition = template, main, transition
         icon_uses[main] = icon_uses.get(main, 0) + 1
+    scene_dicts = [asdict(s) for s in scenes]
+    direction["diversity_changes"] = cd.enforce_diversity(scene_dicts, direction)
+    for k, sd in enumerate(scene_dicts):
+        # template-dependent fields follow the final cast
+        sd["composition"], sd["animation_direction"] = _COMPOSITION[sd["template"]], _ANIMATION[sd["template"]]
+        sd["sfx"] = _sfx_cues(sd["template"], sd["transition_in"], sd["start_sec"], sd["end_sec"], sd["numbers"],
+                              k == len(scene_dicts) - 1, words=len((sd["headline"] or "").split()))
+        sd["backdrop"] = cd.backdrop_for(sd["template"], sd["stage"])
+        sd["visual_mode"] = cd.VISUAL_MODE.get(sd["template"], "illustration")
+        if sd["template"] == "environment" or sd["backdrop"]:
+            sd["asset_requirements"] = sd["asset_requirements"] + [f"procedural:environment:{sd['environment']}"]
     plan = {
         "engine": ENGINE_VERSION, "engine_revision": ENGINE_REVISION, "job_id": job_id, "topic": topic_title, "category": category,
         "duration_sec": round(max(total_duration, scenes[-1].end_sec), 3), "seed": seed,
         "design": {"width": DESIGN_W, "height": DESIGN_H, "safe": SAFE},
-        "scenes": [asdict(s) for s in scenes],
+        "direction": direction,
+        "scenes": scene_dicts,
     }
     plan["fingerprints"] = plan_fingerprints(plan)
     return plan
@@ -521,6 +595,8 @@ _COMPOSITION = {
     "callout": "typographic card: large headline on a tilted paper card, subject badge, underline swoosh",
     "photo": "real photograph composited by treatment (full-bleed, taped card, circle spotlight, split with counter), credit pill",
     "reveal": "rays behind a ringed teal disc with the subject, payoff headline card",
+    "environment": "layered illustrated place in perspective, subject spotlit at the vanishing point, idea on a paper card above",
+    "kinetic": "typography-led: the line fills the frame word by word on a colour field, key word on a yellow block",
 }
 _ANIMATION = {
     "title": "iris opens, subject pops with back-ease and wobble, headline words pop in order",
@@ -533,11 +609,13 @@ _ANIMATION = {
     "callout": "card swings in, words pop in order, swoosh draws under the key word, badge pops",
     "photo": "photo enters with its treatment's motion (push, pull, pan or rise around the focus point); overlay graphics pop on top",
     "reveal": "rays turn, disc pops, payoff card rises; iris closes at the end",
+    "environment": "slow dolly toward the vanishing point, ambient motion in the place, card drops in, subject pops in its light",
+    "kinetic": "words land one by one with a short drop and settle, swoosh draws under the line, subject badge pops",
 }
 
 
 def _sfx_cues(template: str, transition: str, start: float, end: float, numbers: List[Dict[str, Any]],
-              is_last: bool) -> List[Dict[str, Any]]:
+              is_last: bool, words: int = 0) -> List[Dict[str, Any]]:
     cues = [{"t": round(start, 3), "kind": "whoosh" if transition != "pop_zoom" else "pop", "gain": 0.45}]
     cues.append({"t": round(start + 0.35, 3), "kind": "pop", "gain": 0.6})
     if template in ("stat", "compare") and numbers:
@@ -555,6 +633,9 @@ def _sfx_cues(template: str, transition: str, start: float, end: float, numbers:
     if template == "process":
         for j in range(3):
             cues.append({"t": round(start + 0.4 + j * 0.55, 3), "kind": "tap", "gain": 0.4})
+    if template == "kinetic":
+        for j in range(min(max(1, words), 6)):           # one tap as each word lands
+            cues.append({"t": round(start + 0.2 + j * 0.17, 3), "kind": "tap", "gain": 0.42})
     if is_last:
         cues.append({"t": round(max(start, end - 0.9), 3), "kind": "whoosh", "gain": 0.5})
     return cues
@@ -567,7 +648,8 @@ def plan_fingerprints(plan: Dict[str, Any]) -> Dict[str, Any]:
     def h(obj: Any) -> str:
         return hashlib.sha256(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
 
-    seq = [s["template"] if not s.get("photo") else f"photo:{s['photo'].get('treatment', 'card')}" for s in scenes]
+    seq = [f"photo:{s['photo'].get('treatment', 'card')}" if s.get("photo")
+           else f"environment:{s.get('environment')}" if s["template"] == "environment" else s["template"] for s in scenes]
     concepts = [f"{s['template']}:{s['main_subject']}" for s in scenes]
     return {
         "scene_sequence": seq,
@@ -575,6 +657,9 @@ def plan_fingerprints(plan: Dict[str, Any]) -> Dict[str, Any]:
         "visual_concepts": concepts,
         "visual_concepts_fingerprint": h(concepts),
         "transition_sequence": [s["transition_in"] for s in scenes],
+        "visual_modes": [s.get("visual_mode", "") for s in scenes],
+        "environments": sorted({s["environment"] for s in scenes if s.get("environment")
+                                and (s["template"] == "environment" or s.get("backdrop"))}),
         "typography": "fredoka_700_headline+lilita_numbers+yellow_highlight_pill",
         "animation_choices": sorted({s["template"] for s in scenes}),
     }

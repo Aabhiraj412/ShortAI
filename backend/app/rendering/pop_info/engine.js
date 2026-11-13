@@ -1,4 +1,4 @@
-// CrazzyDocs Pop Info engine (pop_info_v1, revision 3.27.1: hybrid photo treatments).
+// CrazzyDocs Pop Info engine (pop_info_v1, revision 3.28: illustrated environments, kinetic type).
 // Flat-vector motion graphics drawn entirely in canvas, after docs/reference_styles/pop_info.html:
 // springy pop-ins, decaying wobble, iris wipe with a yellow ring, a teal idea bubble with a counting
 // number and a pill tag, a self-drawing dotted path with pins, slow camera push and drifting dust.
@@ -512,6 +512,70 @@ const T = {
       c.font = `500 13px ${FONT.head}`; const w = c.measureText(credit).width + 16; rr(c, SAFE.x0, SAFE.y1 - 22, w, 20, 10); c.fill();
       txt(c, credit, SAFE.x0 + 8, SAFE.y1 - 12, { size: 13, weight: 500, color: '#FFFFFF', align: 'left', tag: 'credit' }); c.restore(); }
   },
+  environment(c, sc, u, d) {
+    // The place is the picture: a layered illustrated environment (drawn in drawScene) with the
+    // subject spotlit at the vanishing point and the idea on a paper card above it.
+    const g = 0.55 + 0.12 * Math.sin(u * 2.2), hs = popS(u, 0.35, 0.55, 2.0);
+    if (hs > 0) {
+      const rg = c.createRadialGradient(DW / 2, 470, 10, DW / 2, 470, 190 * hs); rg.addColorStop(0, `rgba(255,216,107,${g})`); rg.addColorStop(1, 'rgba(255,216,107,0)');
+      c.fillStyle = rg; c.fillRect(DW / 2 - 200, 270, 400, 400);
+      disc(c, DW / 2, 470, 86, C.paper, hs);
+      c.save(); c.translate(DW / 2, 470); c.scale(hs, hs); c.strokeStyle = C.teal; c.lineWidth = 6; c.beginPath(); c.arc(0, 0, 96, 0, 6.29); c.stroke();
+      const w = wobble(u, 0.75); c.scale(1 + w, 1 - w); icon(c, sc.main_subject, 0, 0, 118, u); c.restore();
+    }
+    const cp = eOutBack(prog(u, 0.05, 0.6), 1.3);
+    if (cp > 0) {
+      c.save(); c.translate(0, (1 - clamp(cp)) * -160); c.globalAlpha = clamp(cp * 1.4);
+      c.fillStyle = 'rgba(0,0,0,.14)'; rr(c, SAFE.x0 + 6, 128, SAFE.x1 - SAFE.x0, 166, 26); c.fill();
+      c.fillStyle = C.paper; rr(c, SAFE.x0, 120, SAFE.x1 - SAFE.x0, 166, 26); c.fill();
+      c.fillStyle = C.coral; rr(c, SAFE.x0, 120, SAFE.x1 - SAFE.x0, 14, [26, 26, 0, 0]); c.fill();
+      headline(c, sc.headline, sc.highlight, DW / 2, 208, SAFE.x1 - SAFE.x0 - 40, u, 0.3, 44);
+      c.restore();
+    }
+    if (sc.stage_label) pill(c, DW / 2, 612, sc.stage_label.toUpperCase(), 0.9, u, C.teal, C.paper, 18);
+  },
+  kinetic(c, sc, u, d) {
+    // Typography-led emphasis: the line itself is the visual. Words land one by one on a colour field.
+    const field = sc.index % 2 ? C.navy : C.tealD;
+    c.fillStyle = field; c.fillRect(-100, -100, DW + 200, DH + 200);
+    c.save(); c.globalAlpha = 0.07; c.fillStyle = C.paper;
+    for (let k = -6; k < 14; k++) { const x = k * 70 + (u * 26) % 70; c.beginPath(); c.moveTo(x, -100); c.lineTo(x + 34, -100); c.lineTo(x - 266, DH + 100); c.lineTo(x - 300, DH + 100); c.closePath(); c.fill(); }
+    c.restore();
+    kicker(c, sc.stage_label || PLAN.category, u, 0.05);
+    const text = sc.headline || '', hi = String(sc.highlight || '').toLowerCase();
+    // every line, including a single long word and its highlight block (+20), must fit the width
+    const maxW = (SAFE.x1 - SAFE.x0) * 0.78;
+    let L = null;
+    for (let sz = 88; sz >= 30 && !L; sz -= 2) {
+      const lines = wrap(c, text, maxW, sz, 700, FONT.head, 4);
+      if (lines && lines.every(l => { c.font = `700 ${sz}px ${FONT.head}`; return c.measureText(l).width + 20 <= maxW; })) L = { lines, size: sz };
+    }
+    L = L || layoutLines(c, text, maxW, 30, 700, FONT.head, 6, 22);
+    const lh = L.size * 1.08, r = rng(sc.scene_id + 'kt');
+    let idx = 0, lastAt = 0.2;
+    L.lines.forEach((line, li) => {
+      const y = 440 + (li - (L.lines.length - 1) / 2) * lh;
+      c.font = `700 ${L.size}px ${FONT.head}`;
+      const words = line.split(' '), sp = c.measureText(' ').width, widths = words.map(w => c.measureText(w).width);
+      const total = widths.reduce((a, b) => a + b, 0) + sp * (words.length - 1);
+      let x = DW / 2 - total / 2;
+      words.forEach((w, k) => {
+        const t0 = 0.2 + idx * 0.17, e = eOutCubic(prog(u, t0, 0.3)), a = clamp(prog(u, t0, 0.1)), rot = (r() - 0.5) * 0.06;
+        lastAt = t0 + 0.3;
+        if (a > 0) {
+          const isHi = hi && w.replace(/[.,!?;:"']/g, '').toLowerCase() === hi;
+          c.save(); c.translate(x + widths[k] / 2, y - (1 - e) * 46); c.rotate(rot * (1 - e) + (isHi ? -0.03 : 0)); c.scale(lerp(1.22, 1, e), lerp(1.22, 1, e)); c.globalAlpha = a;
+          if (isHi) { c.fillStyle = C.yellow; rr(c, -widths[k] / 2 - 10, -L.size * 0.62, widths[k] + 20, L.size * 1.2, 14); c.fill(); }
+          txt(c, w, 0, 0, { size: L.size, weight: 700, color: isHi ? C.ink : C.paper, tag: 'headline' }); c.restore();
+        }
+        x += widths[k] + sp; idx++;
+      });
+    });
+    const sw = eInOut(prog(u, lastAt, 0.45)), yb = 440 + (L.lines.length / 2) * lh + 18;
+    if (sw > 0) { c.strokeStyle = C.coral; c.lineWidth = 9; c.lineCap = 'round'; c.beginPath(); c.moveTo(DW / 2 - 130, yb); c.quadraticCurveTo(DW / 2, yb + 16, lerp(DW / 2 - 130, DW / 2 + 130, sw), yb - 4); c.stroke(); }
+    const bs = popS(u, lastAt + 0.2, 0.45, 2.2);
+    disc(c, DW / 2, 700, 44, C.paper, bs); if (bs > 0) { c.save(); c.translate(DW / 2, 700); c.scale(bs, bs); icon(c, sc.main_subject, 0, 0, 56, u); c.restore(); }
+  },
   reveal(c, sc, u, d) {
     c.save(); c.translate(DW / 2, 400); c.rotate(u * 0.25); for (let k = 0; k < 12; k++) { c.rotate(Math.PI / 6); c.fillStyle = k % 2 ? 'rgba(255,216,107,.35)' : 'rgba(255,255,255,.25)'; c.beginPath(); c.moveTo(0, 0); c.lineTo(-40, -520); c.lineTo(40, -520); c.closePath(); c.fill(); } c.restore();
     const s = popS(u, 0.15, 0.55, 2.0); disc(c, DW / 2, 400, 135, C.teal, s);
@@ -533,7 +597,13 @@ function drawScene(c, sc, t) {
   c.save();
   const cam = 1.0 + 0.035 * eInOut(prog(u, 0, d)), dx = Math.sin(t * 0.5) * 2, dy = Math.cos(t * 0.4) * 1.5;
   c.translate(DW / 2 + dx, 460 + dy); c.scale(cam, cam); c.translate(-DW / 2, -460);
-  background(c, sc, t); dust(c, t);
+  if (sc.environment && window.POP_ENV && (sc.template === 'environment' || sc.backdrop === 'environment')) {
+    // illustrated place; a slow dolly toward the vanishing point. Diagrams sit on a paper wash over it.
+    const dz = sc.template === 'environment' ? lerp(1.0, 1.07, eInOut(prog(u, 0, d))) : 1.0;
+    c.save(); c.translate(DW / 2, 470); c.scale(dz, dz); c.translate(-DW / 2, -470); window.POP_ENV.paint(c, sc.environment, t); c.restore();
+    if (sc.template !== 'environment') { c.fillStyle = 'rgba(251,248,238,.66)'; c.fillRect(-100, -100, DW + 200, DH + 200); }
+  } else background(c, sc, t);
+  dust(c, t);
   (T[sc.template] || T.spotlight)(c, sc, u, d);
   c.restore();
 }
