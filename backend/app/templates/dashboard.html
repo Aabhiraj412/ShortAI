@@ -390,6 +390,31 @@
       </div>
     </div>
 
+    <div class="card" id="ceCard">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">Creative Engine</h2>
+          <p class="card-desc" id="ceDesc">Loading…</p>
+        </div>
+        <span class="pill" id="ceGate">--</span>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Engine</strong><span id="ceEngine">--</span></div>
+        <div class="meta-item"><strong>Production uses</strong><span id="ceFlag">--</span></div>
+        <div class="meta-item"><strong>Visual style</strong><span id="ceStyle">--</span></div>
+        <div class="meta-item"><strong>Script source</strong><span id="ceScript">--</span></div>
+        <div class="meta-item"><strong>Gemini API</strong><span id="ceApi">--</span></div>
+        <div class="meta-item"><strong>Assets</strong><span id="ceAssets">--</span></div>
+        <div class="meta-item"><strong>Last quality score</strong><span id="ceScore">--</span></div>
+        <div class="meta-item"><strong>Estimated cost / video</strong><span id="ceCost">--</span></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <label for="ceReportSel" style="font-size:12px;color:var(--muted);">Quality report</label>
+        <select id="ceReportSel" style="flex:1;min-width:0;max-width:100%;" onchange="ceShowReport(this.value)"></select>
+      </div>
+      <div id="ceReport" style="margin-top:10px;font-size:13px;overflow-x:auto;"></div>
+    </div>
+
     <div class="card" id="ytConnCard">
       <div class="card-head">
         <div>
@@ -1570,6 +1595,48 @@ async function ytConnect(isReconnect) {
   }
 }
 
+function ceText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+
+async function refreshCreativeEngine() {
+  let s; try { s = await apiJson("/api/creative-engine/status"); } catch (err) { return; }
+  ceText("ceDesc", "Pop Info visual engine, script writer and the rendered-video quality gate.");
+  ceText("ceEngine", s.engine_version);
+  ceText("ceFlag", s.feature_flag.production_uses);
+  ceText("ceStyle", s.active_visual_style.replace("_", " "));
+  const sg = s.script_generation;
+  ceText("ceScript", (s.last_quality && s.last_quality.script_source) || sg.source_when_unconfigured);
+  ceText("ceApi", sg.gemini_key_configured ? `configured (${sg.model})` : "not configured: live validation BLOCKED");
+  ceText("ceAssets", `${s.asset_generation.illustrations}; ${s.asset_generation.photos}`);
+  const lq = s.last_quality;
+  ceText("ceScore", lq && lq.overall != null ? `${lq.overall} / 100 (${lq.name})` : "no report yet");
+  ceText("ceCost", s.estimated_cost.per_video_usd != null ? `$${s.estimated_cost.per_video_usd.toFixed(2)}` : s.estimated_cost.note);
+  const gate = document.getElementById("ceGate");
+  gate.textContent = lq ? (lq.passed ? "QC PASS" : "QC FAIL") : "NO REPORT";
+  gate.className = "pill " + (lq ? (lq.passed ? "ok" : "err") : "warn");
+  const sel = document.getElementById("ceReportSel"), keep = sel.value;
+  sel.replaceChildren(...s.reports.map(r => { const o = document.createElement("option"); o.value = r.id;
+    o.textContent = `${r.kind === "test" ? "TEST" : "PROD"} · ${r.name} · ${r.overall ?? "--"}${r.passed ? "" : " (fail)"}`; return o; }));
+  if (keep && s.reports.some(r => r.id === keep)) sel.value = keep;
+  if (sel.value && !document.getElementById("ceReport").dataset.loaded) ceShowReport(sel.value);
+}
+
+async function ceShowReport(id) {
+  const box = document.getElementById("ceReport");
+  if (!id) { box.replaceChildren(); return; }
+  let d; try { d = await apiJson(`/api/creative-engine/reports/${encodeURIComponent(id)}`); } catch (err) { box.textContent = "Report unavailable."; return; }
+  box.dataset.loaded = id;
+  const r = d.report, t = document.createElement("table"); t.style.width = "100%"; t.style.borderCollapse = "collapse";
+  const row = (cells, head) => { const tr = document.createElement("tr"); cells.forEach(c => { const td = document.createElement(head ? "th" : "td");
+    td.textContent = c; td.style.textAlign = "left"; td.style.padding = "4px 6px"; td.style.borderBottom = "1px solid var(--line, #26262c)"; tr.appendChild(td); }); t.appendChild(tr); };
+  row(["Dimension", "Score", "Weight", "Basis / evidence"], true);
+  for (const [k, v] of Object.entries(r.dimensions)) row([k, v.score ?? "not measured", v.weight, `${v.basis}: ${v.evidence}`]);
+  const issues = document.createElement("div"); issues.style.marginTop = "8px";
+  const h = document.createElement("strong"); h.textContent = `Overall ${r.overall_score ?? "--"} / 100 · ${r.passed ? "passed" : "failed"} · ${r.issues.length} issue(s)`; issues.appendChild(h);
+  for (const i of r.issues.slice(0, 12)) { const p = document.createElement("div"); p.style.color = i.severity === "critical" ? "#fca5a5" : i.severity === "major" ? "#fcd34d" : "var(--muted)";
+    p.textContent = `[${i.severity}] ${i.t != null ? i.t + "s " : ""}${i.problem}: ${i.evidence} -> ${i.fix}`; issues.appendChild(p); }
+  box.replaceChildren(t, issues);
+}
+
 function renderStorageFields(cfg) {
   const wrap = document.getElementById("storageFieldsWrap");
   wrap.innerHTML = STORAGE_KEYS.map(([key, label]) => `
@@ -1864,6 +1931,8 @@ setInterval(() => {
 }, 8000);
 setInterval(refreshDeployment, 30000);
 setInterval(refreshYouTubeConnection, 30000);
+setInterval(refreshCreativeEngine, 60000);
+refreshCreativeEngine();
 refreshYouTubeConnection();
 setInterval(() => { refreshSchedule(); refreshMonitor(); }, 15000);
 </script>

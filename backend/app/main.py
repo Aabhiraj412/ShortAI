@@ -4,6 +4,7 @@ Provides full REST API for Dashboard, Agent controls, Pipeline runs, Media strea
 """
 import os
 import asyncio
+import re
 import ipaddress
 import json
 import shutil
@@ -472,6 +473,24 @@ async def stage_322_connect_youtube(_: None = Depends(require_local_control), __
 
 class YouTubeConnectRequest(ConfirmedActionRequest):
     confirm: bool = False
+
+
+@app.get("/api/creative-engine/status")
+async def api_creative_engine_status(_: None = Depends(require_local_control)):
+    """Pop Info engine flag, script/asset sources, API configuration (presence only) and quality reports."""
+    from backend.app.services import creative_engine_status as ces
+    return await asyncio.to_thread(ces.status)
+
+
+@app.get("/api/creative-engine/reports/{report_id}")
+async def api_creative_engine_report(report_id: str, _: None = Depends(require_local_control)):
+    from backend.app.services import creative_engine_status as ces
+    if not re.fullmatch(r"[0-9a-f]{12}", report_id or ""):
+        raise HTTPException(status_code=400, detail="invalid report id")
+    detail = await asyncio.to_thread(ces.report_detail, report_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return detail
 
 
 @app.get("/api/youtube/connection")
