@@ -58,6 +58,11 @@ from backend.app.content.topic_ledger import (
     compute_storyboard_fingerprint,
 )
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
+from backend.app.content.creative_identity_registry import (
+    CreativeIdentityRegistry,
+    DuplicateCreativeIdentity,
+    asset_fingerprints,
+)
 from backend.app.content.visual_diversity_policy import compute_asset_sha256
 from backend.app.orchestration.production_workspace import ProductionWorkspace, compute_file_sha256
 from backend.app.orchestration.stage_artifact_cache import (
@@ -129,6 +134,29 @@ class CrazzyDocsMasterOrchestrator:
         self.notifier = notifier or notification_service
         self.publishing_engine = publishing_engine or youtube_publishing_engine
         self.integrity_gate = integrity_gate or ContentIntegrityGate(workspace_root=WORKSPACE)
+
+    def _identity_registry(self, execution_context, is_full_live: bool, job_id: Optional[str]):
+        """The creative identity registry for real productions; None for tests and validation runs.
+
+        It shares the ledger's database, so a test that hands in a temporary ledger gets a
+        temporary registry, and nothing under pytest can write the live studio database.
+        """
+        if execution_context != ExecutionContext.PRODUCTION or not is_full_live:
+            return None
+        if (job_id or "").startswith("test_") or os.environ.get("CRAZZYDOCS_TEST_MODE") == "1":
+            return None
+        db_path = getattr(self.ledger, "db_path", None)
+        if not db_path:
+            return None
+        from backend.app.content.topic_ledger import DB_PATH as _LIVE_DB
+        if os.environ.get("PYTEST_CURRENT_TEST") and os.path.abspath(db_path) == os.path.abspath(_LIVE_DB):
+            return None
+        registry = CreativeIdentityRegistry(db_path)
+        try:
+            registry.backfill_from_history()
+        except Exception as exc:   # history import is best effort; the live gates still apply
+            logger.warning("Creative identity backfill skipped: %s", exc)
+        return registry
 
     def _synthesize_topic_script(self, topic: ScoredTopic, hook_text: str) -> str:
         """Dynamically generates a 50-58 second factual script for the topic."""
@@ -351,6 +379,7 @@ class CrazzyDocsMasterOrchestrator:
             else execution_context in (ExecutionContext.PRODUCTION, ExecutionContext.VALIDATION)
         )
         persist_to_db = execution_context != ExecutionContext.VALIDATION
+        identity_registry = self._identity_registry(execution_context, is_full_live, job_id)
 
         now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         job_id = job_id or (
@@ -461,6 +490,19 @@ class CrazzyDocsMasterOrchestrator:
                 if not ranked:
                     raise RuntimeError("No eligible candidate topics found passing duplicate and factual gates.")
 
+                # A failed production never reaches the ledger, so without this the same
+                # top-ranked subject is re-selected cycle after cycle (2026-11-13 audit).
+                if identity_registry is not None:
+                    ranked, identity_rejections = identity_registry.filter_fresh(ranked, job_id=job_id)
+                    for rej in identity_rejections:
+                        logger.info("[CREATIVE IDENTITY] Skipping '%s': already selected by %s (%s)",
+                                    rej["title"], rej["conflicts_with"], rej["status"])
+                    if not ranked:
+                        raise DuplicateCreativeIdentity(
+                            "integrity gate: every discovered topic was already selected by an earlier "
+                            f"production ({len(identity_rejections)} rejected); refusing to repeat a subject."
+                        )
+
                 selected_topic: Optional[ScoredTopic] = None
                 if force_topic_id:
                     for cand in ranked:
@@ -504,6 +546,14 @@ class CrazzyDocsMasterOrchestrator:
                 hooks = self.topic_engine.generate_five_hooks(selected_topic)
                 best_hook = max(hooks, key=lambda h: h.composite_score)
                 logger.info("Winning hook (%s): '%s'", best_hook.approach, best_hook.hook_text)
+                if identity_registry is not None:
+                    identity_registry.reserve(
+                        job_id,
+                        topic_title=selected_topic.title,
+                        category=selected_topic.category,
+                        topic_angle=best_hook.approach,
+                        hook_fingerprint=compute_script_fingerprint(best_hook.hook_text),
+                    )
 
                 if execution_context != ExecutionContext.PRODUCTION and val_hist is not None:
                     val_hist.update_outcome(
@@ -841,6 +891,26 @@ class CrazzyDocsMasterOrchestrator:
             storyboard_fp = compute_storyboard_fingerprint(visual_beats)
             prod_ws.script_fingerprint = script_fp
             prod_ws.storyboard_fingerprint = storyboard_fp
+            if identity_registry is not None:
+                if identity_registry.get(job_id) is None:   # checkpoint resume from before the registry existed
+                    identity_registry.reserve(job_id, topic_title=selected_topic.title, category=selected_topic.category)
+                script_hit = identity_registry.script_conflict(script_fp, exclude_job=job_id)
+                if script_hit:
+                    identity_registry.update(job_id, script_fingerprint=script_fp, status="REJECTED_DUPLICATE_SCRIPT")
+                    raise DuplicateCreativeIdentity(
+                        f"integrity gate: script is identical to production {script_hit['job_id']} "
+                        f"('{script_hit['topic_title']}'); refusing to render a repeated video."
+                    )
+                identity_registry.update(
+                    job_id,
+                    script_fingerprint=script_fp,
+                    storyboard_fingerprint=storyboard_fp,
+                    asset_fingerprints_json=asset_fingerprints(storyboard_beats),
+                    visual_sequence_fingerprint=compute_script_fingerprint(
+                        " ".join(f"{b.get('visual_style')}:{b.get('scene_layout')}" for b in storyboard_beats or [] if isinstance(b, dict))
+                    ),
+                    status="SCRIPTED",
+                )
 
             # -------------------------------------------------------------
             # Stage 8: Expressive Narration Synthesis
@@ -1327,6 +1397,17 @@ class CrazzyDocsMasterOrchestrator:
                 publication_status="produced",
             )
             self.ledger.record_content(rec, allow_override=False, execution_context=execution_context.value)
+            if identity_registry is not None:
+                try:
+                    identity_registry.update(
+                        job_id,
+                        video_sha256=compute_file_sha256(final_video_path) if os.path.isfile(final_video_path) else "",
+                        renderer_config_json={"renderer": (prod_ws.load_manifest() or {}).get("renderer", ""),
+                                              "visual_style": resolved_visual_style},
+                        status="PRODUCED",
+                    )
+                except Exception as reg_exc:   # identity bookkeeping must never fail a finished video
+                    logger.warning("Creative identity update after render failed: %s", reg_exc)
 
             # Update isolated ValidationTopicHistory with full completion fingerprints
             val_hist = getattr(self.ledger, "validation_history", None)
