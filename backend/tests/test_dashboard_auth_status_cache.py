@@ -37,24 +37,25 @@ def test_status_is_shared_within_the_cache_window_and_refreshed_after(tmp_path):
         assert len(calls) == 3
 
 
-def test_saving_or_disconnecting_credentials_invalidates_the_cache(tmp_path):
+def test_token_refresh_keeps_the_cache_but_connection_changes_clear_it(tmp_path):
     m = _mgr(tmp_path)
     calls = []
     with patch.object(YouTubeOAuthManager, "get_auth_status", lambda self: calls.append(1) or {"status": "connected"}):
         m.get_auth_status_cached()
-        ype.invalidate_auth_status_cache()
-        m.get_auth_status_cached()
-        assert len(calls) == 2
+        # A token refresh saves credentials on most calls; it must not defeat the cache.
         with patch.object(ype, "write_protected_file", lambda *a, **k: None):
             class _Creds:
                 def to_json(self):
                     return "{}"
             m.save_credentials(_Creds())
         m.get_auth_status_cached()
-        assert len(calls) == 3
+        assert len(calls) == 1
         m.disconnect_channel()
         m.get_auth_status_cached()
-        assert len(calls) == 4
+        assert len(calls) == 2
+        m.install_client_secrets("not json")
+        m.get_auth_status_cached()
+        assert len(calls) == 3
 
 
 def test_concurrent_pollers_trigger_a_single_live_check(tmp_path):

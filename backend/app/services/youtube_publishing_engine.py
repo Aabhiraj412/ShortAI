@@ -652,7 +652,9 @@ class PublishingDatabase:
 # AUTH_STATUS_CACHE_SEC; uploads and the OAuth flow never use the cache.
 import threading as _threading
 
-AUTH_STATUS_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_CACHE_SEC", "60"))
+# Token refreshes (save_credentials) do not change the connection state, so they do not
+# clear the cache; connecting, installing client secrets and disconnecting do.
+AUTH_STATUS_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_CACHE_SEC", "300"))
 _auth_status_lock = _threading.RLock()
 _auth_status_cache: Dict[str, Any] = {"at": 0.0, "key": None, "value": None}
 
@@ -676,6 +678,7 @@ class YouTubeOAuthManager:
         self.scopes = scopes or YOUTUBE_SCOPES
 
     def install_client_secrets(self, source_path_or_json: str) -> Tuple[bool, str]:
+        invalidate_auth_status_cache()
         """
         Validates and installs OAuth 2.0 client secrets to backend/client_secrets.json.
         Accepts either a filesystem path or raw JSON string.
@@ -890,6 +893,7 @@ class YouTubeOAuthManager:
                 prompt="consent",
             )
             self.save_credentials(creds)
+            invalidate_auth_status_cache()   # newly connected channel
             auth_status = self.get_auth_status()
             if auth_status.get("channel_connected"):
                 return True, auth_status.get("channel_info"), None
@@ -922,7 +926,6 @@ class YouTubeOAuthManager:
     def save_credentials(self, creds: Credentials):
         """Persists refreshed credentials securely to token.json."""
         write_protected_file(self.token_file, creds.to_json().encode("utf-8"))
-        invalidate_auth_status_cache()
         logger.info("Saved protected OAuth credentials.")
 
     def disconnect_channel(self) -> bool:
