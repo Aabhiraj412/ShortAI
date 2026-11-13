@@ -414,6 +414,7 @@
         <span id="pipelinePct">0%</span>
       </div>
       <div id="monError" style="display:none;margin-top:10px;color:#fca5a5;font-size:13px;white-space:pre-wrap;"></div>
+      <div id="monRetry" style="display:none;margin-top:10px;font-size:13px;"></div>
       <div class="stage-chips" id="pipelineStageChips"></div>
     </div>
 
@@ -1432,6 +1433,7 @@ async function refreshMonitor() {
     set("ovLastSuccess", ls ? (ls.topic || ls.job_id) : "None yet");
     set("ovLastSuccessSub", ls ? `${ls.completed_at_ist || ""}${ls.publishing_state ? " · " + ls.publishing_state : ""}` : "--");
     const errBox = document.getElementById("monError");
+    renderRetryOffer(m.retry_offer, !!j);
     if (!j) {
       set("ovActiveJob", "None"); set("ovActiveJobSub", "No production running");
       set("monStage", "Idle"); set("monProgress", "--"); set("monActivity", "--"); set("monRecovery", "--");
@@ -1454,6 +1456,30 @@ async function refreshMonitor() {
     if (j.error && j.status !== "RUNNING") { errBox.textContent = j.error; errBox.style.display = "block"; }
     else errBox.style.display = "none";
   } catch (err) { /* overview keeps last values */ }
+}
+
+function renderRetryOffer(offer, busy) {
+  const box = document.getElementById("monRetry");
+  if (!box) return;
+  if (busy || !offer || offer.status !== "FAILED") { box.style.display = "none"; return; }
+  box.style.display = "block";
+  if (offer.eligible) {
+    box.innerHTML = `<div style="margin-bottom:6px;">${offer.job_id} failed (${offer.classification}, ${offer.attempts}/${offer.max_retries} attempts). `
+      + `One extra attempt is allowed until the recovery window ends at ${shortIst(offer.recovery_ends_ist)}; target publication ${shortIst(offer.target_publication_ist)}.</div>`
+      + `<button class="btn warn sm" onclick="requestOperatorRetry('${offer.job_id}')">Retry once</button>`;
+  } else {
+    box.innerHTML = `<span style="color:var(--muted);">Retry of ${offer.job_id} not available: ${(offer.reasons || []).join(" ")}</span>`;
+  }
+}
+
+async function requestOperatorRetry(jobId) {
+  const policy = "If it succeeds, the video follows the current publishing policy (with automatic private scheduling it is uploaded to YouTube as private and scheduled for the target time).";
+  if (!confirm(`Retry ${jobId} once with the current renderer?\n\n${policy}\n\nIf it fails again it stays FAILED.`)) return;
+  try {
+    const res = await apiJson(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+    alert(res.message || "Retry scheduled.");
+  } catch (err) { alert(`Retry refused: ${err.message || err}`); }
+  refreshMonitor();
 }
 
 function renderStorageFields(cfg) {

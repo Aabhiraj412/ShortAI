@@ -78,6 +78,15 @@ def monitor_view(now_utc: Optional[datetime] = None) -> dict[str, Any]:
         recent = [_job_view(j, now_utc) for j in real.order_by(JobModel.updated_at.desc()).limit(6).all()]
         last_ok = real.filter(JobModel.status == "COMPLETED").order_by(JobModel.completed_at.desc()).first()
         last_success = _job_view(last_ok, now_utc) if last_ok else None
+        last_failed = real.filter(JobModel.status == "FAILED").order_by(JobModel.updated_at.desc()).first()
+        last_failed_id = last_failed.id if last_failed else None
+    retry_offer = None
+    if not active and last_failed_id:
+        try:
+            from backend.app.services import operator_retry_service
+            retry_offer = operator_retry_service.evaluate(last_failed_id)
+        except Exception:
+            retry_offer = None
     queue_count = None
     try:
         from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
@@ -92,4 +101,5 @@ def monitor_view(now_utc: Optional[datetime] = None) -> dict[str, Any]:
         "recent_jobs": recent,
         "last_success": last_success,
         "publishing_queue_count": queue_count,
+        "retry_offer": retry_offer,
     }

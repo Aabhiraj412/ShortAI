@@ -1918,6 +1918,28 @@ async def api_production_monitor(_: None = Depends(require_local_control)):
     return production_monitor_service.monitor_view()
 
 
+class OperatorRetryRequest(ConfirmedActionRequest):
+    confirm: bool = False
+
+
+@app.get("/api/production/jobs/{job_id}/retry")
+async def api_operator_retry_eligibility(job_id: str, _: None = Depends(require_local_control)):
+    from backend.app.services import operator_retry_service
+    return operator_retry_service.evaluate(job_id)
+
+
+@app.post("/api/production/jobs/{job_id}/retry")
+async def api_operator_retry(job_id: str, req: OperatorRetryRequest, _: None = Depends(require_local_control)):
+    """One guarded extra attempt for a FAILED cycle (see operator_retry_service)."""
+    from backend.app.services import operator_retry_service
+    try:
+        return operator_retry_service.request_retry(job_id, req.confirm)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except operator_retry_service.RetryRefused as exc:
+        raise HTTPException(status_code=409, detail=" ".join(exc.reasons))
+
+
 @app.get("/api/schedule/presets/{name}")
 async def api_schedule_preset(name: str, _: None = Depends(require_local_control)):
     from backend.app.services import schedule_service
