@@ -35,7 +35,8 @@ def test_every_score_has_a_reason():
     r = evaluate_script({"sections": GOOD, "full_script": " ".join(s["text"] for s in GOOD)}, TOPIC)
     for name, c in r["criteria"].items():
         assert c["reason"], name
-    assert set(r["criteria"]) >= {"hook", "spoken_style", "structure", "grounding", "originality", "duration_fit", "payoff", "narratability"}
+    assert set(r["criteria"]) == {"hook", "curiosity", "narrative_progression", "grounding", "originality",
+                                  "spoken_naturalness", "pacing", "payoff"}
 
 
 def test_grounding_and_originality_are_not_invented_without_research():
@@ -49,3 +50,19 @@ def test_invented_number_lowers_grounding():
     bad[1]["text"] = bad[1]["text"].replace("3 million", "9 million")
     r = evaluate_script({"sections": bad, "full_script": " ".join(s["text"] for s in bad)}, TOPIC)
     assert r["criteria"]["grounding"]["score"] < 10 and "9" in r["criteria"]["grounding"]["reason"]
+
+
+def test_spelled_out_invented_number_lowers_grounding():
+    bad = [dict(s) for s in GOOD]
+    bad[1]["text"] += " Winners also get nine hundred thousand dollars."
+    r = evaluate_script({"sections": bad, "full_script": " ".join(s["text"] for s in bad)}, TOPIC)
+    assert r["criteria"]["grounding"]["score"] < 10 and "nine hundred thousand" in r["criteria"]["grounding"]["reason"]
+
+
+def test_padding_about_the_source_lowers_progression():
+    padded = [dict(s) for s in GOOD]
+    padded[2]["text"] = "The physicist is normally known for other work. But his latest paper highlights why it is complicated."
+    clean = evaluate_script({"sections": GOOD, "full_script": " ".join(s["text"] for s in GOOD)}, TOPIC)
+    r = evaluate_script({"sections": padded, "full_script": " ".join(s["text"] for s in padded)}, TOPIC)
+    assert r["criteria"]["narrative_progression"]["score"] <= clean["criteria"]["narrative_progression"]["score"] - 3
+    assert "known for" in r["criteria"]["narrative_progression"]["reason"]

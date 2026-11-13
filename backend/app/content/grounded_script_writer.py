@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,23 @@ SECTION_IDS = {"HOOK": "seg_01_hook", "CONTEXT": "seg_02_context", "ESCALATION":
 MIN_WORDS, MAX_WORDS = 95, 126          # ~2.3 words/s: 41-55 s of speech + 2 s outro <= 58 s
 COPY_NGRAM = 9
 MAX_ATTEMPTS = 2
+TRANSIENT_RETRIES = 2                    # per attempt, for 429 / 5xx / timeouts only
+BACKOFF_SEC = (4.0, 12.0)
+_TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
+MODEL_BUDGET_SEC = 180.0                 # stop retrying one model after this much wall time
+# Used only when the configured model fails with transient errors (overload, timeouts). The model
+# that actually wrote the script is recorded in script_source, so a fallback model is never hidden.
+DEFAULT_FALLBACK_MODELS = ("gemini-3.6-flash",)
+
+
+def model_chain(primary: Optional[str]) -> List[str]:
+    raw = os.environ.get("GEMINI_FALLBACK_MODELS")
+    extra = [m.strip() for m in raw.split(",")] if raw is not None else list(DEFAULT_FALLBACK_MODELS)
+    chain: List[str] = []
+    for m in [primary or ""] + extra:
+        if m and m not in chain:
+            chain.append(m)
+    return chain
 
 # Controlled variation (audit Phase 2.5): the hook structure rotates by job, so two
 # productions never share a hook shape by accident. Quality comes from the validators.
@@ -93,6 +111,10 @@ def validate_sections(sections: Sequence[Dict[str, Any]], corpus: str) -> List[s
     invented = sorted({_norm_number(t) for t in _NUMBER.findall(full)} - known - {""})
     if invented:
         problems.append(f"numbers not found in the research: {', '.join(invented)}")
+    from backend.app.content.number_words import unsupported_claims
+    spelled = [q for q in unsupported_claims(_NUMBER.sub(" ", full), corpus)]
+    if spelled:   # spelled-out quantities ("nine million dollars") must be in the research too
+        problems.append(f"spelled-out numbers not found in the research: {', '.join(spelled)}")
     src = _words(corpus)
     src_grams = {" ".join(src[i:i + COPY_NGRAM]) for i in range(len(src) - COPY_NGRAM + 1)}
     out = _words(full)
@@ -165,7 +187,32 @@ def default_client() -> Tuple[Any, Optional[str]]:
     return genai.Client(api_key=key, http_options=types.HttpOptions(timeout=90_000)), model
 
 
-def _generate(client: Any, model: str, prompt: str) -> str:
+def _usage(resp: Any) -> Dict[str, Any]:
+    """Token counts exactly as the API reports them; absent fields stay None (never estimated)."""
+    um = getattr(resp, "usage_metadata", None)
+    get = (lambda k: getattr(um, k, None)) if um is not None else (lambda k: None)
+    cands = getattr(resp, "candidates", None) or []
+    finish = getattr(cands[0], "finish_reason", None) if cands else None
+    return {"input_tokens": get("prompt_token_count"), "output_tokens": get("candidates_token_count"),
+            "thinking_tokens": get("thoughts_token_count"), "total_tokens": get("total_token_count"),
+            "model_version": getattr(resp, "model_version", None),
+            "finish_reason": str(getattr(finish, "name", finish)) if finish is not None else None}
+
+
+def describe_error(exc: BaseException) -> Dict[str, Any]:
+    """Error type and HTTP status only. The message is never recorded: it can echo request details."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    try:
+        code = int(code) if code is not None else None
+    except (TypeError, ValueError):
+        code = None
+    timeout = "timeout" in type(exc).__name__.lower() or "timed out" in str(exc).lower()
+    return {"error_type": type(exc).__name__, "http_status": code,
+            "status": str(getattr(exc, "status", "") or "")[:40] or None,
+            "transient": bool(timeout or code in _TRANSIENT_CODES)}
+
+
+def _generate(client: Any, model: str, prompt: str, telemetry: Optional[Dict[str, Any]] = None) -> str:
     try:
         from google.genai import types
         config = types.GenerateContentConfig(response_mime_type="application/json", temperature=0.85)
@@ -174,7 +221,32 @@ def _generate(client: Any, model: str, prompt: str) -> str:
     kwargs = {"model": model, "contents": prompt}
     if config is not None:
         kwargs["config"] = config
-    return client.models.generate_content(**kwargs).text
+    t0 = time.perf_counter()
+    resp = client.models.generate_content(**kwargs)
+    if telemetry is not None:
+        telemetry.update(latency_ms=round((time.perf_counter() - t0) * 1000), response_status="ok", **_usage(resp))
+    return resp.text
+
+
+def _call_with_backoff(client: Any, model: str, prompt: str, sleep=None) -> Tuple[str, Dict[str, Any]]:
+    """One logical attempt: retries only transient API failures, with exponential backoff."""
+    calls: List[Dict[str, Any]] = []
+    started = time.perf_counter()
+    for n in range(TRANSIENT_RETRIES + 1):
+        tel: Dict[str, Any] = {"call": n + 1}
+        t0 = time.perf_counter()
+        try:
+            text = _generate(client, model, prompt, tel)
+            calls.append(tel)
+            return text, {"calls": calls}
+        except Exception as exc:
+            tel.update(latency_ms=round((time.perf_counter() - t0) * 1000), response_status="error", **describe_error(exc))
+            calls.append(tel)
+            if not tel["transient"] or n == TRANSIENT_RETRIES or time.perf_counter() - started > MODEL_BUDGET_SEC:
+                exc.calls = calls   # type: ignore[attr-defined]
+                raise
+            (sleep or time.sleep)(BACKOFF_SEC[min(n, len(BACKOFF_SEC) - 1)])
+    raise RuntimeError("unreachable")
 
 
 def _assemble(sections: Sequence[Dict[str, Any]], arc: Sequence[str], category: str,
@@ -216,25 +288,41 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
     attempts: List[Dict[str, Any]] = []
     if client is not None and model:
         corpus = fact_corpus(topic)
-        feedback: List[str] = []
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                data = _parse(_generate(client, model, build_prompt(topic, hook_type, hook_text, feedback)))
-                sections = data.get("sections") or []
-                feedback = validate_sections(sections, corpus)
-            except Exception as exc:   # API, quota, timeout or malformed JSON: never fail the production
-                feedback = [f"{type(exc).__name__}"]
-                attempts.append({"attempt": attempt, "accepted": False, "problems": feedback})
-                if not isinstance(exc, (ValueError, KeyError, TypeError)):
-                    break   # transport/API errors: a second call will not help this cycle
-                continue
-            attempts.append({"attempt": attempt, "accepted": not feedback, "problems": feedback})
-            if not feedback:
-                policy_arc, category = _arc_and_category(topic, execution_context)
-                return _with_quality(_assemble(sections, policy_arc, category, script_source=f"llm:{model}",
-                                               hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
-                                               writer_attempts=attempts), topic)
-        logger.warning("Script writer: model draft rejected, using extractive fallback: %s", attempts)
+        for current in model_chain(model):
+            feedback: List[str] = []
+            api_unavailable = False
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                calls: List[Dict[str, Any]] = []
+                try:
+                    raw, info = _call_with_backoff(client, current, build_prompt(topic, hook_type, hook_text, feedback))
+                    calls = info["calls"]
+                    data = _parse(raw)
+                    sections = data.get("sections") or []
+                    feedback = validate_sections(sections, corpus)
+                except Exception as exc:   # API, quota, timeout or malformed JSON: never fail the production
+                    calls = calls or list(getattr(exc, "calls", []))
+                    feedback = [f"{type(exc).__name__}"]
+                    attempts.append({"attempt": attempt, "model": current, "accepted": False,
+                                     "problems": feedback, "calls": calls})
+                    if not isinstance(exc, (ValueError, KeyError, TypeError)):
+                        last = calls[-1] if calls else {}
+                        # overloaded/timed-out after bounded retries, or model not served: next model.
+                        # Any other API error (auth, network down, bad request) ends the attempt.
+                        api_unavailable = bool(last.get("transient") or last.get("http_status") == 404)
+                        break
+                    continue
+                attempts.append({"attempt": attempt, "model": current, "accepted": not feedback,
+                                 "problems": feedback, "calls": calls, "draft": data if feedback else None})
+                if not feedback:
+                    policy_arc, category = _arc_and_category(topic, execution_context)
+                    return _with_quality(_assemble(sections, policy_arc, category, script_source=f"llm:{current}",
+                                                   model=current, configured_model=model,
+                                                   hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
+                                                   writer_attempts=attempts), topic)
+            if not api_unavailable:
+                break   # drafts failed validation, or a non-transient API error: another model is not the fix
+        logger.warning("Script writer: no accepted model draft, using extractive fallback: %s",
+                       [{k: a.get(k) for k in ("attempt", "model", "problems")} for a in attempts])
 
     script = _strip_parentheticals(compose_structured_script(topic, hook_text, execution_context=execution_context))
     script.update(script_source="extractive_fallback", hook_type="", angle="",
