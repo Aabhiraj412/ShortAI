@@ -1,7 +1,9 @@
 # Claude Execution Progress
 
+> **Latest (2026-11-13 PM):** the render fix, simplified scheduler, automatic private upload and dashboard redesign are on branch `claude/scheduler-redesign-render-fix`. That branch is **not merged** and nothing is deployed. See [SCHEDULER_REDESIGN_AND_RENDER_FIX.md](SCHEDULER_REDESIGN_AND_RENDER_FIX.md).
+> The audit integration below was merged to `main` (`234394c`) and deployed (daemon PID 15036, dashboard PID 23556) on 2026-11-13 ~03:49 IST.
+
 Branch: `claude/crazzy-docs-verify-capabilities-ac634e` (worktree `.claude/worktrees/crazzy-docs-verify-capabilities-ac634e`).
-Not merged into `main`. Live daemon, dashboard, database, media and YouTube were **not** modified or restarted by this work.
 Last updated: 2026-11-13 IST (final independent safety audit + regression checks)
 
 ## Decision: **GO for integration** (conditional)

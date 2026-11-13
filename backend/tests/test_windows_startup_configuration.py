@@ -61,7 +61,11 @@ def test_dashboard_script_arguments():
 def test_scheduler_daemon_heartbeat():
     """Verify run_scheduler_daemon.py contains heartbeat loop and lockfile management."""
     script_content = (PROJECT_ROOT / "backend" / "scripts" / "run_scheduler_daemon.py").read_text(encoding="utf-8")
-    assert "periodic_heartbeat_loop" in script_content
+    # The daemon loop (heartbeat, recovery, controlled restart) lives in daemon_runtime.py;
+    # the script does process setup (lock, logging) and runs it.
+    runtime_content = (PROJECT_ROOT / "backend" / "app" / "scheduler" / "daemon_runtime.py").read_text(encoding="utf-8")
+    assert "run_daemon" in script_content
+    assert "periodic_heartbeat_loop" in runtime_content
     assert "SchedulerProcessLock" in script_content
     assert "scheduler_daemon.log" in script_content
 

@@ -373,9 +373,13 @@ def test_dashboard_and_publication_recovery_endpoints():
     client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     r_dash = client.get("/dashboard")
     assert r_dash.status_code == 200
-    assert "Original Cycle Target" in r_dash.text
-    assert "Execution Monitoring" in r_dash.text
-    assert "Recovery Overlap Policy" in r_dash.text
+    # Simplified dashboard: cycles show production start, recovery duration and target
+    # publish time; publication-slot recovery concepts are no longer part of the UI.
+    assert "Production Schedule — Asia/Kolkata" in r_dash.text
+    assert "Recovery Duration" in r_dash.text and "Target Publish Time" in r_dash.text
+    assert "Production Monitor" in r_dash.text
+    for legacy in ("Original Cycle Target", "Recovery Overlap Policy", "Pub Prep"):
+        assert legacy not in r_dash.text
 
     r_rec = client.get("/api/control-center/publication-recovery")
     assert r_rec.status_code == 200
