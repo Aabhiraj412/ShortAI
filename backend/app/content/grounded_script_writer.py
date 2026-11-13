@@ -231,14 +231,24 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
             attempts.append({"attempt": attempt, "accepted": not feedback, "problems": feedback})
             if not feedback:
                 policy_arc, category = _arc_and_category(topic, execution_context)
-                return _assemble(sections, policy_arc, category, script_source=f"llm:{model}",
-                                 hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
-                                 writer_attempts=attempts)
+                return _with_quality(_assemble(sections, policy_arc, category, script_source=f"llm:{model}",
+                                               hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
+                                               writer_attempts=attempts), topic)
         logger.warning("Script writer: model draft rejected, using extractive fallback: %s", attempts)
 
     script = _strip_parentheticals(compose_structured_script(topic, hook_text, execution_context=execution_context))
     script.update(script_source="extractive_fallback", hook_type="", angle="",
                   writer_attempts=attempts or [{"skipped": "no GEMINI_API_KEY configured"}])
+    return _with_quality(script, topic)
+
+
+def _with_quality(script: Dict[str, Any], topic: Any) -> Dict[str, Any]:
+    """Attaches the structured script-quality evaluation; an evaluator problem never blocks a script."""
+    try:
+        from backend.app.content.script_quality import evaluate_script
+        script["quality"] = evaluate_script(script, topic)
+    except Exception as exc:
+        script["quality"] = {"overall": None, "error": type(exc).__name__}
     return script
 
 
