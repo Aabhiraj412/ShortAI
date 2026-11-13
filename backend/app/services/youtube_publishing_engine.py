@@ -39,6 +39,12 @@ from googleapiclient.http import MediaFileUpload
 
 logger = logging.getLogger(__name__)
 
+# Every YouTube API call goes through httplib2, which does not fall back from a
+# timed-out IPv6 address to IPv4 (see backend/app/core/network_preferences.py).
+from backend.app.core.network_preferences import install_google_ipv4_preference
+
+install_google_ipv4_preference()
+
 from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE_ROOT
 from backend.app.core.paths import DATABASE_PATH as _DATABASE_PATH
 DB_PATH = str(_DATABASE_PATH)
@@ -655,6 +661,8 @@ import threading as _threading
 # Token refreshes (save_credentials) do not change the connection state, so they do not
 # clear the cache; connecting, installing client secrets and disconnecting do.
 AUTH_STATUS_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_CACHE_SEC", "300"))
+# A failed channel check is retried sooner: it is often temporary (network, quota).
+AUTH_STATUS_FAILURE_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_FAILURE_CACHE_SEC", "60"))
 _auth_status_lock = _threading.RLock()
 _auth_status_cache: Dict[str, Any] = {"at": 0.0, "key": None, "value": None}
 
@@ -662,6 +670,18 @@ _auth_status_cache: Dict[str, Any] = {"at": 0.0, "key": None, "value": None}
 def invalidate_auth_status_cache() -> None:
     with _auth_status_lock:
         _auth_status_cache.update(at=0.0, key=None, value=None)
+
+
+def _google_error_reason(exc) -> Optional[str]:
+    """The `reason` of a Google API HttpError (e.g. quotaExceeded), never the response body."""
+    try:
+        data = json.loads((exc.content or b"{}").decode("utf-8"))
+        errors = (data.get("error") or {}).get("errors") or []
+        if errors and isinstance(errors[0], dict):
+            return errors[0].get("reason")
+        return (data.get("error") or {}).get("status")
+    except Exception:
+        return None
 
 
 class YouTubeOAuthManager:
@@ -741,8 +761,9 @@ class YouTubeOAuthManager:
         max_age = AUTH_STATUS_CACHE_SEC if max_age is None else max_age
         with _auth_status_lock:
             c = _auth_status_cache
+            ttl = max_age if (c["value"] or {}).get("channel_connected") else min(max_age, AUTH_STATUS_FAILURE_CACHE_SEC)
             if (c["value"] is not None and c["key"] == self.token_file
-                    and time.monotonic() - c["at"] < max_age):
+                    and time.monotonic() - c["at"] < ttl):
                 return dict(c["value"])
             value = self.get_auth_status()
             _auth_status_cache.update(at=time.monotonic(), key=self.token_file, value=value)
@@ -760,6 +781,7 @@ class YouTubeOAuthManager:
         token_expiry = None
         channel_info = None
         auth_problem = None
+        error_detail = None
 
         if token_exist:
             try:
@@ -814,14 +836,30 @@ class YouTubeOAuthManager:
                         "is_linked": stat.get("isLinked"),
                         "long_uploads_status": stat.get("longUploadsStatus"),
                     }
+                else:
+                    error_detail = {"kind": "empty_response",
+                                    "message": "channels.list returned no channel for this account."}
             except HttpError as exc:
-                auth_problem = (
-                    "authorization_revoked"
-                    if getattr(getattr(exc, "resp", None), "status", None) == 401
-                    else "channel_verification_failed"
-                )
-            except Exception:
+                http_status = getattr(getattr(exc, "resp", None), "status", None)
+                reason = _google_error_reason(exc)
+                error_detail = {"kind": "http", "http_status": http_status, "reason": reason}
+                if http_status == 401:
+                    auth_problem = "authorization_revoked"
+                elif reason in ("quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded", "userRateLimitExceeded"):
+                    auth_problem = "quota_exceeded"
+                else:
+                    auth_problem = "channel_verification_failed"
+            except (TimeoutError, ConnectionError, OSError) as exc:
+                # The API could not be reached; the credentials themselves are fine.
+                auth_problem = "api_unavailable"
+                error_detail = {"kind": "network", "exception": type(exc).__name__,
+                                "message": str(exc)[:200]}
+            except Exception as exc:
                 auth_problem = "channel_verification_failed"
+                error_detail = {"kind": "unexpected", "exception": type(exc).__name__,
+                                "message": str(exc)[:200]}
+            if error_detail:
+                logger.warning("YouTube channel verification failed: %s", error_detail)
 
         return {
             "secrets_installed": secrets_exist,
@@ -837,6 +875,7 @@ class YouTubeOAuthManager:
                 "authorization_revoked",
             ),
             "status": auth_problem or ("connected" if channel_info else "not_connected"),
+            "error_detail": error_detail,
         }
 
     def refresh_token_safely(self) -> Tuple[bool, Optional[str]]:
