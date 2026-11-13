@@ -37,6 +37,19 @@ MIN_WINDOW_LEFT = timedelta(minutes=20)
 MIN_TARGET_LEAD = timedelta(minutes=45)
 MIN_NEXT_CYCLE_GAP = timedelta(minutes=45)
 RETRYABLE_CLASSIFICATIONS = frozenset({rp.TRANSIENT, rp.RENDER_FAILURE})
+# Under the unlimited-until-deadline policy the operator may also retry deterministic and permanent
+# failures: the request itself is the acknowledgement that the cause was changed or fixed.
+UNLIMITED_RETRYABLE = frozenset({rp.TRANSIENT, rp.RENDER_FAILURE, rp.DETERMINISTIC, rp.PERMANENT})
+
+
+def _settings():
+    from backend.app.scheduler.recovery_settings import load_settings
+    return load_settings()
+
+
+def _unlimited() -> bool:
+    from backend.app.scheduler.recovery_settings import POLICY_UNLIMITED
+    return _settings().retry_policy == POLICY_UNLIMITED
 BUSY_STATUSES = ("RUNNING", "RETRYING", "QUEUED", "RETRY_SCHEDULED", "HANDOFF_PENDING",
                  "WAITING_FOR_INTERNET", "INTERRUPTED", "PAUSED")
 
@@ -80,16 +93,24 @@ def evaluate(job_id: str, now_ist: Optional[datetime] = None) -> dict[str, Any]:
         busy = [j.id for j in s.query(JobModel).filter(JobModel.status.in_(BUSY_STATUSES), JobModel.id != job_id).all()
                 if not (j.id or "").startswith(("test_", "mock_"))]
 
-    if job.status != "FAILED":
-        reasons.append(f"Job status is {job.status}; only FAILED jobs can be retried.")
+    unlimited = _unlimited()
+    waiting_for_change = (job.status == rp.STATUS_RETRY_SCHEDULED and bool(cs.get("requires_change"))
+                          and not cs.get("change_acknowledged"))
+    if job.status != "FAILED" and not (unlimited and waiting_for_change):
+        reasons.append(f"Job status is {job.status}; only FAILED jobs"
+                       + (" or retries waiting for a change" if unlimited else "") + " can be retried."
+                       + (" Automatic retries are already scheduled." if job.status == rp.STATUS_RETRY_SCHEDULED else ""))
     classification = cs.get("error_classification")
-    if classification not in RETRYABLE_CLASSIFICATIONS:
+    allowed = UNLIMITED_RETRYABLE if unlimited else RETRYABLE_CLASSIFICATIONS
+    if classification not in allowed:
         reasons.append(f"Failure classification {classification or 'UNKNOWN'} is not retryable "
-                       f"(allowed: {', '.join(sorted(RETRYABLE_CLASSIFICATIONS))}).")
+                       f"(allowed: {', '.join(sorted(allowed))}).")
     if cp.get("queue_handoff") or cp.get("queue_ledger_id") or job.youtube_video_id:
         reasons.append("A video was already produced, queued or uploaded for this job.")
-    if int(cs.get("operator_retries", 0)) >= 1:
-        reasons.append("This job already had its one operator retry.")
+    allowance = int(_settings().operator_retry_allowance) if unlimited else 1
+    if int(cs.get("operator_retries", 0)) >= allowance:
+        reasons.append(f"This job already used its {allowance} operator retries; automatic retries continue "
+                       f"until the recovery deadline." if unlimited else "This job already had its one operator retry.")
     if busy:
         reasons.append(f"Another production is active or pending: {', '.join(busy)}.")
 
@@ -118,6 +139,8 @@ def evaluate(job_id: str, now_ist: Optional[datetime] = None) -> dict[str, Any]:
             reasons.append(f"Next cycle starts at {nxt.strftime('%H:%M IST')}, less than "
                            f"{int(MIN_NEXT_CYCLE_GAP.total_seconds() // 60)} min away.")
     return {**info, "eligible": not reasons, "reasons": reasons, "status": job.status,
+            "retry_policy": _settings().retry_policy, "operator_retries_used": int(cs.get("operator_retries", 0)),
+            "waiting_for_change": waiting_for_change,
             "attempts": int(job.retry_count or 0), "max_retries": int(job.max_retries or 0),
             "classification": classification}
 
@@ -130,7 +153,8 @@ def request_retry(job_id: str, confirm: bool, now_ist: Optional[datetime] = None
     if not check["eligible"]:
         raise RetryRefused(check["reasons"])
 
-    now_utc = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
+    now_utc = ((now_ist.astimezone(timezone.utc) if now_ist is not None else datetime.now(timezone.utc))
+               .replace(microsecond=0, tzinfo=None))
     with SessionLocal() as s:
         job = s.get(JobModel, job_id)
         cp = json.loads(job.checkpoint_data_json or "{}")
@@ -139,17 +163,19 @@ def request_retry(job_id: str, confirm: bool, now_ist: Optional[datetime] = None
         cs["operator_retry_requested_at_utc"] = now_utc.isoformat() + "Z"
         cs["next_retry_at_utc"] = now_utc.isoformat() + "Z"
         cs["retry_terminal"] = False
+        cs["change_acknowledged"] = True      # the operator asserts the cause was changed or fixed
         new_max = int(job.retry_count or 0) + 1
-        # Conditional: only the request that still sees FAILED wins.
+        expected_status = job.status          # FAILED, or RETRY_SCHEDULED waiting for a change
+        # Conditional: only the request that still sees the evaluated status wins.
         res = s.execute(
             update(JobModel)
-            .where(JobModel.id == job_id, JobModel.status == "FAILED")
+            .where(JobModel.id == job_id, JobModel.status == expected_status)
             .values(status=rp.STATUS_RETRY_SCHEDULED, max_retries=new_max,
                     recovery_reason="OPERATOR_RETRY", checkpoint_data_json=json.dumps(cp))
         )
         if res.rowcount != 1:
             s.rollback()
-            raise RetryRefused(["Job is no longer FAILED (another retry request won)."])
+            raise RetryRefused([f"Job is no longer {expected_status} (another retry request won)."])
         s.commit()
 
     from backend.app.services.control_center_service import record_change

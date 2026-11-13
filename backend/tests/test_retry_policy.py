@@ -16,6 +16,14 @@ from backend.app.scheduler.reconciliation_service import startup_reconciler
 from backend.app.scheduler import reconciliation_service as recon_mod
 from backend.app.services import control_center_service as control
 
+
+@pytest.fixture(autouse=True)
+def _bounded_rollback_policy(monkeypatch):
+    """These tests specify the `bounded` rollback policy (fixed attempt count, terminal FAILED).
+    The default unlimited-until-deadline policy is covered by test_retry_policy_unlimited.py."""
+    monkeypatch.setenv("CRAZZYDOCS_RETRY_POLICY", "bounded")
+
+
 IST = ZoneInfo("Asia/Kolkata")
 
 

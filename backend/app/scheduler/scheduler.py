@@ -186,7 +186,8 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                     "reason": "QUEUE_HANDOFF_PENDING",
                     "cycle_id": cycle_id,
                 }
-            elif existing.status == retry_policy.STATUS_RETRY_SCHEDULED and not retry_policy.is_retry_due(existing):
+            elif existing.status == retry_policy.STATUS_RETRY_SCHEDULED and not retry_policy.is_retry_due(
+                    existing, now_ist.astimezone(timezone.utc).replace(tzinfo=None)):
                 due = retry_policy.next_retry_at(existing)
                 return {
                     "status": "DEFERRED",
@@ -227,7 +228,8 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                             message=f"No worker heartbeat since {existing.heartbeat_at}",
                         )
                         db_session.commit()
-                        if decision["terminal"] or not retry_policy.is_retry_due(existing):
+                        if decision["terminal"] or not retry_policy.is_retry_due(
+                                existing, now_ist.astimezone(timezone.utc).replace(tzinfo=None)):
                             return {
                                 "status": decision["status"],
                                 "job_id": job_id,
@@ -598,7 +600,11 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
             failed_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
             if failed_job:
                 if failed_job.status == "BLOCKED_QC":
-                    decision = {"status": "BLOCKED_QC", "terminal": True, "classification": "QC_BLOCKED"}
+                    decision = retry_policy.record_failure(
+                        failed_job, error_type="QCBlocked", message=failed_job.error_details or str(e))
+                    if decision["terminal"] and decision["status"] == retry_policy.STATUS_FAILED:
+                        failed_job.status = "BLOCKED_QC"   # bounded rollback policy keeps the old terminal status
+                        decision["status"] = "BLOCKED_QC"
                 else:
                     decision = retry_policy.record_failure(failed_job, e)
                 logger.warning(
@@ -613,7 +619,7 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                     cycle,
                     cycle_start,
                     target_pub,
-                    "FAILED" if decision["terminal"] else "RETRY_SCHEDULED",
+                    decision["status"] if decision["terminal"] else "RETRY_SCHEDULED",
                     datetime.now(IST_TZ),
                     failed_job.error_details,
                 )
@@ -692,6 +698,20 @@ async def dispatch_eligible_recoveries(
     reconcile_report = startup_reconciler.reconcile_on_startup(test_now_ist=now_ist)
     profile = get_active_profile()
     dispatched: List[Dict] = []
+    rearmed: List[Dict] = []
+    with SessionLocal() as db_session:
+        now_utc_naive = now_ist.astimezone(timezone.utc).replace(tzinfo=None)
+        for failed in db_session.query(JobModel).filter(JobModel.status == retry_policy.STATUS_FAILED).all():
+            reason = retry_policy.rearm_if_recoverable(
+                failed, now_utc=now_utc_naive, process_started_utc=retry_policy.PROCESS_STARTED_UTC)
+            if reason:
+                rearmed.append({"job_id": failed.id, "reason": reason})
+                logger.warning("[SCHEDULER] Re-armed %s for automatic recovery: %s", failed.id, reason)
+                record_lifecycle_event("RETRY_POLICY_REARMED", retry_policy.STATUS_RETRY_SCHEDULED,
+                                       cycle_id=failed.id.rsplit("_", 2)[0], job_id=failed.id,
+                                       details={"reason": reason})
+        if rearmed:
+            db_session.commit()
     expired: List[Dict] = list(reconcile_report.get("expired_cycles", []))
     waiting: List[str] = []
 
@@ -710,13 +730,17 @@ async def dispatch_eligible_recoveries(
             (j.id, j.date_str, j.status, j.heartbeat_at, j.recovery_reason)
             for j in candidates
             if not (j.id or "").startswith(("test_", "mock_"))
-            # Backoff: a scheduled retry is not eligible until next_retry_at_utc.
-            and (j.status != retry_policy.STATUS_RETRY_SCHEDULED or retry_policy.is_retry_due(j))
+            # Backoff: a scheduled retry is not eligible until next_retry_at_utc. A pending retry
+            # whose recovery deadline has passed is still listed, so it is expired below.
+            and (j.status != retry_policy.STATUS_RETRY_SCHEDULED
+                 or retry_policy.is_retry_due(j, now_ist.astimezone(timezone.utc).replace(tzinfo=None))
+                 or (retry_policy.recovery_deadline_utc(j) is not None
+                     and retry_policy.recovery_deadline_utc(j) <= now_ist.astimezone(timezone.utc).replace(tzinfo=None)))
         ]
         handoff_ids = [
             j.id
             for j in db_session.query(JobModel).filter(JobModel.status == retry_policy.STATUS_HANDOFF_PENDING).all()
-            if retry_policy.is_retry_due(j)
+            if retry_policy.is_retry_due(j, now_ist.astimezone(timezone.utc).replace(tzinfo=None))
         ]
 
     # Queue handoffs first: cheap, no rendering, and not bound by recovery windows
@@ -826,6 +850,7 @@ async def dispatch_eligible_recoveries(
         "expired": expired,
         "waiting_for_internet": waiting,
         "queue_handoffs": handoffs,
+        "rearmed": rearmed,
     }
 
 

@@ -30,6 +30,14 @@ from backend.app.services import operator_retry_service as ors
 
 from test_schedule_and_auto_publish import _queue, pub, settings_db  # noqa: F401  (fixtures)
 
+
+@pytest.fixture(autouse=True)
+def _bounded_rollback_policy(monkeypatch):
+    """These tests specify the `bounded` rollback policy (fixed attempt count, terminal FAILED).
+    The default unlimited-until-deadline policy is covered by test_retry_policy_unlimited.py."""
+    monkeypatch.setenv("CRAZZYDOCS_RETRY_POLICY", "bounded")
+
+
 IST = ZoneInfo("Asia/Kolkata")
 JOB3 = "cycle_3_20261113_1200"
 JOB4 = "cycle_4_20261113_1800"
