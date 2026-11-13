@@ -154,11 +154,20 @@ def analyse(video: str, *, ffmpeg: str, ffprobe: str, plan: Optional[Dict[str, A
     meas["blank_frames"] = len(blank_idx); meas["frozen_runs"] = frozen
 
     # scene cuts and cadence
-    thr = max(6.0, float(np.percentile(diff[1:], 97)) * 0.8)
-    cuts = [round(float(ts[i]), 2) for i in range(1, n) if diff[i] > thr and (i < 2 or diff[i] >= diff[i - 1])]
+    # Revised 2026-11-14: compare frames 0.5 s apart and keep local maxima above the 90th percentile.
+    # The old rule (adjacent frames, 97th percentile) missed most 0.5 s slide/wipe transitions: on the
+    # Pop Info test renders it found 2-4 cuts where the plan had 7-10; this rule finds 7/7, 8/8, 9/10
+    # with at most one false cut, and is applied identically to every video, including baselines.
+    lag = 2
+    lagd = np.zeros(n)
+    for i in range(lag, n):
+        lagd[i] = float(np.abs(gray[i] - gray[i - lag]).mean())
+    thr = max(8.0, float(np.percentile(lagd[lag:], 90)) * 0.85) if n > lag + 2 else 8.0
+    cuts = [round(float(ts[i]), 2) for i in range(lag, n - 1)
+            if lagd[i] > thr and lagd[i] >= lagd[i - 1] and lagd[i] >= lagd[i + 1] and ts[i] >= 0.9 and ts[i] <= dur - 0.9]
     merged: List[float] = []
     for c in cuts:
-        if not merged or c - merged[-1] > 0.6:
+        if not merged or c - merged[-1] > 1.0:
             merged.append(c)
     bounds = [0.0] + merged + [dur]
     lengths = [b - a for a, b in zip(bounds, bounds[1:]) if b - a > 0.3]
@@ -217,9 +226,32 @@ def analyse(video: str, *, ffmpeg: str, ffprobe: str, plan: Optional[Dict[str, A
     open_n = min(n, 2 * SAMPLE_FPS)
     opening_motion = float(diff[1:open_n].mean()) if open_n > 2 else 0.0
     opening_contrast = float(std[edge:open_n].mean()) if open_n > edge else float(std[:open_n].mean())
-    dims["hook"] = {"score": score(45 * min(1, opening_motion / 4) + 35 * min(1, opening_contrast / 45) +
-                                   20 * (0 if any(i < open_n for i in blank_idx) else 1)),
-                    "basis": "measured", "evidence": f"first 2 s: motion {opening_motion:.2f}, contrast {opening_contrast:.1f}"}
+    # Hook (revised 2026-11-14: the old formula saturated at ~100 for any animated opening).
+    # Visual half: motion and contrast in the first 2 s on stricter scales, plus how soon the first
+    # real change of picture arrives. Narrative half (needs the plan): the hook evaluator on the
+    # opening narration. Without a plan the score is visual-only and says so.
+    first_change = next((c for c in merged if c >= 0.9), None)
+    v_cut = 1.0 if first_change is not None and first_change <= 3.5 else (
+        max(0.0, 1 - ((first_change or dur) - 3.5) / 4.0))
+    blank_open = any(i < open_n for i in blank_idx)
+    visual = 100 * (0.4 * min(1, opening_motion / 8) + 0.3 * min(1, opening_contrast / 60) + 0.3 * v_cut)
+    if blank_open:
+        visual *= 0.5
+    hook_ev = f"first 2 s: motion {opening_motion:.2f}, contrast {opening_contrast:.1f}; first picture change at {first_change} s"
+    hook_text = ""
+    if plan:
+        hook_text = " ".join(s.get("narration", "") for s in plan.get("scenes", []) if s.get("stage") == "HOOK")
+    if hook_text:
+        from backend.app.content.hook_evaluator import evaluate_hook
+        rest = " ".join(s.get("narration", "") for s in plan.get("scenes", []) if s.get("stage") != "HOOK")
+        hv = evaluate_hook(hook_text, topic_title=str(plan.get("topic", "")), rest_of_script=rest)
+        meas["hook_text_evaluation"] = {"score": hv["score"], "penalties": hv["penalties"]}
+        dims["hook"] = {"score": score(0.5 * visual + 5.0 * hv["score"]),
+                        "basis": "measured opening (50%) + hook text evaluation (50%)",
+                        "evidence": f"{hook_ev}; visual {visual:.0f}/100; hook text {hv['score']}/10"}
+    else:
+        dims["hook"] = {"score": score(visual), "basis": "measured opening only (no plan: hook text not judged)",
+                        "evidence": hook_ev}
 
     distinct = 1 - (len(dup_pairs) / max(1, len(hashes) * (len(hashes) - 1) / 2))
     story = 60 * distinct

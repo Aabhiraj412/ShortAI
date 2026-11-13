@@ -11,11 +11,12 @@ normalisation to -14 LUFS / -1.5 dBTP (YouTube's reference level).
 from __future__ import annotations
 
 import json
+import re
 import math
 import subprocess
 import wave
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Optional, Any, Dict, List
 
 import numpy as np
 
@@ -105,28 +106,45 @@ def _write_wav(path: Path, mono: np.ndarray) -> None:
 def mix_audio(*, ffmpeg: str, voice_path: str, plan: Dict[str, Any], work_dir: Path, out_path: Path) -> Dict[str, Any]:
     stems = render_stems(plan, work_dir)
     dur = float(plan["duration_sec"])
-    graph = (
+    base = (
         f"[0:a]aresample={SR},apad=whole_dur={dur:.3f},asplit=2[v][key];"
         f"[1:a]volume=1.0[m];[m][key]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=350[md];"
         f"[2:a]volume=1.0[s];"
-        f"[v][md][s]amix=inputs=3:normalize=0:duration=first,"
-        f"loudnorm=I=-14:TP=-1.5:LRA=11,atrim=0:{dur:.3f},afade=t=out:st={max(0.0, dur - 0.6):.3f}:d=0.6[out]"
+        f"[v][md][s]amix=inputs=3:normalize=0:duration=first,atrim=0:{dur:.3f}"
     )
-    cmd = [ffmpeg, "-y", "-i", voice_path, "-i", stems["paths"]["music"], "-i", stems["paths"]["sfx"],
-           "-filter_complex", graph, "-map", "[out]", "-ar", str(SR), "-ac", "2", "-c:a", "pcm_s16le", str(out_path)]
-    # two-pass loudness: pass 1 measures the mix, pass 2 applies the measured values (single pass undershoots)
-    measure = graph.replace("loudnorm=I=-14:TP=-1.5:LRA=11", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json")
-    fc = cmd.index("-filter_complex")
-    m = subprocess.run(cmd[:fc + 1] + [measure, "-map", "[out]", "-f", "null", "-"], capture_output=True, text=True, timeout=300)
-    stats = None
-    if m.returncode == 0 and "input_i" in m.stderr:
-        stats = json.loads(m.stderr[m.stderr.rfind("{"):m.stderr.rfind("}") + 1])
-    if stats:
-        cmd[fc + 1] = graph.replace(
-            "loudnorm=I=-14:TP=-1.5:LRA=11",
-            "loudnorm=I=-14:TP=-1.5:LRA=11:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:"
-            "measured_thresh={input_thresh}:offset={target_offset}:linear=true".format(**stats))
+    inputs = [ffmpeg, "-y", "-i", voice_path, "-i", stems["paths"]["music"], "-i", stems["paths"]["sfx"]]
+
+    def measure(chain: str) -> Dict[str, Optional[float]]:
+        r = subprocess.run(inputs + ["-filter_complex", base + chain + ",ebur128=peak=true[out]", "-map", "[out]",
+                                     "-f", "null", "-"], capture_output=True, text=True, timeout=300)
+        tail = r.stderr[r.stderr.rfind("Summary:"):] if "Summary:" in r.stderr else ""
+        i = re.search(r"I:\s+(-?[\d.]+) LUFS", tail)
+        tp = re.search(r"Peak:\s+(-?[\d.]+) dBFS", tail)
+        return {"i": float(i.group(1)) if i else None, "tp": float(tp.group(1)) if tp else None}
+
+    # Deterministic loudness (replaces loudnorm, whose linear mode silently fell back to dynamic and
+    # undershot to -15.7 LUFS): measure, apply the exact gain, then a look-ahead limiter below the
+    # true-peak ceiling. One corrective pass if limiting cost loudness. The MP4 is re-measured by the gate.
+    target, limit_db = -14.0, -2.0           # -2 dBFS sample ceiling leaves room for inter-sample + AAC peaks
+    limiter = f"alimiter=limit={10 ** (limit_db / 20):.4f}:attack=5:release=60:level=false"
+    first = measure("")
+    gain = (target - first["i"]) if first["i"] is not None else 0.0
+    passes = [{"gain_db": round(gain, 2), "pre_i": first["i"], "pre_peak": first["tp"]}]
+    after = measure(f",volume={gain:.2f}dB,{limiter}")
+    # the limiter takes back part of each gain step on peaky sound effects, so iterate to convergence
+    # (bounded: 4 corrective passes, never more than +6 dB over the first estimate)
+    first_gain = gain
+    for _ in range(4):
+        if after["i"] is None or abs(after["i"] - target) <= 0.25:
+            break
+        gain = min(first_gain + 6.0, gain + (target - after["i"]) * 1.15)
+        after = measure(f",volume={gain:.2f}dB,{limiter}")
+        passes.append({"gain_db": round(gain, 2), "post_i": after["i"], "post_peak": after["tp"]})
+    graph = base + f",volume={gain:.2f}dB,{limiter},afade=t=out:st={max(0.0, dur - 0.6):.3f}:d=0.6[out]"
+    cmd = inputs + ["-filter_complex", graph, "-map", "[out]", "-ar", str(SR), "-ac", "2", "-c:a", "pcm_s16le", str(out_path)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if proc.returncode != 0 or not out_path.is_file():
         raise RuntimeError(f"Pop Info audio mix failed: {proc.stderr[-600:]}")
-    return {**stems, "mix_path": str(out_path), "loudness_target": "-14 LUFS / -1.5 dBTP", "ducking": "sidechain 8:1 keyed by narration"}
+    return {**stems, "mix_path": str(out_path), "loudness_target": "-14 LUFS integrated, limiter at -2 dBFS",
+            "loudness_passes": passes, "measured_mix": after, "ducking": "sidechain 8:1 keyed by narration"}
+

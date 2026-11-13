@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from backend.app.rendering.pop_info.scene_planner import plan_scenes
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -77,13 +78,32 @@ def probe_layout(film_dir: Path, times: Sequence[float]) -> Dict[str, Any]:
 def render_pop_info(*, workspace_root: Path, prod_dir: Path, job_id: str, topic: str, category: str,
                     script_data: Dict[str, Any], section_timings: Sequence[Dict[str, Any]], voice_path: str,
                     duration_sec: float, output_path: Path, photos: Sequence[Dict[str, Any]] = (),
-                    run_quality_gate: bool = True, identity_check=None) -> Dict[str, Any]:
+                    run_quality_gate: bool = True, identity_check=None, select_photos: bool = False,
+                    key_entities: Sequence[str] = (), asset_cache_root: Optional[Path] = None) -> Dict[str, Any]:
     from backend.app.services import visual_quality_gate as vqg
 
     t0 = time.perf_counter()
+    scene_photos, photo_report = None, None
+    if select_photos:
+        # draft plan -> scene-level photo selection -> final plan with each photo on its own scene.
+        # Any failure keeps the all-vector film: photos are an enhancement, never a dependency.
+        from backend.app.core.paths import MEDIA_DIR
+        from backend.app.rendering.pop_info.scene_photos import select_scene_photos
+        try:
+            draft = plan_scenes(job_id=job_id, topic_title=topic, category=category,
+                                sections=script_data.get("sections") or [], timings=section_timings,
+                                total_duration=float(duration_sec))
+            scene_photos, photo_report = select_scene_photos(
+                plan=draft, topic_title=topic, key_entities=key_entities, job_id=job_id,
+                cache_root=Path(asset_cache_root or (Path(MEDIA_DIR) / "asset_cache")))
+        except Exception as exc:
+            photo_report = {"error": f"{type(exc).__name__}: {str(exc)[:300]}", "fallback": "all-vector film"}
+        Path(prod_dir).mkdir(parents=True, exist_ok=True)
+        (Path(prod_dir) / "photo_selection.json").write_text(json.dumps(photo_report, indent=2, default=str), encoding="utf-8")
+    t_photos = time.perf_counter()
     film = build_pop_info_film(prod_dir=prod_dir, job_id=job_id, topic=topic, category=category,
                                script_data=script_data, section_timings=section_timings,
-                               duration_sec=duration_sec, photos=photos)
+                               duration_sec=duration_sec, photos=photos, scene_photos=scene_photos)
     film_dir = Path(film["demo_dir"])
     if identity_check is not None:
         identity_check(film["fingerprints"])   # raises before any render time is spent on a repeated composition
@@ -100,7 +120,9 @@ def render_pop_info(*, workspace_root: Path, prod_dir: Path, job_id: str, topic:
         raise RuntimeError(f"Pop Info mux failed: {proc.stderr[-600:]}")
     result: Dict[str, Any] = {"engine": ENGINE_VERSION, "film": {k: v for k, v in film.items() if k != "plan"},
                               "audio": audio, "video_path": str(output_path),
-                              "timing_sec": {"build_and_render": round(t_render - t0, 1), "total": None}}
+                              "timing_sec": {"photo_selection": round(t_photos - t0, 1),
+                                             "build_and_render": round(t_render - t_photos, 1), "total": None},
+                              "photo_selection": photo_report}
     if run_quality_gate:
         scenes = film["plan"]["scenes"]
         times = sorted({round(s["start_sec"] + min(2.4, (s["end_sec"] - s["start_sec"]) * 0.7), 2) for s in scenes})

@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 ENGINE_VERSION = "pop_info_v1"
+ENGINE_REVISION = "3.27.1"   # hybrid photo treatments, reveal split, phrase scoring
 
 # Design space is 540 x 960 (rendered at 2x = 1080 x 1920). Shorts overlays cover the right
 # edge (action buttons) and the bottom (title, channel, music); text must stay inside SAFE.
@@ -28,6 +29,10 @@ SAFE = {"x0": 36, "x1": 468, "y0": 84, "y1": 780}
 
 TEMPLATES = ("title", "stat", "compare", "timeline", "process", "question", "spotlight", "callout", "photo", "reveal")
 TRANSITIONS = ("slide", "circle_reveal", "wipe", "pop_zoom", "split")
+# real photographs are composited in several ways, never the same one twice in a row
+PHOTO_TREATMENTS = ("full_bleed", "card", "circle", "split")
+PHOTO_MOTIONS = ("push_in", "pull_out", "pan_left", "pan_right", "rise")
+REVEAL_TARGET_SEC = 6.0
 BACKGROUNDS = ("cream", "sage", "sand", "sky", "blush")
 
 # icon -> trigger words (lower-case stems). Order matters only for ties.
@@ -155,6 +160,16 @@ def _content_words(text: str) -> List[str]:
 _WEAK_EDGE = _STOP | {"while", "because", "although", "though", "often", "typically", "ever", "really", "just",
                       "core", "kind", "sort", "part", "lot", "way", "thing", "things", "say", "says", "said",
                       "like", "something", "makes", "make", "made", "get", "gets", "got"}
+# the word after a window that still needs it: an object, a number or a complement follows
+_CONTINUES = {"a", "an", "the", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "hundred",
+              "thousand", "million", "billion", "others", "another", "them", "it", "its", "their", "his", "her", "to",
+              "of", "than", "that", "into", "for", "with", "missions", "outcomes"}
+# a phrase that ends on one of these reads as cut off ("Fundamental Physics reshaped")
+_WEAK_END = {"reshaped", "shows", "showed", "shown", "outlines", "highlights", "means", "meant", "became", "become",
+             "becomes", "remains", "remained", "seems", "seemed", "appears", "appeared", "began", "begins", "starts",
+             "started", "goes", "went", "comes", "came", "takes", "took", "gives", "gave", "puts", "keeps", "kept",
+             "let", "lets", "found", "finds", "used", "uses", "called", "known", "based", "still", "even", "actually",
+             "simply", "really", "quickly", "completely", "right", "up", "down", "out", "off", "back", "away"}
 
 
 def key_phrase(text: str, max_words: int = 5) -> Tuple[str, str]:
@@ -172,19 +187,47 @@ def key_phrase(text: str, max_words: int = 5) -> Tuple[str, str]:
                 if len(win) < n:
                     break
                 bare = [w.strip("\"'()").lower() for w in win]
-                if bare[0] in _WEAK_EDGE or bare[-1] in _WEAK_EDGE:
+                nxt = words[i + n].strip("\"'(),.").lower() if i + n < len(words) else ""
+                if (bare[0] in _WEAK_EDGE or bare[-1] in _WEAK_EDGE or bare[-1] in _WEAK_END or bare[-1] in _VAGUE_LABEL
+                        or bare[0] in _VAGUE_LABEL or (bare[-1].endswith("s") and bare[-1][:-1] in _VERB_STEMS)):
                     continue
+                if bare[-1].endswith("ly") and len(bare[-1]) > 4:
+                    continue   # "...grows rapidly" style dangling adverb
                 content = sum(1 for w in bare if w not in _STOP)
                 caps = sum(1 for k, w in enumerate(win) if w[:1].isupper() and (i + k) > 0)
                 digits = any(re.search(r"\d", w) for w in win)
-                score = content / n + 0.35 * digits + 0.2 * min(caps, 2) + 0.06 * n
+                # verbs ending in -ed/-ing inside the window are fine; at the end they rarely are
+                end_verbish = bare[-1].endswith(("ed", "ing")) and not win[-1][:1].isupper()
+                whole_clause = n == len(words)
+                cut_off = nxt in _CONTINUES
+                clause_end = not nxt   # ends where the clause ends: its object or noun is included
+                score = (content / n + 0.35 * digits + 0.2 * min(caps, 2) + 0.06 * n
+                         - (0.25 if end_verbish else 0) + (0.12 if whole_clause else 0) - (0.6 if cut_off else 0)
+                         + (0.3 if clause_end else 0))
                 if score > best_score:
                     best, best_score = " ".join(win), score
+    if not best and max_words < 8:
+        return key_phrase(text, max_words + 3)   # a longer window before giving up
     if not best:
-        words = [w for w in (text or "").split() if w.strip()]
-        best = " ".join(words[:max_words])
+        return "", ""   # no clean phrase: the caller picks another source, never a raw word run
     headline = best.strip(" .,!?;:\"'")
     return headline, pick_highlight(headline)
+
+
+def title_card(topic_title: str, script_text: str) -> str:
+    """Short subject name for the opening card: the title itself when short, else the title's most-spoken
+    two-word phrase ('space junk', 'climate anxiety'). Never a hook phrase about something else."""
+    title = re.sub(r"\s*\([^)]*\)", "", topic_title or "").strip()
+    words = title.split()
+    if len(words) <= 5:
+        return title
+    low = (script_text or "").lower()
+    toks = [w.strip(".,:;!?\"'") for w in words]
+    pairs = [f"{a} {b}" for a, b in zip(toks, toks[1:]) if a.lower() not in _STOP and b.lower() not in _STOP]
+    best = max(pairs, key=lambda q: (low.count(q.lower()), -pairs.index(q)), default="")
+    if best and low.count(best.lower()):
+        return best[:1].upper() + best[1:]
+    return " ".join(words[:4])
 
 
 def pick_highlight(headline: str) -> str:
@@ -200,11 +243,25 @@ def pick_highlight(headline: str) -> str:
     return max(content, key=len) if content else ""
 
 
+_VAGUE_LABEL = {"exact", "same", "different", "certain", "other", "others", "another", "many", "much", "more", "most",
+                "takes", "take", "make", "makes", "does", "need", "needs", "want", "wants", "real", "simple", "simply",
+                "whole", "entire", "new", "old", "good", "great", "big", "small", "first", "last", "next", "yet",
+                "expect", "growing", "this", "that", "they", "there", "fuel"}
+_VERB_STEMS = {"produce", "cause", "push", "spark", "fuel", "freeze", "digest", "reveal", "show", "pay", "give", "take",
+               "make", "turn", "lead", "trigger", "drive", "help", "keep", "hold", "move", "change", "outline", "highlight"}
+
+
 def node_labels(text: str, n: int = 3) -> List[str]:
     """Short labels for process nodes: distinct content words in spoken order, names first."""
+    # capitalised only because it starts a sentence ("Meanwhile", "Beyond") is not a name
+    starts = {m.group(1) for m in re.finditer(r"(?:^|[.!?]\s+)([A-Z][\w'\-]*)", text or "")}
     words = [w.strip(".,!?;:\"'") for w in _content_words(text)]
+    words = [w.lower() if w in starts else w for w in words]
+    bad = _WEAK_EDGE | _WEAK_END | _VAGUE_LABEL | {"meanwhile", "beyond", "however", "instead", "also", "still"}
+    words = [w for w in words if w.lower() not in bad and not w.lower().endswith(("ly", "ing", "ed"))
+             and not (w.lower().endswith("s") and w.lower()[:-1] in _VERB_STEMS)]
     seen, out = set(), []
-    for w in sorted(words, key=lambda w: (not w[:1].isupper(), words.index(w))):
+    for w in sorted(words, key=lambda w: (not w[:1].isupper(), -len(w), words.index(w))):
         if len(w) > 3 and w.lower() not in seen:
             seen.add(w.lower()); out.append(w)
     picked = sorted(out[:n], key=words.index)
@@ -230,7 +287,10 @@ def topic_icon(title: str, category: str) -> str:
 
 
 def _choose_template(stage: str, text: str, numbers: Sequence[NumberFact], is_first: bool, is_last: bool,
-                     previous: Optional[str], photo_available: bool, recent: Sequence[str] = ()) -> str:
+                     previous: Optional[str], photo_available: bool, recent: Sequence[str] = (),
+                     scene_photo: bool = False) -> str:
+    if scene_photo and not is_first and not is_last:
+        return "photo"
     if is_first:
         return "title"
     if is_last:
@@ -299,7 +359,8 @@ def _split_long(groups: List[List[str]], span: float, max_sec: float) -> List[Li
 
 def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Sequence[Dict[str, Any]],
                 timings: Sequence[Dict[str, Any]], total_duration: float,
-                photos: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+                photos: Sequence[Dict[str, Any]] = (),
+                scene_photos: Optional[Dict[int, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Builds the film plan. `timings` are the narration section timings (start_sec/end_sec)."""
     seed = _seed_int(job_id, topic_title)
     by_id = {t.get("id"): t for t in timings or []}
@@ -319,7 +380,10 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
             groups[idx].append(s)
             acc += len(s)
         groups = [g for g in groups if g]
-        groups = _split_long(groups, (end - start), MAX_SCENE_SEC)
+        if sec is not sections[-1]:
+            # the closing section is split at sentences only (below): cutting its last sentence at a
+            # clause leaves a fragment like "or freeze you entirely" as the payoff
+            groups = _split_long(groups, (end - start), MAX_SCENE_SEC)
         g_chars = [sum(len(s) for s in g) for g in groups]
         cursor = start
         for g, chars in zip(groups, g_chars):
@@ -332,9 +396,25 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
     if len(chunks) > 1 and _CTA.search(chunks[-1][1]) and len(_content_words(_CTA.sub("", chunks[-1][1]))) <= 3:
         st, tx, s0, _ = chunks[-2]
         chunks[-2:] = [(st, f"{tx} {chunks[-1][1]}", s0, chunks[-1][3])]
-    # the final scene holds through the outro tail
-    stage, text, s0, _ = chunks[-1]
-    chunks[-1] = (stage, text, s0, max(total_duration, chunks[-1][3]))
+    # the final scene holds through the outro tail, but a reveal longer than ~6 s loses the viewer:
+    # earlier sentences (or clauses) of the payoff become their own scene; no narration is dropped.
+    stage, text, s0, spoken_end = chunks[-1]
+    end = max(total_duration, spoken_end)
+    chunks[-1] = (stage, text, s0, end)
+    if end - s0 > REVEAL_TARGET_SEC * 1.15:
+        parts = split_sentences(text)   # never split inside a sentence: "...solutions, | or freeze you entirely"
+        if len(parts) >= 2:
+            speech = max(0.1, min(spoken_end, end) - s0)
+            total_chars = sum(len(x) for x in parts) or 1
+            # keep as many trailing parts in the reveal as fit the target, at least one
+            keep, acc = 1, len(parts[-1])
+            for k in range(len(parts) - 2, 0, -1):
+                if (acc + len(parts[k])) / total_chars * speech + (end - min(spoken_end, end)) > REVEAL_TARGET_SEC:
+                    break
+                acc += len(parts[k]); keep += 1
+            head, tail = " ".join(parts[:-keep]), " ".join(parts[-keep:])
+            cut = s0 + speech * len(head) / total_chars
+            chunks[-1:] = [(stage, head, s0, cut), (stage, tail, cut, end)]
 
     base_icon = topic_icon(topic_title, category)
     photos = [p for p in photos if p.get("path")]
@@ -351,8 +431,13 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
         is_first, is_last = i == 0, i == len(chunks) - 1
         numbers = extract_numbers(text)
         photo_left = [p for p in photos if p["path"] not in used_photos]
-        template = _choose_template(stage, text, numbers, is_first, is_last, prev_template, bool(photo_left),
-                                    [s.template for s in scenes])
+        assigned = (scene_photos or {}).get(i)
+        template = _choose_template(stage, text, numbers, is_first, is_last, prev_template,
+                                    bool(photo_left) and not scene_photos, [s.template for s in scenes],
+                                    scene_photo=bool(assigned and assigned.get("path")))
+        if template == "process" and len(node_labels(text)) < 3:
+            # three real labels or no process diagram: numbered placeholder nodes say nothing
+            template = "callout" if prev_template != "callout" else "spotlight"
         icons = sorted(match_icons(text), key=lambda ic: icon_uses.get(ic, 0) >= 2)
         main = next((ic for ic in icons if ic != prev_icon), None) or (base_icon if base_icon != prev_icon else
                                                                       next((ic for ic in ("lightbulb", "magnifier", "star") if ic != prev_icon)))
@@ -362,8 +447,9 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
         if len(supporting) < 2:
             supporting += [ic for ic in (base_icon, "lightbulb", "magnifier") if ic != main and ic not in supporting][:2 - len(supporting)]
         headline, highlight = key_phrase(text if not is_first else (text or topic_title))
-        if is_first and len(headline.split()) < 2:
-            headline, highlight = key_phrase(topic_title)
+        if is_first:
+            headline = title_card(topic_title, " ".join(c[1] for c in chunks))
+            highlight = pick_highlight(headline)
         spoken = " ".join(x for x in split_sentences(text) if not _CTA.search(x)) or ""
         if _CTA.search(text):
             headline, highlight = key_phrase(spoken) if spoken else ("", "")
@@ -373,15 +459,24 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
             headline, highlight = (alt, alt_hi) if len(_content_words(alt)) >= 2 else key_phrase(topic_title, 6)
         if headline.lower() in used_headlines and not (is_last and headline == key_phrase(topic_title, 6)[0]):
             # never repeat the same emphasis text: try each clause of this narration, then a plain window
-            options = [key_phrase(c) for c in re.split(r"[,;:]", spoken) if c.strip()] + [(" ".join(spoken.split()[:5]), "")]
+            options = [key_phrase(c) for c in re.split(r"[,;:]", spoken) if c.strip()] + [key_phrase(spoken, 8)]
             headline, highlight = next(((h, hl) for h, hl in options if h and h.lower() not in used_headlines
                                         and len(_content_words(h)) >= 2), (headline, highlight))
             highlight = highlight or pick_highlight(headline)
         used_headlines.add(headline.lower())
         photo = None
         if template == "photo":
-            photo = photo_left[0]
+            photo = dict(assigned) if assigned else dict(photo_left[0])
             used_photos.add(photo["path"])
+            # treatment: numbers -> split (photo above, counter below); a named person -> circle
+            # spotlight; otherwise rotate full-bleed and card. Never the same treatment or move twice.
+            prev_photo = next((s.photo for s in reversed(scenes) if s.photo), None) or {}
+            person = bool(re.search(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b", photo.get("title") or "")) and not numbers
+            wanted = ["split"] if numbers else (["circle"] if person else [])
+            wanted += [PHOTO_TREATMENTS[(seed // 3 + i + k) % len(PHOTO_TREATMENTS)] for k in range(len(PHOTO_TREATMENTS))]
+            photo["treatment"] = next(t for t in wanted if t != prev_photo.get("treatment"))
+            moves = [PHOTO_MOTIONS[(seed // 11 + i + k) % len(PHOTO_MOTIONS)] for k in range(len(PHOTO_MOTIONS))]
+            photo["motion"] = next(m for m in moves if m != prev_photo.get("motion"))
         if is_first:
             transition = "iris_open"
         else:
@@ -406,7 +501,7 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
         prev_template, prev_icon, prev_transition = template, main, transition
         icon_uses[main] = icon_uses.get(main, 0) + 1
     plan = {
-        "engine": ENGINE_VERSION, "job_id": job_id, "topic": topic_title, "category": category,
+        "engine": ENGINE_VERSION, "engine_revision": ENGINE_REVISION, "job_id": job_id, "topic": topic_title, "category": category,
         "duration_sec": round(max(total_duration, scenes[-1].end_sec), 3), "seed": seed,
         "design": {"width": DESIGN_W, "height": DESIGN_H, "safe": SAFE},
         "scenes": [asdict(s) for s in scenes],
@@ -424,7 +519,7 @@ _COMPOSITION = {
     "question": "large coral question disc, subject orbiting, headline as the question",
     "spotlight": "subject in a big disc with a turning dashed ring, two supporting objects orbiting",
     "callout": "typographic card: large headline on a tilted paper card, subject badge, underline swoosh",
-    "photo": "real photograph in a tilted card with tape, slow push inside, credit pill",
+    "photo": "real photograph composited by treatment (full-bleed, taped card, circle spotlight, split with counter), credit pill",
     "reveal": "rays behind a ringed teal disc with the subject, payoff headline card",
 }
 _ANIMATION = {
@@ -436,7 +531,7 @@ _ANIMATION = {
     "question": "question disc pops and sways, subject orbits slowly",
     "spotlight": "disc pops, ring turns, satellites drift in from the sides",
     "callout": "card swings in, words pop in order, swoosh draws under the key word, badge pops",
-    "photo": "card slides in with a slight rotation, image pushes in slowly",
+    "photo": "photo enters with its treatment's motion (push, pull, pan or rise around the focus point); overlay graphics pop on top",
     "reveal": "rays turn, disc pops, payoff card rises; iris closes at the end",
 }
 
@@ -472,7 +567,7 @@ def plan_fingerprints(plan: Dict[str, Any]) -> Dict[str, Any]:
     def h(obj: Any) -> str:
         return hashlib.sha256(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
 
-    seq = [s["template"] for s in scenes]
+    seq = [s["template"] if not s.get("photo") else f"photo:{s['photo'].get('treatment', 'card')}" for s in scenes]
     concepts = [f"{s['template']}:{s['main_subject']}" for s in scenes]
     return {
         "scene_sequence": seq,

@@ -1,4 +1,4 @@
-// CrazzyDocs Pop Info engine (pop_info_v1).
+// CrazzyDocs Pop Info engine (pop_info_v1, revision 3.27.1: hybrid photo treatments).
 // Flat-vector motion graphics drawn entirely in canvas, after docs/reference_styles/pop_info.html:
 // springy pop-ins, decaying wobble, iris wipe with a yellow ring, a teal idea bubble with a counting
 // number and a pill tag, a self-drawing dotted path with pins, slow camera push and drifting dust.
@@ -309,6 +309,22 @@ function fmtNum(v, target, unit) {
 }
 
 // ---------------------------------------------------------------- scene templates (local time u = t - start)
+// photo inside a rectangle: cover-fit, crop centred on the measured focus point, per-scene camera move
+function photoInto(c, img, x, y, w, h, u, d, ph) {
+  const f = ph.focus || { x: 0.5, y: 0.5 }, e = eInOut(prog(u, 0, Math.max(0.5, d)));
+  let z = 1.08, ox = 0, oy = 0;
+  switch (ph.motion) {
+    case 'push_in': z = lerp(1.02, 1.14, e); break;
+    case 'pull_out': z = lerp(1.16, 1.04, e); break;
+    case 'pan_left': z = 1.14; ox = lerp(0.05, -0.05, e); break;
+    case 'pan_right': z = 1.14; ox = lerp(-0.05, 0.05, e); break;
+    case 'rise': z = 1.12; oy = lerp(0.045, -0.045, e); break;
+  }
+  const iw = img.naturalWidth, ih = img.naturalHeight, s = Math.max(w / iw, h / ih) * z, dw = iw * s, dh = ih * s;
+  let dx = x + w / 2 - f.x * dw + ox * w, dy = y + h / 2 - f.y * dh + oy * h;
+  dx = Math.min(x, Math.max(x + w - dw, dx)); dy = Math.min(y, Math.max(y + h - dh, dy));
+  c.drawImage(img, dx, dy, dw, dh);
+}
 const T = {
   title(c, sc, u, d) {
     const r = rng(sc.scene_id);
@@ -433,21 +449,68 @@ const T = {
     disc(c, DW / 2 - 175, 300, 50, C.teal, bs); if (bs > 0) { c.save(); c.translate(DW / 2 - 175, 300); c.scale(bs, bs); icon(c, sc.main_subject, 0, 0, 62, u); c.restore(); }
   },
   photo(c, sc, u, d) {
-    const img = IMAGES[sc.scene_id];
-    const p = eOutBack(prog(u, 0.1, 0.7), 1.3), rot = lerp(-0.25, -0.045, clamp(p)), x = lerp(DW + 300, DW / 2, clamp(p));
-    c.save(); c.translate(x, 420); c.rotate(rot);
-    c.fillStyle = 'rgba(0,0,0,.14)'; rr(c, -200 + 8, -230 + 12, 400, 440, 10); c.fill();
-    c.fillStyle = C.paper; rr(c, -200, -230, 400, 440, 10); c.fill();
-    if (img && img.naturalWidth) {
-      c.save(); rr(c, -184, -214, 368, 360, 6); c.clip();
-      const z = 1.0 + 0.08 * eInOut(prog(u, 0, d)), iw = img.naturalWidth, ih = img.naturalHeight, sc0 = Math.max(368 / iw, 360 / ih) * z;
-      c.drawImage(img, -iw * sc0 / 2, -34 - ih * sc0 / 2, iw * sc0, ih * sc0); c.restore();
-    } else { c.fillStyle = C.sky; rr(c, -184, -214, 368, 360, 6); c.fill(); icon(c, sc.main_subject, 0, -34, 160, u); }
-    c.fillStyle = 'rgba(255,216,107,.85)'; c.save(); c.translate(-150, -232); c.rotate(-0.5); c.fillRect(-36, -12, 72, 24); c.restore(); c.save(); c.translate(150, -232); c.rotate(0.5); c.fillRect(-36, -12, 72, 24); c.restore();
-    const credit = sc.photo && sc.photo.credit ? sc.photo.credit : '';
-    if (credit) txt(c, credit.slice(0, 44), 0, 180, { size: 14, weight: 500, color: '#6B5E57', tag: 'credit' });
-    c.restore();
-    headline(c, sc.headline, sc.highlight, DW / 2, 710, SAFE.x1 - SAFE.x0, u, 0.6, 40);
+    // Real photographs composited into the Pop Info identity. Treatment and camera move come from
+    // the plan (never repeated back to back); the crop is centred on the measured focus point.
+    const img = IMAGES[sc.scene_id], ph = sc.photo || {}, kind = ph.treatment || 'card';
+    const n = (sc.numbers || []).find(x => !x.is_year);   // a year is never shown as a counter ("2,012")
+    if (!(img && img.naturalWidth)) { T.spotlight(c, sc, u, d); return; }   // asset failed to load: vector fallback
+    if (kind === 'full_bleed') {
+      photoInto(c, img, -12, -12, DW + 24, DH + 24, u, d, ph);
+      const g = c.createLinearGradient(0, 470, 0, DH); g.addColorStop(0, 'rgba(36,88,91,0)'); g.addColorStop(0.55, 'rgba(36,88,91,.72)'); g.addColorStop(1, 'rgba(36,88,91,.92)');
+      c.fillStyle = g; c.fillRect(-12, 470, DW + 24, DH - 458);
+      c.fillStyle = 'rgba(36,88,91,.35)'; c.fillRect(-12, -12, DW + 24, 120);
+      const cr = eOutBack(prog(u, 0.35, 0.6), 1.3);
+      if (cr > 0) { c.save(); c.translate(0, (1 - cr) * 90); c.globalAlpha = clamp(cr);
+        c.fillStyle = 'rgba(0,0,0,.18)'; rr(c, SAFE.x0 + 6, 612, SAFE.x1 - SAFE.x0, 150, 24); c.fill();
+        c.fillStyle = C.paper; rr(c, SAFE.x0, 604, SAFE.x1 - SAFE.x0, 150, 24); c.fill();
+        c.fillStyle = C.yellow; rr(c, SAFE.x0, 604, 14, 150, [24, 0, 0, 24]); c.fill();
+        headline(c, sc.headline, sc.highlight, DW / 2 + 6, 679, SAFE.x1 - SAFE.x0 - 56, u, 0.5, 40); c.restore(); }
+      const bs = popS(u, 0.75, 0.4, 2.4); disc(c, SAFE.x0 + 44, SAFE.y0 + 52, 40, C.coral, bs);
+      if (bs > 0) { c.save(); c.translate(SAFE.x0 + 44, SAFE.y0 + 52); c.scale(bs, bs); icon(c, sc.main_subject, 0, 0, 52, u); c.restore(); }
+    } else if (kind === 'circle') {
+      const s = popS(u, 0.1, 0.6, 1.6), R = 172, cx = DW / 2, cy = 360;
+      for (let k = 0; k < 10; k++) { c.save(); c.translate(cx, cy); c.rotate(u * 0.18 + k * Math.PI / 5); c.fillStyle = k % 2 ? 'rgba(255,216,107,.28)' : 'rgba(255,255,255,.2)';
+        c.beginPath(); c.moveTo(0, 0); c.lineTo(-30, -380); c.lineTo(30, -380); c.closePath(); c.fill(); c.restore(); }
+      if (s > 0) { c.save(); c.translate(cx, cy); c.scale(s, s);
+        c.fillStyle = 'rgba(0,0,0,.14)'; c.beginPath(); c.arc(6, 10, R + 10, 0, 6.29); c.fill();
+        c.fillStyle = C.paper; c.beginPath(); c.arc(0, 0, R + 10, 0, 6.29); c.fill();
+        c.save(); c.beginPath(); c.arc(0, 0, R, 0, 6.29); c.clip(); photoInto(c, img, -R, -R, 2 * R, 2 * R, u, d, ph); c.restore();
+        const ring = eInOut(prog(u, 0.5, 0.8)); c.strokeStyle = C.yellow; c.lineWidth = 9; c.lineCap = 'round';
+        c.beginPath(); c.arc(0, 0, R + 22, -Math.PI / 2, -Math.PI / 2 + ring * 6.283); c.stroke();
+        c.setLineDash([6, 12]); c.strokeStyle = 'rgba(47,111,115,.55)'; c.lineWidth = 4; c.rotate(u * 0.3); c.beginPath(); c.arc(0, 0, R + 40, 0, 6.29); c.stroke(); c.setLineDash([]);
+        c.restore(); }
+      for (let k = 0; k < 4; k++) sparkle(c, cx + Math.cos(k * 1.6 + 0.4) * 230, cy + Math.sin(k * 1.6 + 0.4) * 215, popS(u, 0.8 + k * 0.08, 0.4), u * 2 + k);
+      headline(c, sc.headline, sc.highlight, DW / 2, 650, SAFE.x1 - SAFE.x0, u, 0.55, 42);
+    } else if (kind === 'split') {
+      const p = eOutCubic(prog(u, 0.05, 0.6)), top = SAFE.y0 + 10, h = 330;
+      c.save(); c.translate(0, (1 - p) * -60); c.globalAlpha = clamp(p * 1.4);
+      c.fillStyle = 'rgba(0,0,0,.14)'; rr(c, SAFE.x0 + 6, top + 10, SAFE.x1 - SAFE.x0, h, 26); c.fill();
+      c.save(); rr(c, SAFE.x0, top, SAFE.x1 - SAFE.x0, h, 26); c.clip(); photoInto(c, img, SAFE.x0, top, SAFE.x1 - SAFE.x0, h, u, d, ph); c.restore();
+      c.strokeStyle = C.paper; c.lineWidth = 8; rr(c, SAFE.x0, top, SAFE.x1 - SAFE.x0, h, 26); c.stroke(); c.restore();
+      const s = popS(u, 0.45, 0.5, 1.8);
+      if (s > 0) { c.save(); c.translate(DW / 2, top + h + 120); c.scale(s, s);
+        c.fillStyle = 'rgba(0,0,0,.1)'; c.beginPath(); c.ellipse(5, 10, 200, 92, 0, 0, 6.29); c.fill();
+        c.fillStyle = C.teal; c.beginPath(); c.ellipse(0, 0, 200, 92, 0, 0, 6.29); c.fill();
+        if (n) { const cp = eOutCubic(prog(u, 0.7, Math.min(1.6, d * 0.45)));
+          const fs = fitFont(c, fmtNum(n.value, n.text, n.unit), 330, 74, 400, FONT.num, 28);
+          txt(c, fmtNum(n.value * cp, n.text, n.unit), 0, 6, { size: fs, weight: 400, fam: FONT.num, color: C.yellow, tag: 'number' });
+        } else { icon(c, sc.main_subject, 0, 0, 96, u); }
+        c.restore(); }
+      headline(c, sc.headline, sc.highlight, DW / 2, top + h + 255, SAFE.x1 - SAFE.x0, u, 0.75, 36);
+    } else {
+      const p = eOutBack(prog(u, 0.1, 0.7), 1.3), rot = lerp(-0.25, -0.045, clamp(p)), x = lerp(DW + 300, DW / 2, clamp(p));
+      c.save(); c.translate(x, 400); c.rotate(rot);
+      c.fillStyle = 'rgba(0,0,0,.14)'; rr(c, -200 + 8, -230 + 12, 400, 440, 10); c.fill();
+      c.fillStyle = C.paper; rr(c, -200, -230, 400, 440, 10); c.fill();
+      c.save(); rr(c, -184, -214, 368, 360, 6); c.clip(); photoInto(c, img, -184, -214, 368, 360, u, d, ph); c.restore();
+      c.fillStyle = 'rgba(255,216,107,.85)'; c.save(); c.translate(-150, -232); c.rotate(-0.5); c.fillRect(-36, -12, 72, 24); c.restore(); c.save(); c.translate(150, -232); c.rotate(0.5); c.fillRect(-36, -12, 72, 24); c.restore();
+      c.restore();
+      headline(c, sc.headline, sc.highlight, DW / 2, 700, SAFE.x1 - SAFE.x0, u, 0.6, 40);
+    }
+    const credit = ph.credit ? String(ph.credit).slice(0, 52) : '';
+    if (credit) { c.save(); c.globalAlpha = clamp(prog(u, 0.6, 0.4)) * 0.92; c.fillStyle = 'rgba(36,42,40,.55)';
+      c.font = `500 13px ${FONT.head}`; const w = c.measureText(credit).width + 16; rr(c, SAFE.x0, SAFE.y1 - 22, w, 20, 10); c.fill();
+      txt(c, credit, SAFE.x0 + 8, SAFE.y1 - 12, { size: 13, weight: 500, color: '#FFFFFF', align: 'left', tag: 'credit' }); c.restore(); }
   },
   reveal(c, sc, u, d) {
     c.save(); c.translate(DW / 2, 400); c.rotate(u * 0.25); for (let k = 0; k < 12; k++) { c.rotate(Math.PI / 6); c.fillStyle = k % 2 ? 'rgba(255,216,107,.35)' : 'rgba(255,255,255,.25)'; c.beginPath(); c.moveTo(0, 0); c.lineTo(-40, -520); c.lineTo(40, -520); c.closePath(); c.fill(); } c.restore();
