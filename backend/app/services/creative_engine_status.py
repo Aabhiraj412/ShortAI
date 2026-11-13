@@ -60,6 +60,31 @@ def report_detail(report_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _model_chain(model: str) -> list:
+    try:
+        from backend.app.content.grounded_script_writer import model_chain
+        return model_chain(model)
+    except Exception:
+        return [model]
+
+
+def _provider_health() -> Dict[str, Any]:
+    """Last recorded photo-provider health (written by scene photo selection); counts and error kinds only."""
+    try:
+        from backend.app.core.paths import MEDIA_DIR
+        data = json.loads((Path(MEDIA_DIR) / "asset_cache" / "provider_health.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {"recorded": False}
+    out = {}
+    for name, st in (data.get("providers") or {}).items():
+        lat = st.get("latency_ms") or []
+        err = st.get("last_error") or {}
+        out[name] = {"ok": st.get("ok", 0), "failed": st.get("failed", 0),
+                     "median_latency_ms": sorted(lat)[len(lat) // 2] if lat else None,
+                     "last_error": {"kind": err.get("kind"), "status": err.get("status")} if err else None}
+    return {"recorded": True, "updated_epoch": data.get("updated"), "providers": out}
+
+
 def status() -> Dict[str, Any]:
     from backend.app.rendering.pop_info.pipeline import active_visual_engine
     from backend.app.rendering.pop_info.scene_planner import ENGINE_VERSION
@@ -80,9 +105,12 @@ def status() -> Dict[str, Any]:
                          "production_uses": "Pop Info engine" if engine != "legacy" else "legacy film builder (rollback default)"},
         "active_visual_style": "pop_info",
         "script_generation": {"writer": "grounded_script_writer", "gemini_key_configured": key_present, "model": model,
+                              "fallback_models": _model_chain(model)[1:],
                               "source_when_unconfigured": "extractive_fallback (labelled)",
                               "live_validation": "BLOCKED: GEMINI_API_KEY not configured" if not key_present else "configured; see milestone report"},
-        "asset_generation": {"illustrations": "procedural vector (drawn in code)", "photos": "licensed open-media acquisition (verified, relevance >= 0.5)",
+        "photo_providers": _provider_health(),
+        "asset_generation": {"illustrations": "procedural vector (drawn in code)",
+                             "photos": "scene-level selection: licence-approved only, caption relevance, integrity-checked, cached",
                              "sound": "synthesized in code", "fonts": "Fredoka + Lilita One (SIL OFL)", "ai_images": "not used"},
         "estimated_cost": {"per_video_usd": 0.0 if not key_present else None,
                            "note": "no paid API is called without a Gemini key" if not key_present else "Gemini usage is billed by Google; measure in the AI Studio console"},

@@ -405,6 +405,7 @@
         <div class="meta-item"><strong>Script source</strong><span id="ceScript">--</span></div>
         <div class="meta-item"><strong>Gemini API</strong><span id="ceApi">--</span></div>
         <div class="meta-item"><strong>Assets</strong><span id="ceAssets">--</span></div>
+        <div class="meta-item"><strong>Photo providers</strong><span id="ceProviders">--</span></div>
         <div class="meta-item"><strong>Last quality score</strong><span id="ceScore">--</span></div>
         <div class="meta-item"><strong>Estimated cost / video</strong><span id="ceCost">--</span></div>
       </div>
@@ -1605,7 +1606,13 @@ async function refreshCreativeEngine() {
   ceText("ceStyle", s.active_visual_style.replace("_", " "));
   const sg = s.script_generation;
   ceText("ceScript", (s.last_quality && s.last_quality.script_source) || sg.source_when_unconfigured);
-  ceText("ceApi", sg.gemini_key_configured ? `configured (${sg.model})` : "not configured: live validation BLOCKED");
+  ceText("ceApi", sg.gemini_key_configured
+    ? `configured (${sg.model}${(sg.fallback_models || []).length ? `, fallback ${sg.fallback_models.join(", ")}` : ""})`
+    : "not configured: live validation BLOCKED");
+  const ph = s.photo_providers || {};
+  ceText("ceProviders", ph.recorded
+    ? Object.entries(ph.providers || {}).map(([n, v]) => `${n}: ${v.ok} ok / ${v.failed} failed${v.last_error ? ` (last ${v.last_error.kind}${v.last_error.status ? " " + v.last_error.status : ""})` : ""}`).join("; ")
+    : "no photo search recorded yet");
   ceText("ceAssets", `${s.asset_generation.illustrations}; ${s.asset_generation.photos}`);
   const lq = s.last_quality;
   ceText("ceScore", lq && lq.overall != null ? `${lq.overall} / 100 (${lq.name})` : "no report yet");

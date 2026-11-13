@@ -61,3 +61,21 @@ def test_report_endpoint_rejects_bad_ids():
     from backend.app import main
     src = inspect.getsource(main.api_creative_engine_report)
     assert "fullmatch" in src and "require_local_control" in inspect.getsource(main.api_creative_engine_status)
+
+
+def test_status_reports_model_chain_and_provider_health_without_secrets(tmp_path, monkeypatch):
+    import json as _json
+    from backend.app.services import creative_engine_status as ces
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test-secret-value-123")
+    monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "gemini-backup")
+    monkeypatch.setattr(ces, "MEDIA_DIR", tmp_path, raising=False)
+    (tmp_path / "asset_cache").mkdir()
+    (tmp_path / "asset_cache" / "provider_health.json").write_text(_json.dumps({"updated": 1, "providers": {
+        "Openverse": {"ok": 2, "failed": 3, "latency_ms": [9000, 16000], "consecutive_failures": 1,
+                      "last_error": {"kind": "http", "status": 504, "detail": "x"}}}}), encoding="utf-8")
+    monkeypatch.setattr("backend.app.core.paths.MEDIA_DIR", tmp_path)
+    s = ces.status()
+    assert s["script_generation"]["gemini_key_configured"] is True
+    assert "gemini-backup" in s["script_generation"]["fallback_models"]
+    assert s["photo_providers"]["providers"]["Openverse"]["last_error"] == {"kind": "http", "status": 504}
+    assert "AIza-test-secret-value-123" not in _json.dumps(s, default=str)
