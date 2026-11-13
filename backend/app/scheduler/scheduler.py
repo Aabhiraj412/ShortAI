@@ -36,6 +36,7 @@ from backend.app.scheduler.schedule_profiles import (
     list_profiles,
 )
 from backend.app.services.email_monitoring_service import email_monitoring_service
+from backend.app.scheduler import worker_registry
 from backend.app.services.network_connectivity_service import network_connectivity_service
 from backend.app.scheduler.reconciliation_service import (
     SchedulerProcessLock,
@@ -195,18 +196,29 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                     "next_retry_at_utc": due.isoformat() + "Z" if due else None,
                 }
             elif existing.status == "RUNNING":
+                claimed_by = worker_registry.claimed_worker_id(existing)
+                if worker_registry.worker_alive(job_id, claimed_by):
+                    # Never start a second worker while the original may still be executing,
+                    # however old the heartbeat looks.
+                    logger.info("[SCHEDULER] Job %s is held by live worker %s. Skipping duplicate trigger.", job_id, claimed_by)
+                    return {
+                        "status": "SKIPPED",
+                        "job_id": job_id,
+                        "reason": "CONCURRENT_ACTIVE_RUN",
+                        "cycle_id": cycle_id,
+                    }
                 if (
                     existing.heartbeat_at is None
                     and existing.recovery_reason == "STARTUP_RECONCILIATION"
                 ):
                     logger.info("[SCHEDULER] Dispatching reconciled job %s within active recovery window.", job_id)
                 else:
-                    # Check for stale heartbeat (> 30 mins)
-                    stale_threshold = datetime.utcnow() - timedelta(minutes=30)
-                    if existing.heartbeat_at and existing.heartbeat_at < stale_threshold:
+                    # Stalled only when the claimed worker is gone AND the heartbeat is stale.
+                    if worker_registry.is_stalled(existing):
                         logger.warning(
-                            "[SCHEDULER] Job %s has stale heartbeat (%s). Attempting restart recovery.",
+                            "[SCHEDULER] Job %s has no live worker (claimed by %s) and a stale heartbeat (%s). Attempting restart recovery.",
                             job_id,
+                            claimed_by,
                             existing.heartbeat_at,
                         )
                         decision = retry_policy.record_failure(
@@ -466,6 +478,15 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
     def _execute_claimed_worker():
         import json as _json
         worker_id = f"worker-{os.getpid()}-t{threading.get_ident()}"
+        if not worker_registry.registry.register(job_id, worker_id):
+            logger.warning("[SCHEDULER] Job %s already has a live worker in this process; not starting another.", job_id)
+            return {"status": "SKIPPED", "job_id": job_id, "reason": "CONCURRENT_ACTIVE_RUN"}
+        try:
+            return _run_registered_worker(worker_id, _json)
+        finally:
+            worker_registry.registry.unregister(job_id, worker_id)
+
+    def _run_registered_worker(worker_id, _json):
         claim_ist = datetime.now(IST_TZ)
         with SessionLocal() as db_session:
             j = db_session.query(JobModel).filter(JobModel.id == job_id).first()
@@ -496,7 +517,12 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
             job_id=job_id,
             details={"worker_id": worker_id},
         )
-        return master_orchestrator.execute_production_pipeline(job_id=job_id)
+        # Keeps heartbeat_at fresh during long stages (render, TTS, downloads).
+        pump = worker_registry.HeartbeatPump(job_id, worker_id, SessionLocal).start()
+        try:
+            return master_orchestrator.execute_production_pipeline(job_id=job_id)
+        finally:
+            pump.stop()
 
     try:
         suppression_token = suppress_orchestrator_completion_email.set(True)
@@ -703,7 +729,11 @@ async def dispatch_eligible_recoveries(
 
     for job_id, date_str, status, heartbeat_at, recovery_reason in candidate_ids:
         if status == "RUNNING":
-            stale_hb = heartbeat_at is not None and (datetime.utcnow() - heartbeat_at) > timedelta(minutes=5)
+            # A long stage without a checkpoint is not a stall: the worker heartbeat pump keeps
+            # heartbeat_at fresh, and a live worker is never treated as stalled (worker_registry).
+            with SessionLocal() as db_session:
+                running_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                stale_hb = bool(running_job and heartbeat_at is not None and worker_registry.is_stalled(running_job))
             reconciled_unclaimed = heartbeat_at is None and recovery_reason == "STARTUP_RECONCILIATION"
             if stale_hb:
                 record_lifecycle_event(

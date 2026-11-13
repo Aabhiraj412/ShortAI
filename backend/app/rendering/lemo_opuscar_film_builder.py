@@ -170,8 +170,243 @@ class LemoOpuscarFilmBuilder:
         return manifest
 
 
+# Page script, kept outside the f-string template so its braces need no escaping.
+FILM_SCRIPT = r'''
+window.DUR = Number(FILM.duration || 45);
+window.READY = false;
+
+const params = new URLSearchParams(window.location.search);
+const IS_THUMB = params.get("thumbnail") === "1";
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i;
+const ASSET_TIMEOUT_MS = 30000;   // per asset; assets load in parallel, well inside the renderer's 180 s READY limit
+const SEEK_TIMEOUT_MS = 5000;
+
+const mediaLayer = document.getElementById("mediaLayer");
+const progressFill = document.getElementById("progressFill");
+const sectionPill = document.getElementById("sectionPill");
+const heroWrap = document.getElementById("heroWrap");
+const heroKicker = document.getElementById("heroKicker");
+const heroTitle = document.getElementById("heroTitle");
+const captionWrap = document.getElementById("captionWrap");
+const captionBox = document.getElementById("captionBox");
+const beatCounter = document.getElementById("beatCounter");
+const thumbOverlay = document.getElementById("thumbOverlay");
+const thumbBadge = document.getElementById("thumbBadge");
+const thumbHeadline = document.getElementById("thumbHeadline");
+
+function proceduralCard(idx, beat) {
+  const proc = document.createElement("div");
+  proc.className = "procedural-bg";
+  const card = document.createElement("div");
+  card.className = "procedural-card";
+  const kicker = document.createElement("div");
+  kicker.className = "procedural-kicker";
+  kicker.textContent = `${FILM.category || "DOCUMENTARY"} · BEAT ${idx + 1}`;
+  const cue = document.createElement("div");
+  cue.className = "procedural-cue";
+  cue.textContent = (beat && beat.visual_cue) || FILM.title;
+  card.appendChild(kicker);
+  card.appendChild(cue);
+  proc.appendChild(card);
+  return proc;
+}
+
+const beatNodes = FILM.beats.map((beat, idx) => {
+  const container = document.createElement("div");
+  container.style.position = "absolute";
+  container.style.inset = "0";
+  container.style.opacity = "0";
+  container._media = null;
+  container._kind = null;
+
+  if (beat.asset && VIDEO_EXT.test(beat.asset)) {
+    // Animated beats are video files: an <img> cannot display them (blank frame).
+    const video = document.createElement("video");
+    video.className = "beat-img";
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.src = beat.asset;
+    container.appendChild(video);
+    container._media = video;
+    container._kind = "video";
+  } else if (beat.asset) {
+    const img = document.createElement("img");
+    img.className = "beat-img";
+    img.src = beat.asset;
+    img.alt = beat.visual_cue || FILM.title;
+    container.appendChild(img);
+    container._media = img;
+    container._kind = "img";
+  } else {
+    container.appendChild(proceduralCard(idx, beat));
+  }
+
+  mediaLayer.appendChild(container);
+  return container;
+});
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, v));
+}
+
+function applyMotion(el, motion, p) {
+  if (!el) return;
+  let scale = 1.04;
+  let tx = 0;
+  let ty = 0;
+  if (motion === "zoom_in") {
+    scale = 1.02 + 0.11 * p;
+    ty = -14 * p;
+  } else if (motion === "zoom_out") {
+    scale = 1.13 - 0.10 * p;
+    ty = 12 * (1 - p);
+  } else if (motion === "pan_right") {
+    scale = 1.09;
+    tx = -28 + 56 * p;
+  } else {
+    scale = 1.09;
+    tx = 28 - 56 * p;
+  }
+  el.style.transform = `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0) scale(${scale.toFixed(4)})`;
+}
+
+function waitForAsset(node) {
+  const el = node._media;
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (ok, reason) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ node, src: el.getAttribute("src"), kind: node._kind, ok, reason });
+    };
+    const timer = setTimeout(() => finish(false, "timeout"), ASSET_TIMEOUT_MS);
+    if (node._kind === "img") {
+      if (el.complete) return finish(el.naturalWidth > 0, el.naturalWidth > 0 ? "cached" : "decode-error");
+      el.addEventListener("load", () => finish(el.naturalWidth > 0, "load"), { once: true });
+      el.addEventListener("error", () => finish(false, "error"), { once: true });
+    } else {
+      if (el.readyState >= 2) return finish(true, "cached");
+      el.addEventListener("loadeddata", () => finish(true, "loadeddata"), { once: true });
+      el.addEventListener("error", () => finish(false, `media-error-${el.error ? el.error.code : "?"}`), { once: true });
+    }
+  });
+}
+
+function seekVideo(video, target) {
+  return new Promise(resolve => {
+    const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    // Loop short clips over a long beat; stay a frame before the end so a frame exists.
+    const t = dur > 0 ? Math.min(target % dur, Math.max(0, dur - 0.04)) : 0;
+    if (Math.abs(video.currentTime - t) < 1 / 240 && video.readyState >= 2) return resolve();
+    let done = false;
+    const finish = () => { if (!done) { done = true; clearTimeout(timer); requestAnimationFrame(() => resolve()); } };
+    const timer = setTimeout(finish, SEEK_TIMEOUT_MS);
+    video.addEventListener("seeked", finish, { once: true });
+    video.currentTime = t;
+  });
+}
+
+// Returns a promise: the renderer awaits page.evaluate(() => window.render(t)) before each
+// screenshot, so a video beat is captured only after it has seeked to the right frame.
+window.render = function(t) {
+  const dur = Math.max(1, window.DUR);
+  const clampedT = Math.max(0, Math.min(dur, Number(t || 0)));
+  progressFill.style.width = `${(clamp01(clampedT / dur) * 100).toFixed(2)}%`;
+
+  let activeIdx = 0;
+  for (let i = 0; i < FILM.beats.length; i++) {
+    const b = FILM.beats[i];
+    if (clampedT >= b.start && clampedT <= b.end) {
+      activeIdx = i;
+      break;
+    }
+    if (clampedT > b.end) activeIdx = i;
+  }
+
+  const activeBeat = FILM.beats[activeIdx] || FILM.beats[0];
+  const span = Math.max(0.5, (activeBeat.end - activeBeat.start));
+  const localP = clamp01((clampedT - activeBeat.start) / span);
+  let pending = Promise.resolve();
+
+  for (let i = 0; i < beatNodes.length; i++) {
+    const node = beatNodes[i];
+    if (i === activeIdx) {
+      const fadeIn = clamp01((clampedT - activeBeat.start) / 0.25);
+      node.style.opacity = fadeIn.toFixed(3);
+      applyMotion(node._media, FILM.beats[i].motion, localP);
+      if (node._kind === "video") pending = seekVideo(node._media, Math.max(0, clampedT - activeBeat.start));
+    } else {
+      node.style.opacity = "0";
+    }
+  }
+
+  sectionPill.textContent = (activeBeat.section || FILM.category || "DOCUMENTARY").slice(0, 22);
+  beatCounter.textContent = `BEAT ${String(activeBeat.beat_number || activeIdx + 1).padStart(2, "0")} / ${String(FILM.beats.length).padStart(2, "0")}`;
+
+  if (IS_THUMB) {
+    heroWrap.style.display = "none";
+    captionWrap.style.display = "none";
+    thumbOverlay.style.display = "flex";
+    thumbBadge.textContent = (FILM.category || "CRAZZYDOCS").toUpperCase();
+    thumbHeadline.textContent = FILM.thumb_headline || FILM.title;
+    return pending;
+  }
+
+  thumbOverlay.style.display = "none";
+  if (clampedT < 3.4) {
+    const titleAlpha = clampedT < 2.8 ? 1 : clamp01((3.4 - clampedT) / 0.6);
+    heroWrap.style.display = "block";
+    heroWrap.style.opacity = titleAlpha.toFixed(3);
+    heroKicker.textContent = (FILM.category || "DOCUMENTARY").toUpperCase();
+    heroTitle.textContent = FILM.title;
+  } else {
+    heroWrap.style.display = "none";
+  }
+
+  const cap = (activeBeat.caption || "").trim();
+  if (cap) {
+    captionWrap.style.display = "block";
+    captionBox.textContent = cap;
+  } else {
+    captionWrap.style.display = "none";
+  }
+  return pending;
+};
+
+// Readiness contract: Lemo-Opuscar waits for window.READY === true before the first frame.
+// Wait (bounded) for every asset, replace failed ones with a procedural card so no frame is
+// blank, wait for fonts, draw frame 0, then signal READY exactly once.
+(async () => {
+  const results = await Promise.all(beatNodes.filter(n => n._media).map(waitForAsset));
+  const failed = results.filter(r => !r.ok);
+  for (const r of failed) {
+    const idx = beatNodes.indexOf(r.node);
+    r.node.removeChild(r.node._media);
+    r.node.appendChild(proceduralCard(idx, FILM.beats[idx]));
+    r.node._media = null;
+    r.node._kind = null;
+  }
+  try { await document.fonts.ready; } catch (e) { /* system fonts only */ }
+  window.ASSET_STATUS = {
+    total: results.length,
+    loaded: results.length - failed.length,
+    images: results.filter(r => r.kind === "img" && r.ok).length,
+    videos: results.filter(r => r.kind === "video" && r.ok).length,
+    failed: failed.map(r => `${r.src} (${r.reason})`),
+  };
+  if (failed.length) console.warn(`[film] ${failed.length} asset(s) replaced by procedural cards: ${window.ASSET_STATUS.failed.join(", ")}`);
+  await window.render(0);
+  window.READY = true;
+})();
+'''
+
+
 def _render_film_html(payload: Dict[str, Any]) -> str:
-    data_json = json.dumps(payload, ensure_ascii=False)
+    # Escape '</' so a caption containing '</script>' cannot end the script element.
+    data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    film_script = FILM_SCRIPT
     safe_title = html.escape(str(payload.get("title") or "CrazzyDocs"))
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -432,146 +667,7 @@ def _render_film_html(payload: Dict[str, Any]) -> str:
 
 <script>
 const FILM = {data_json};
-window.DUR = Number(FILM.duration || 45);
-
-const params = new URLSearchParams(window.location.search);
-const IS_THUMB = params.get("thumbnail") === "1";
-
-const mediaLayer = document.getElementById("mediaLayer");
-const progressFill = document.getElementById("progressFill");
-const sectionPill = document.getElementById("sectionPill");
-const heroWrap = document.getElementById("heroWrap");
-const heroKicker = document.getElementById("heroKicker");
-const heroTitle = document.getElementById("heroTitle");
-const captionWrap = document.getElementById("captionWrap");
-const captionBox = document.getElementById("captionBox");
-const beatCounter = document.getElementById("beatCounter");
-const thumbOverlay = document.getElementById("thumbOverlay");
-const thumbBadge = document.getElementById("thumbBadge");
-const thumbHeadline = document.getElementById("thumbHeadline");
-
-const beatNodes = FILM.beats.map((beat, idx) => {{
-  const container = document.createElement("div");
-  container.style.position = "absolute";
-  container.style.inset = "0";
-  container.style.opacity = "0";
-
-  if (beat.asset) {{
-    const img = document.createElement("img");
-    img.className = "beat-img";
-    img.src = beat.asset;
-    img.alt = beat.visual_cue || FILM.title;
-    container.appendChild(img);
-    container._img = img;
-  }} else {{
-    const proc = document.createElement("div");
-    proc.className = "procedural-bg";
-    const card = document.createElement("div");
-    card.className = "procedural-card";
-    const kicker = document.createElement("div");
-    kicker.className = "procedural-kicker";
-    kicker.textContent = `${{FILM.category || "DOCUMENTARY"}} · BEAT ${{idx + 1}}`;
-    const cue = document.createElement("div");
-    cue.className = "procedural-cue";
-    cue.textContent = beat.visual_cue || FILM.title;
-    card.appendChild(kicker);
-    card.appendChild(cue);
-    proc.appendChild(card);
-    container.appendChild(proc);
-  }}
-
-  mediaLayer.appendChild(container);
-  return container;
-}});
-
-function clamp01(v) {{
-  return Math.max(0, Math.min(1, v));
-}}
-
-function applyMotion(img, motion, p) {{
-  if (!img) return;
-  let scale = 1.04;
-  let tx = 0;
-  let ty = 0;
-  if (motion === "zoom_in") {{
-    scale = 1.02 + 0.11 * p;
-    ty = -14 * p;
-  }} else if (motion === "zoom_out") {{
-    scale = 1.13 - 0.10 * p;
-    ty = 12 * (1 - p);
-  }} else if (motion === "pan_right") {{
-    scale = 1.09;
-    tx = -28 + 56 * p;
-  }} else {{
-    scale = 1.09;
-    tx = 28 - 56 * p;
-  }}
-  img.style.transform = `translate3d(${{tx.toFixed(2)}}px, ${{ty.toFixed(2)}}px, 0) scale(${{scale.toFixed(4)}})`;
-}}
-
-window.render = function(t) {{
-  const dur = Math.max(1, window.DUR);
-  const clampedT = Math.max(0, Math.min(dur, Number(t || 0)));
-  progressFill.style.width = `${{(clamp01(clampedT / dur) * 100).toFixed(2)}}%`;
-
-  let activeIdx = 0;
-  for (let i = 0; i < FILM.beats.length; i++) {{
-    const b = FILM.beats[i];
-    if (clampedT >= b.start && clampedT <= b.end) {{
-      activeIdx = i;
-      break;
-    }}
-    if (clampedT > b.end) activeIdx = i;
-  }}
-
-  const activeBeat = FILM.beats[activeIdx] || FILM.beats[0];
-  const span = Math.max(0.5, (activeBeat.end - activeBeat.start));
-  const localP = clamp01((clampedT - activeBeat.start) / span);
-
-  for (let i = 0; i < beatNodes.length; i++) {{
-    const node = beatNodes[i];
-    if (i === activeIdx) {{
-      const fadeIn = clamp01((clampedT - activeBeat.start) / 0.25);
-      node.style.opacity = fadeIn.toFixed(3);
-      applyMotion(node._img, FILM.beats[i].motion, localP);
-    }} else {{
-      node.style.opacity = "0";
-    }}
-  }}
-
-  sectionPill.textContent = (activeBeat.section || FILM.category || "DOCUMENTARY").slice(0, 22);
-  beatCounter.textContent = `BEAT ${{String(activeBeat.beat_number || activeIdx + 1).padStart(2, "0")}} / ${{String(FILM.beats.length).padStart(2, "0")}}`;
-
-  if (IS_THUMB) {{
-    heroWrap.style.display = "none";
-    captionWrap.style.display = "none";
-    thumbOverlay.style.display = "flex";
-    thumbBadge.textContent = (FILM.category || "CRAZZYDOCS").toUpperCase();
-    thumbHeadline.textContent = FILM.thumb_headline || FILM.title;
-    return;
-  }}
-
-  thumbOverlay.style.display = "none";
-  if (clampedT < 3.4) {{
-    const titleAlpha = clampedT < 2.8 ? 1 : clamp01((3.4 - clampedT) / 0.6);
-    heroWrap.style.display = "block";
-    heroWrap.style.opacity = titleAlpha.toFixed(3);
-    heroKicker.textContent = (FILM.category || "DOCUMENTARY").toUpperCase();
-    heroTitle.textContent = FILM.title;
-  }} else {{
-    heroWrap.style.display = "none";
-  }}
-
-  const cap = (activeBeat.caption || "").trim();
-  if (cap) {{
-    captionWrap.style.display = "block";
-    captionBox.textContent = cap;
-  }} else {{
-    captionWrap.style.display = "none";
-  }}
-}};
-
-window.render(0);
+{film_script}
 </script>
 </body>
 </html>

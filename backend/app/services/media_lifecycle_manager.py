@@ -180,7 +180,15 @@ class MediaLifecycleManager:
                                 preserved = bool(kept)
                                 if isinstance(kept, dict):
                                     for val in kept.values():
-                                        if val and isinstance(val, str):
+                                        if not (val and isinstance(val, str)):
+                                            continue
+                                        if os.path.isdir(val):
+                                            # Preserved render inputs (lemo_film, stage cache) are folders:
+                                            # protect every file inside them.
+                                            for root_d, _dirs, fnames in os.walk(val):
+                                                for fn in fnames:
+                                                    paths_in_job.append(normalize_rel_path(os.path.join(root_d, fn), self.workspace))
+                                        else:
                                             paths_in_job.append(normalize_rel_path(val, self.workspace))
                             except Exception:
                                 pass

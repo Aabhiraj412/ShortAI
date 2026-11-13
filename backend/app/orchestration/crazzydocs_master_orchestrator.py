@@ -60,6 +60,13 @@ from backend.app.content.topic_ledger import (
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
 from backend.app.content.visual_diversity_policy import compute_asset_sha256
 from backend.app.orchestration.production_workspace import ProductionWorkspace, compute_file_sha256
+from backend.app.orchestration.stage_artifact_cache import (
+    StageArtifactCache,
+    fingerprint as cache_fingerprint,
+    media_files,
+    storyboard_files,
+)
+from backend.app.rendering.render_errors import RenderFailure, is_readiness_failure
 from backend.app.services.expressive_tts_engine import ExpressiveTTSEngine, NarrationSegment
 from backend.app.services.production_observability import production_observability
 from backend.app.services.qc_service import QualityControlEngine
@@ -212,6 +219,57 @@ class CrazzyDocsMasterOrchestrator:
             ),
         ]
         return beats
+
+    RENDER_ATTEMPTS = int(os.environ.get("CRAZZYDOCS_RENDER_ATTEMPTS", "2"))
+    RENDER_RETRY_DELAY_SEC = 5.0
+
+    def _render_with_bounded_retries(self, job_id: str, render, *, preserved: Dict, persist_to_db: bool):
+        """
+        Runs the video render up to RENDER_ATTEMPTS times with the SAME prepared inputs
+        (no TTS, media or storyboard work is repeated). Raises RenderFailure when every
+        attempt fails; `deterministic` is set when all attempts were readiness failures,
+        so the scheduler does not spend whole-pipeline retries on a defect a rerun cannot fix.
+        """
+        errors: List[str] = []
+        attempts = max(1, self.RENDER_ATTEMPTS)
+        for attempt in range(1, attempts + 1):
+            try:
+                result = render()
+                if attempt > 1:
+                    logger.info("[RENDER RECOVERY] Render succeeded on in-stage attempt %d/%d.", attempt, attempts)
+                return result
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                errors.append(str(exc))
+                logger.warning(
+                    "[RENDER RECOVERY] Render attempt %d/%d failed (%s): %s",
+                    attempt, attempts, "readiness" if is_readiness_failure(str(exc)) else type(exc).__name__,
+                    str(exc).splitlines()[0][:300] if str(exc) else type(exc).__name__,
+                )
+                try:
+                    from backend.app.services.lifecycle_events import record_lifecycle_event
+                    record_lifecycle_event(
+                        "RENDER_ATTEMPT_FAILED", "RENDERING",
+                        cycle_id="_".join(job_id.split("_")[:2]) if "_" in job_id else None,
+                        job_id=job_id,
+                        details={"attempt": attempt, "of": attempts, "readiness": is_readiness_failure(str(exc))},
+                        error_details=str(exc)[:500],
+                    )
+                except Exception:
+                    pass
+                if attempt < attempts:
+                    time.sleep(self.RENDER_RETRY_DELAY_SEC)
+        readiness = all(is_readiness_failure(e) for e in errors)
+        if persist_to_db:
+            self._update_checkpoint(job_id, "RENDER_FAILED", 60.0, {"render_inputs_preserved": preserved})
+        raise RenderFailure(
+            f"Video render failed {attempts}x"
+            + (" (page never signalled readiness)" if readiness else "")
+            + f": {errors[-1][:1500]}",
+            attempts=attempts,
+            readiness=readiness,
+            deterministic=readiness and attempts >= 2,
+            preserved=preserved,
+        )
 
     def _update_checkpoint(self, job_id: str, stage: str, progress: float, stage_data: Dict):
         """Persists incremental stage checkpoint to SQLite JobModel."""
@@ -529,10 +587,17 @@ class CrazzyDocsMasterOrchestrator:
                 # Structured 5-stage factual script
                 obs_stage = "script_generation"
                 production_observability.start_stage(job_id, "script_generation", "Drafting 5-stage explanatory script...", progress=30.0)
-                script_data = compose_structured_script(
-                    selected_topic,
-                    best_hook.hook_text,
-                    execution_context=execution_context,
+                # A retry of this production reuses script, narration, media and storyboard
+                # from the previous attempt when they are still valid (stage_artifact_cache).
+                stage_cache = StageArtifactCache(os.path.join(prod_ws.reports_dir, "stage_cache"))
+                script_data, _script_reused = stage_cache.get_or_compute(
+                    "script",
+                    cache_fingerprint(job_id, selected_topic.title, best_hook.hook_text),
+                    lambda: compose_structured_script(
+                        selected_topic,
+                        best_hook.hook_text,
+                        execution_context=execution_context,
+                    ),
                 )
                 narration_text = script_data["full_script"]
                 script_path = os.path.join(prod_ws.scripts_dir, f"script_{job_id}.json")
@@ -544,8 +609,11 @@ class CrazzyDocsMasterOrchestrator:
                 # Real Edge-TTS voiceover synthesis + ffprobe timing
                 obs_stage = "narration_generation"
                 production_observability.start_stage(job_id, "narration_generation", "Synthesizing expressive Neural TTS voiceover...", progress=25.0)
-                voice_path, section_timings, voice_dur = synthesize_and_probe_narration(
-                    self.tts_engine, script_data["sections"], prod_ws
+                (voice_path, section_timings, voice_dur), _tts_reused = stage_cache.get_or_compute(
+                    "narration",
+                    cache_fingerprint(script_data.get("full_script"), script_data.get("sections")),
+                    lambda: synthesize_and_probe_narration(self.tts_engine, script_data["sections"], prod_ws),
+                    files_of=lambda v: [v[0]],
                 )
                 dur = round(voice_dur + 2.0, 2)  # Main narrative + 2.0s branded outro
                 production_observability.complete_stage(job_id, "narration_generation", f"Narration synthesized ({voice_dur:.2f}s)")
@@ -553,9 +621,20 @@ class CrazzyDocsMasterOrchestrator:
                 # Acquire isolated openly licensed assets into workspace
                 obs_stage = "asset_acquisition"
                 production_observability.start_stage(job_id, "asset_acquisition", "Fetching verified Wikimedia/Openverse images...", progress=20.0)
-                acquired_assets, attrib_manifest, manifest_assets = acquire_isolated_topic_assets(
-                    selected_topic, prod_ws, execution_context, max_assets=10, stats_out=acq_stats
+                def _acquire_media():
+                    stats: Dict = {"unique_images": 0, "failed": 0, "duplicates_skipped": 0}
+                    assets, attrib, manifest = acquire_isolated_topic_assets(
+                        selected_topic, prod_ws, execution_context, max_assets=10, stats_out=stats
+                    )
+                    return assets, attrib, manifest, stats
+
+                (acquired_assets, attrib_manifest, manifest_assets, _acq_stats_cached), _media_reused = stage_cache.get_or_compute(
+                    "media",
+                    cache_fingerprint(selected_topic.title, getattr(selected_topic, "id", None), 10),
+                    _acquire_media,
+                    files_of=lambda v: media_files(v[0]),
                 )
+                acq_stats.update(_acq_stats_cached or {})
                 thumb_assets = [
                     a.local_path for a in acquired_assets if a.local_path and os.path.isfile(a.local_path)
                 ]
@@ -633,16 +712,24 @@ class CrazzyDocsMasterOrchestrator:
                         )
                         production_observability.update_assets(job_id, animations=anim_c, status="ANIMATING")
 
-                plan, visual_beats, ass_path = build_20_beat_storyboard(
-                    topic=selected_topic,
-                    timings=section_timings,
-                    total_voice_dur=voice_dur,
-                    voiceover_path=voice_path,
-                    acquired_assets=acquired_assets,
-                    prod_ws=prod_ws,
-                    script_full_text=narration_text,
-                    progress_cb=_sb_progress_cb,
-                    execution_context=execution_context,
+                (plan, visual_beats, ass_path), _storyboard_reused = stage_cache.get_or_compute(
+                    "storyboard",
+                    cache_fingerprint(
+                        voice_path, section_timings, voice_dur, narration_text,
+                        [getattr(a, "local_path", None) for a in acquired_assets],
+                    ),
+                    lambda: build_20_beat_storyboard(
+                        topic=selected_topic,
+                        timings=section_timings,
+                        total_voice_dur=voice_dur,
+                        voiceover_path=voice_path,
+                        acquired_assets=acquired_assets,
+                        prod_ws=prod_ws,
+                        script_full_text=narration_text,
+                        progress_cb=_sb_progress_cb,
+                        execution_context=execution_context,
+                    ),
+                    files_of=lambda v: [v[2]] + storyboard_files((v[0].metadata or {}).get("storyboard_beats", [])),
                 )
                 storyboard_beats = list((plan.metadata or {}).get("storyboard_beats", []))
                 sb_meta = plan.metadata or {}
@@ -851,12 +938,21 @@ class CrazzyDocsMasterOrchestrator:
                 )
                 lemo_adapter = LemoOpuscarAdapter()
                 silent_lemo_mp4 = Path(prod_ws.prod_dir) / "lemo_film" / f"silent_{job_id}.mp4"
-                lemo_adapter.render_video(
-                    workspace=Path(WORKSPACE),
-                    demo_dir=Path(film_manifest["demo_dir"]),
-                    output_path=silent_lemo_mp4,
-                    fps=30,
-                    size=(1080, 1920),
+                self._render_with_bounded_retries(
+                    job_id,
+                    lambda: lemo_adapter.render_video(
+                        workspace=Path(WORKSPACE),
+                        demo_dir=Path(film_manifest["demo_dir"]),
+                        output_path=silent_lemo_mp4,
+                        fps=30,
+                        size=(1080, 1920),
+                    ),
+                    preserved={
+                        "lemo_film_dir": film_manifest["demo_dir"],
+                        "voiceover_path": voice_path,
+                        "stage_cache_dir": os.path.join(prod_ws.reports_dir, "stage_cache"),
+                    },
+                    persist_to_db=persist_to_db,
                 )
                 production_observability.update_rendering(
                     job_id,

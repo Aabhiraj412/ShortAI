@@ -25,6 +25,11 @@ PERMANENT = "PERMANENT"
 TRANSIENT = "TRANSIENT"
 POST_RENDER_FAILURE = "POST_RENDER_FAILURE"
 QUEUE_HANDOFF_FAILURE = "QUEUE_HANDOFF_FAILURE"
+# Render failed after its inputs were prepared. Deterministic (every in-stage render
+# attempt failed the same way, e.g. the page never signalled readiness): terminal, inputs
+# preserved, no whole-pipeline retry. Otherwise retried; the retry reuses the cached
+# script/narration/media/storyboard, so only the render runs again.
+RENDER_FAILURE = "RENDER_FAILURE"
 
 STATUS_RETRY_SCHEDULED = "RETRY_SCHEDULED"
 # Video rendered and QC-passed; only the Publishing Queue insert is retried.
@@ -129,10 +134,21 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
     elif preserved_video:
         classification = POST_RENDER_FAILURE
 
+    render_failure = exc is not None and type(exc).__name__ == "RenderFailure"
+    render_terminal = False
+    if render_failure and not is_handoff and not preserved_video:
+        classification = RENDER_FAILURE
+        render_terminal = bool(getattr(exc, "deterministic", False))
+
     cs = cp.setdefault("cycle_state", {})
-    retry_allowed = classification in (TRANSIENT, QUEUE_HANDOFF_FAILURE) and attempts < max_retries
+    retry_allowed = (
+        (classification in (TRANSIENT, QUEUE_HANDOFF_FAILURE) or (classification == RENDER_FAILURE and not render_terminal))
+        and attempts < max_retries
+    )
     if preserved_video:
         cs["preserved_artifacts"] = {"video_path": preserved_video}
+    elif render_failure and getattr(exc, "preserved", None):
+        cs["preserved_artifacts"] = dict(exc.preserved)
 
     if retry_allowed:
         delay = backoff_seconds(attempts)
@@ -158,6 +174,11 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
             )
         elif classification == PERMANENT:
             summary = "permanent error; not retried"
+        elif classification == RENDER_FAILURE and render_terminal:
+            summary = (
+                f"render failed the same way on every in-stage attempt; not retried. "
+                f"Render inputs preserved: {', '.join(sorted(cs.get('preserved_artifacts', {})))}"
+            )
         else:
             summary = f"retries exhausted ({attempts}/{max_retries})"
 
