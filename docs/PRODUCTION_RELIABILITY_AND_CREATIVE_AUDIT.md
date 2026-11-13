@@ -173,3 +173,26 @@ Autonomous learning remains off.
   - Pop Info wins neutral beats;
   - builder refusal.
 - `backend/tests/test_film_page_viewer_chrome.py` (3 tests).
+
+## Milestone: grounded scripts (implemented and tested, not deployed)
+
+**New module:** `backend/app/content/grounded_script_writer.py`, which replaces `compose_structured_script` in the orchestrator.
+
+**With `GEMINI_API_KEY` set in `.env.local`:**
+1. Gemini (`DEFAULT_GEMINI_MODEL`, which `GEMINI_MODEL` overrides) writes a five-stage spoken script from the research dossier.
+2. The hook structure rotates by job across five types: surprising fact, question, contradiction, stakes and scale.
+3. A draft is accepted only when it:
+   - has exactly the HOOK, CONTEXT, ESCALATION, REVELATION and PAYOFF stages;
+   - is 95–126 words long;
+   - uses only numbers that appear in the research;
+   - copies no run of 9 or more words from the source;
+   - contains no parentheses, URLs or calls to like or subscribe.
+4. A rejected draft is retried once, with the reasons fed back to the model.
+
+**Fallback:** an API error, quota problem or second rejection falls back to the old extractive composer, with parentheticals removed. The script records `script_source`, `hook_type`, `angle` and the writer attempts. A writer problem never fails a production.
+
+**Without a key**, which is the case today, only the fallback runs. That output is still encyclopedic.
+
+**Cost:** one or two Gemini Flash calls per production (about 1.5k input and 300 output tokens each), so four productions a day. Check current Gemini pricing before enabling it.
+
+**Tests:** `backend/tests/test_grounded_script_writer.py` (16 tests, fake client, no network).

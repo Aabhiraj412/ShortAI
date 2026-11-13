@@ -58,6 +58,7 @@ from backend.app.content.topic_ledger import (
     compute_storyboard_fingerprint,
 )
 from backend.app.content.content_integrity_gate import ContentIntegrityGate
+from backend.app.content.grounded_script_writer import write_grounded_script
 from backend.app.content.creative_identity_registry import (
     CreativeIdentityRegistry,
     DuplicateCreativeIdentity,
@@ -643,9 +644,10 @@ class CrazzyDocsMasterOrchestrator:
                 script_data, _script_reused = stage_cache.get_or_compute(
                     "script",
                     cache_fingerprint(job_id, selected_topic.title, best_hook.hook_text),
-                    lambda: compose_structured_script(
+                    lambda: write_grounded_script(
                         selected_topic,
                         best_hook.hook_text,
+                        job_id=job_id,
                         execution_context=execution_context,
                     ),
                 )
@@ -654,7 +656,9 @@ class CrazzyDocsMasterOrchestrator:
                 with open(script_path, "w", encoding="utf-8") as f:
                     json.dump(script_data, f, indent=2)
                 prod_ws.register_artifact("STAGE_04_SCRIPT", "script", script_path, copy_into_workspace=False)
-                production_observability.complete_stage(job_id, "script_generation", f"Script finalized ({script_data.get('word_count', len(narration_text.split()))} words)")
+                production_observability.complete_stage(job_id, "script_generation", f"Script finalized ({script_data.get('word_count', len(narration_text.split()))} words, {script_data.get('script_source', 'extractive')})")
+                logger.info("[SCRIPT] source=%s hook_type=%s angle=%s", script_data.get("script_source"),
+                            script_data.get("hook_type"), script_data.get("angle"))
 
                 # Real Edge-TTS voiceover synthesis + ffprobe timing
                 obs_stage = "narration_generation"
@@ -911,6 +915,8 @@ class CrazzyDocsMasterOrchestrator:
                     ),
                     status="SCRIPTED",
                 )
+                if (script_data or {}).get("angle"):
+                    identity_registry.update(job_id, topic_angle=script_data["angle"])
 
             # -------------------------------------------------------------
             # Stage 8: Expressive Narration Synthesis
