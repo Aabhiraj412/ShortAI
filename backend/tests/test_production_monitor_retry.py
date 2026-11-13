@@ -77,6 +77,7 @@ def test_expired_and_completed_jobs_show_retries_stopped():
     assert expired["remaining_seconds"] < 0 and expired["operator_action_needed"] is False
     done = _view(_job("COMPLETED", 2, {"recovery_expiration_at": DEADLINE}))
     assert done["auto_retry_status"] == "stopped: production succeeded"
+    assert done["total_attempts"] == 3                 # two failures, then the successful attempt
     assert done["operator_action_needed"] is False
 
 

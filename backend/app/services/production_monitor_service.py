@@ -92,8 +92,9 @@ def retry_view(job, cs: dict, now_utc: datetime, settings=None) -> dict[str, Any
         "policy_label": POLICY_LABELS.get(policy, policy),
         "max_attempts_label": "No fixed limit (until recovery deadline)" if unlimited else str(int(job.max_retries or 3)),
         "failed_attempts": failures,
-        "current_attempt": failures + 1 if running else (failures if failures else None),
-        "total_attempts": failures + (1 if running else 0),
+        # retry_count counts failed attempts; the running or the successful attempt is one more
+        "current_attempt": failures + 1 if (running or status == "COMPLETED") else (failures if failures else None),
+        "total_attempts": failures + (1 if (running or status == "COMPLETED") else 0),
         "next_retry_at_ist": _ist(next_at) if next_at and status == rp.STATUS_RETRY_SCHEDULED else None,
         "current_backoff_seconds": backoff,
         "recovery_deadline_ist": _ist(deadline) if deadline else None,
