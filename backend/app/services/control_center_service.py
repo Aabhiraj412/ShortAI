@@ -675,7 +675,7 @@ def evaluate_publishing_readiness() -> dict[str, Any]:
     can_refresh = False
     try:
         from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
-        oauth_status = youtube_publishing_engine.oauth.get_auth_status() or {}
+        oauth_status = youtube_publishing_engine.oauth.get_auth_status_cached() or {}
         creds = youtube_publishing_engine.oauth._load_credentials()
         if creds is not None:
             scopes = list(getattr(creds, "scopes", None) or [])

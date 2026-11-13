@@ -187,6 +187,15 @@ def isolated_test_database():
 
 
 @pytest.fixture(autouse=True)
+def fresh_youtube_auth_status_cache():
+    """The dashboard's shared YouTube auth-status cache must never carry over between tests."""
+    from backend.app.services.youtube_publishing_engine import invalidate_auth_status_cache
+    invalidate_auth_status_cache()
+    yield
+    invalidate_auth_status_cache()
+
+
+@pytest.fixture(autouse=True)
 def ensure_test_context(monkeypatch):
     """Guarantees that CRAZZYDOCS_EXECUTION_CONTEXT is always TEST during every test."""
     monkeypatch.setenv("CRAZZYDOCS_EXECUTION_CONTEXT", "TEST")

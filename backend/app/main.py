@@ -399,7 +399,7 @@ async def get_publishing_status(
 ):
     pubs = db.query(PublicationModel).order_by(PublicationModel.created_at.desc()).limit(20).all()
     yt_service = YouTubePublisherService()
-    auth_status = yt_service.get_auth_status()
+    auth_status = await asyncio.to_thread(yt_service.oauth.get_auth_status_cached)
     return {
         "youtube_auth": auth_status,
         "publications": pubs,
@@ -409,7 +409,8 @@ async def get_publishing_status(
 
 @app.get("/api/stage-3-22/youtube/status")
 async def stage_322_youtube_status(_: None = Depends(require_local_control)):
-    return YouTubePublisherService().get_auth_status()
+    # Off the event loop and cached: this is polled by every open dashboard tab.
+    return await asyncio.to_thread(YouTubePublisherService().oauth.get_auth_status_cached)
 
 
 @app.post("/api/stage-3-22/youtube/client-config")
@@ -762,7 +763,7 @@ async def control_center_set_concurrency(
 
 @app.get("/api/control-center/publishing")
 async def control_center_publishing_status(_: None = Depends(require_local_control)):
-    readiness = control_center_service.evaluate_publishing_readiness()
+    readiness = await asyncio.to_thread(control_center_service.evaluate_publishing_readiness)
     stored = control_center_service.get_stored_publishing_policy()
     return {
         "mode": control_center_service.get_publishing_policy(),
@@ -1765,8 +1766,8 @@ class QueueConfirmRequest(ConfirmedActionRequest):
 @app.get("/api/publishing/queue")
 async def api_list_publishing_queue(limit: int = 100, _: None = Depends(require_local_control)):
     svc = YouTubePublisherService()
-    items = svc.list_uploads(limit=limit)
-    oauth = svc.get_auth_status()
+    items = await asyncio.to_thread(svc.list_uploads, limit=limit)
+    oauth = await asyncio.to_thread(svc.oauth.get_auth_status_cached)
     quota_used = svc.engine.db.get_quota_used_today()
     return {
         "items": items,

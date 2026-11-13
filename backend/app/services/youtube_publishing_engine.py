@@ -647,6 +647,21 @@ class PublishingDatabase:
             conn.close()
 
 
+# Dashboard status polling: get_auth_status() refreshes the token, builds the API client
+# and calls channels.list (seconds per call). Dashboard reads share one result for
+# AUTH_STATUS_CACHE_SEC; uploads and the OAuth flow never use the cache.
+import threading as _threading
+
+AUTH_STATUS_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_CACHE_SEC", "60"))
+_auth_status_lock = _threading.RLock()
+_auth_status_cache: Dict[str, Any] = {"at": 0.0, "key": None, "value": None}
+
+
+def invalidate_auth_status_cache() -> None:
+    with _auth_status_lock:
+        _auth_status_cache.update(at=0.0, key=None, value=None)
+
+
 class YouTubeOAuthManager:
     """Manages Google OAuth2 authentication lifecycle for YouTube Data API."""
 
@@ -717,6 +732,18 @@ class YouTubeOAuthManager:
                 json.dumps(config, separators=(",", ":")).encode("utf-8"),
             )
         return config
+
+    def get_auth_status_cached(self, max_age: Optional[float] = None) -> Dict:
+        """get_auth_status() shared by concurrent callers for up to max_age seconds (dashboard only)."""
+        max_age = AUTH_STATUS_CACHE_SEC if max_age is None else max_age
+        with _auth_status_lock:
+            c = _auth_status_cache
+            if (c["value"] is not None and c["key"] == self.token_file
+                    and time.monotonic() - c["at"] < max_age):
+                return dict(c["value"])
+            value = self.get_auth_status()
+            _auth_status_cache.update(at=time.monotonic(), key=self.token_file, value=value)
+            return dict(value)
 
     def get_auth_status(self) -> Dict:
         """Reports detailed connection state, channel info, and token health."""
@@ -895,10 +922,12 @@ class YouTubeOAuthManager:
     def save_credentials(self, creds: Credentials):
         """Persists refreshed credentials securely to token.json."""
         write_protected_file(self.token_file, creds.to_json().encode("utf-8"))
+        invalidate_auth_status_cache()
         logger.info("Saved protected OAuth credentials.")
 
     def disconnect_channel(self) -> bool:
         """Revokes and safely removes the local token.json file."""
+        invalidate_auth_status_cache()
         if os.path.exists(self.token_file):
             try:
                 # Attempt remote token revocation if possible
