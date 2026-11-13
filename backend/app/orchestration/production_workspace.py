@@ -491,11 +491,32 @@ class ProductionWorkspace:
             "artifacts_count": len(self.artifacts),
             "artifacts": [asdict(a) for a in self.artifacts],
         }
+        # Caller-supplied fields (save_manifest) survive every regeneration of the manifest.
+        manifest_data.update(getattr(self, "_manifest_overrides", {}))
         os.makedirs(os.path.dirname(self.manifest_path), exist_ok=True)
         tmp_manifest = f"{self.manifest_path}.{os.getpid()}.tmp"
         with open(tmp_manifest, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2)
         os.replace(tmp_manifest, self.manifest_path)
+
+    def save_manifest(self, data: Dict[str, Any]) -> None:
+        """
+        Merges caller-supplied top-level fields (e.g. renderer, pinned_commit) into the
+        production manifest and persists it atomically. The manifest is regenerated from the
+        registered artifacts on every register_artifact(), so the supplied fields are kept as
+        overrides and re-applied on each regeneration instead of being silently dropped.
+        Fields the caller merely echoed back from load_manifest() are not frozen.
+        """
+        generated = self.load_manifest()
+        overrides = getattr(self, "_manifest_overrides", None)
+        if overrides is None:
+            overrides = self._manifest_overrides = {}
+        for key, value in (data or {}).items():
+            if key in ("artifacts", "artifacts_count"):
+                continue   # always derived from registered artifacts
+            if key not in generated or generated[key] != value or key in overrides:
+                overrides[key] = value
+        self._save_manifest()
 
     def load_manifest(self) -> Dict[str, Any]:
         """Loads the current production manifest."""
