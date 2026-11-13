@@ -115,12 +115,16 @@ def test_schedule_validation_ignores_publication_gap_but_rejects_duplicate_start
         control.validate_schedule(conflict)
 
 
-def test_four_cycle_schedule_cannot_be_changed(isolated_settings):
+def test_four_cycle_preset_is_editable_and_becomes_custom(isolated_settings):
+    # The four-cycle schedule is a preset (starting point), not a locked configuration.
     spec = control.preset_schedule("FOUR_CYCLES_DAILY")
     spec["cycles"][0]["start_time"] = "00:30"
 
-    with pytest.raises(ValueError, match="fixed"):
-        control.validate_schedule(spec)
+    res = control.validate_production_schedule_detailed(spec)
+    assert res["valid"] is True
+    assert res["profile_name"] == "CUSTOM"
+    assert res["cycles"][0]["start_time"] == "00:30"
+    assert any("saved as CUSTOM" in w for w in res["warnings"])
 
 
 def test_preset_four_cycle_timings_validate_and_concurrency_is_enforced(isolated_settings):

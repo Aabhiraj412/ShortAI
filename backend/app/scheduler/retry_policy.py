@@ -39,6 +39,9 @@ PENDING_STATUSES = frozenset({STATUS_RETRY_SCHEDULED, STATUS_HANDOFF_PENDING})
 TERMINAL_STATUSES = frozenset({"FAILED", "BLOCKED_QC", "MISSED", "RECOVERY_WINDOW_EXPIRED", "COMPLETED", "PUBLISHED"})
 
 DEFAULT_MAX_RETRIES = 3
+# Publishing (queue insert / upload / schedule / thumbnail) has its own counter and limit,
+# separate from production attempts (cycle_state.publish_attempts).
+PUBLISH_MAX_ATTEMPTS = 5
 BACKOFF_BASE_SECONDS = 120
 BACKOFF_CAP_SECONDS = 1800
 
@@ -119,9 +122,6 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
     classification, etype = classify_error(exc, error_type=error_type, message=message)
     msg = str(exc) if exc is not None else (message or "")
     max_retries = int(job.max_retries if job.max_retries is not None else DEFAULT_MAX_RETRIES)
-    job.retry_count = int(job.retry_count or 0) + 1
-    attempts = job.retry_count
-
     preserved_video = rendered_video_path(job)
     cp = _load_checkpoint(job)
     is_handoff = bool(
@@ -129,6 +129,15 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
         and str(job.current_stage or "").upper() == "PUBLISHING_QUEUE_HANDOFF"
         and cp.get("queue_handoff")
     )
+    if is_handoff:
+        # Publishing failures never consume production attempts.
+        pub_cs = cp.setdefault("cycle_state", {})
+        attempts = int(pub_cs.get("publish_attempts", 0)) + 1
+        pub_cs["publish_attempts"] = attempts
+        max_retries = PUBLISH_MAX_ATTEMPTS
+    else:
+        job.retry_count = int(job.retry_count or 0) + 1
+        attempts = job.retry_count
     if is_handoff:
         classification = QUEUE_HANDOFF_FAILURE
     elif preserved_video:
@@ -215,9 +224,14 @@ def is_retry_due(job, now_utc: Optional[datetime] = None) -> bool:
     """True only for RETRY_SCHEDULED/HANDOFF_PENDING jobs whose backoff has elapsed and attempts remain."""
     if str(job.status or "") not in PENDING_STATUSES:
         return False
-    max_retries = int(job.max_retries if job.max_retries is not None else DEFAULT_MAX_RETRIES)
-    if int(job.retry_count or 0) >= max_retries:
-        return False
+    if str(job.status) == STATUS_HANDOFF_PENDING:
+        cs = _load_checkpoint(job).get("cycle_state") or {}
+        if int(cs.get("publish_attempts", 0)) >= PUBLISH_MAX_ATTEMPTS:
+            return False
+    else:
+        max_retries = int(job.max_retries if job.max_retries is not None else DEFAULT_MAX_RETRIES)
+        if int(job.retry_count or 0) >= max_retries:
+            return False
     due = next_retry_at(job)
     return due is None or due <= (now_utc or datetime.utcnow())
 

@@ -12,6 +12,10 @@ def is_readiness_failure(message: str) -> bool:
     return any(marker in text for marker in READINESS_MARKERS)
 
 
+class PublishingStepError(RuntimeError):
+    """An upload/scheduling/thumbnail step after QC must be retried (never the render)."""
+
+
 class RenderFailure(RuntimeError):
     """
     The video render failed after its inputs (script, narration, media, storyboard)

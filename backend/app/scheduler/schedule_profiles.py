@@ -28,19 +28,41 @@ class ProductionCycle:
     window_hours: float = 6.0          # Max generation SLA window before missed deadline
     recovery_window_hours: float = 4.0 # Time after cycle start within which recovery is valid (00-04, 06-10, 12-16, 18-22)
     active_weekdays: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
+    # Target YouTube publication time of day ("HH:MM", cycle timezone). Informational for
+    # production: it never moves the start, shortens recovery, or blocks completion.
+    target_publish_time: Optional[str] = None
+
+    def occurrence_start(self, current_dt_ist: Optional[datetime] = None) -> datetime:
+        """
+        Start of the cycle occurrence that `current_dt_ist` belongs to: yesterday's run
+        while it is still inside its recovery window across midnight (e.g. a 22:00 cycle
+        with 4 h recovery at 01:00), otherwise today's start.
+        """
+        dt = current_dt_ist or datetime.now(IST_TZ)
+        today = dt.replace(hour=self.start_hour_ist, minute=self.start_min_ist, second=0, microsecond=0)
+        if dt < today:
+            prev = today - timedelta(days=1)
+            if prev.weekday() in self.active_weekdays and dt < prev + timedelta(hours=self.recovery_window_hours):
+                return prev
+        return today
+
+    def target_publication_at(self, cycle_start: datetime) -> Optional[datetime]:
+        """First occurrence of target_publish_time after the production start (rolls past midnight)."""
+        if not self.target_publish_time:
+            return None
+        hh, mm = (int(x) for x in str(self.target_publish_time).split(":", 1))
+        target = cycle_start.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if target <= cycle_start:
+            target += timedelta(days=1)
+        return target
 
     def calculate_datetimes(self, current_dt_ist: Optional[datetime] = None) -> Tuple[datetime, datetime, str, str]:
         """
-        Calculates cycle start datetime, target publication datetime,
-        cycle date string, and publication date string for a given time.
+        Calculates cycle start datetime, recovery deadline (legacy name target_pub),
+        cycle date string, and deadline date string for a given time.
         """
         dt = current_dt_ist or datetime.now(IST_TZ)
-        cycle_start = dt.replace(
-            hour=self.start_hour_ist,
-            minute=self.start_min_ist,
-            second=0,
-            microsecond=0,
-        )
+        cycle_start = self.occurrence_start(dt)
         target_pub = cycle_start + timedelta(hours=self.window_hours)
         date_str = cycle_start.strftime("%Y-%m-%d")
         pub_date_str = target_pub.strftime("%Y-%m-%d")
@@ -49,7 +71,7 @@ class ProductionCycle:
     def format_job_id(self, current_dt_ist: Optional[datetime] = None) -> str:
         """Generates deterministic unique job ID for this cycle."""
         dt = current_dt_ist or datetime.now(IST_TZ)
-        date_num = dt.strftime("%Y%m%d")
+        date_num = self.occurrence_start(dt).strftime("%Y%m%d")
         time_num = f"{self.start_hour_ist:02d}{self.start_min_ist:02d}"
         return f"{self.cycle_id}_{date_num}_{time_num}"
 
@@ -105,6 +127,7 @@ PROFILE_FOUR_CYCLES_DAILY = ScheduleProfile(
             start_min_ist=0,
             target_pub_hour_ist=6,
             target_pub_min_ist=0,
+            target_publish_time="06:00",
             pub_rollover_days=0,
             window_hours=6.0,
             recovery_window_hours=4.0,
@@ -116,6 +139,7 @@ PROFILE_FOUR_CYCLES_DAILY = ScheduleProfile(
             start_min_ist=0,
             target_pub_hour_ist=12,
             target_pub_min_ist=0,
+            target_publish_time="12:00",
             pub_rollover_days=0,
             window_hours=6.0,
             recovery_window_hours=4.0,
@@ -127,6 +151,7 @@ PROFILE_FOUR_CYCLES_DAILY = ScheduleProfile(
             start_min_ist=0,
             target_pub_hour_ist=18,
             target_pub_min_ist=0,
+            target_publish_time="18:00",
             pub_rollover_days=0,
             window_hours=6.0,
             recovery_window_hours=4.0,
@@ -138,6 +163,7 @@ PROFILE_FOUR_CYCLES_DAILY = ScheduleProfile(
             start_min_ist=0,
             target_pub_hour_ist=0,
             target_pub_min_ist=0,
+            target_publish_time="00:00",
             pub_rollover_days=1,
             window_hours=6.0,
             recovery_window_hours=4.0,
@@ -167,6 +193,7 @@ PROFILE_SINGLE_DAILY_2300 = ScheduleProfile(
             start_min_ist=0,
             target_pub_hour_ist=5,
             target_pub_min_ist=0,
+            target_publish_time="05:00",
             pub_rollover_days=1,
             window_hours=6.0,
             recovery_window_hours=4.0,

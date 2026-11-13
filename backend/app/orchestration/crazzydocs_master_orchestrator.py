@@ -66,7 +66,7 @@ from backend.app.orchestration.stage_artifact_cache import (
     media_files,
     storyboard_files,
 )
-from backend.app.rendering.render_errors import RenderFailure, is_readiness_failure
+from backend.app.rendering.render_errors import PublishingStepError, RenderFailure, is_readiness_failure
 from backend.app.services.expressive_tts_engine import ExpressiveTTSEngine, NarrationSegment
 from backend.app.services.production_observability import production_observability
 from backend.app.services.qc_service import QualityControlEngine
@@ -1583,10 +1583,13 @@ class CrazzyDocsMasterOrchestrator:
             "PUBLISHING_QUEUE_ENTRY_CREATED", "COMPLETED",
             cycle_id=cycle_id, job_id=job_id, details={"ledger_id": ledger_id},
         )
+        publishing = self._auto_publish_after_qc(job_id, ledger_id, cp, cycle_id)
         with SessionLocal() as db_session:
             job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
             cp = json.loads(job.checkpoint_data_json or "{}")
             cp["queue_ledger_id"] = ledger_id
+            if publishing is not None:
+                cp.setdefault("cycle_state", {})["publishing"] = publishing
             job.checkpoint_data_json = json.dumps(cp)
             job.status = "COMPLETED"
             job.current_stage = "COMPLETED"
@@ -1601,6 +1604,44 @@ class CrazzyDocsMasterOrchestrator:
         )
         logger.info("[STAGE 14] Job %s completed: Publishing Queue entry #%s created.", job_id, ledger_id)
         return ledger_id
+
+    def _auto_publish_after_qc(self, job_id: str, ledger_id: int, cp: Dict, cycle_id: Optional[str]) -> Optional[Dict]:
+        """
+        Under the explicit 'automatic_private_scheduled' policy: upload PRIVATE right after QC
+        and schedule YouTube-native publishAt at the cycle's target time.
+
+        VIDEO_GENERATED -> QC_PASSED -> YOUTUBE_UPLOAD_CONFIRMED -> PUBLICATION_SCHEDULE_CONFIRMED
+        -> PRODUCTION_CYCLE_COMPLETED. Returns None under manual_approval (the video waits in
+        the Publishing Queue). Raises PublishingStepError when an upload/scheduling/thumbnail
+        step must be retried; the scheduler then retries only this publishing step (job
+        HANDOFF_PENDING), never the render.
+        """
+        from backend.app.services.control_center_service import is_auto_private_scheduling_enabled
+        from backend.app.services.lifecycle_events import record_lifecycle_event
+        from backend.app.services.youtube_service import YouTubePublisherService
+
+        if not is_auto_private_scheduling_enabled():
+            return None
+        cs = cp.get("cycle_state") or {}
+        target = cs.get("target_publication_at_utc")
+        result = YouTubePublisherService().publish_after_qc(ledger_id, target)
+        state = result["state"]
+        summary = {"state": state, "ledger_id": ledger_id, "target_publication_at_utc": target,
+                   "video_id": result.get("video_id"), "reason": result.get("reason") or result.get("error")}
+        if result.get("video_id"):
+            record_lifecycle_event("YOUTUBE_UPLOAD_CONFIRMED", "RUNNING", cycle_id=cycle_id, job_id=job_id,
+                                   details={"ledger_id": ledger_id, "video_id": result["video_id"], "privacy": "private"})
+        if state == "SCHEDULED":
+            record_lifecycle_event("PUBLICATION_SCHEDULE_CONFIRMED", "RUNNING", cycle_id=cycle_id, job_id=job_id,
+                                   details={"ledger_id": ledger_id, "publish_at_utc": target})
+            return summary
+        if state in ("NEEDS_PUBLICATION_TIME", "NEEDS_REVIEW", "ALREADY_PUBLIC"):
+            # Production is done; publishing needs the operator. Never published early.
+            record_lifecycle_event("PUBLICATION_TIME_REQUIRED", "COMPLETED", cycle_id=cycle_id, job_id=job_id,
+                                   details=summary)
+            logger.warning("[PUBLISHING] Job %s: %s (%s).", job_id, state, summary["reason"])
+            return summary
+        raise PublishingStepError(f"Publishing step pending ({state}): {summary['reason'] or 'retrying'}")
 
     def process_publishing_queue(self, execute_upload: bool = False) -> Dict:
         """

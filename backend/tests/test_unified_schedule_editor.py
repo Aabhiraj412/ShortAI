@@ -138,11 +138,12 @@ def test_05_prod_recovery_boundaries_120_and_240(isolated_unified_db):
     assert control.validate_schedule(ok_min)["valid"] is True
     assert control.validate_schedule(ok_max)["valid"] is True
 
-    bad_min = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 119, "target_publish_time": "14:00"}]}
-    bad_max = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 241, "target_publish_time": "17:00"}]}
-    with pytest.raises(ValueError, match="between 120 and 240"):
+    # Recovery duration is configurable from 30 minutes to 24 hours.
+    bad_min = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 29, "target_publish_time": "14:00"}]}
+    bad_max = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 1441, "target_publish_time": "17:00"}]}
+    with pytest.raises(ValueError, match="between 30 and 1440"):
         control.validate_schedule(bad_min)
-    with pytest.raises(ValueError, match="between 120 and 240"):
+    with pytest.raises(ValueError, match="between 30 and 1440"):
         control.validate_schedule(bad_max)
 
 
@@ -160,7 +161,8 @@ def test_06_production_schedule_has_no_publication_constraint(isolated_unified_d
     assert res2["valid"] is True
     assert "target_publish_time" not in res2["cycles"][0]
     assert res2["preview_next_cycles"], "cycles without a publication time must still be scheduled"
-    assert "target_publish_ist" not in res2["preview_next_cycles"][0]
+    assert res2["preview_next_cycles"][0]["target_publish_ist"] is None
+    assert any("no target publication time" in w for w in res2["warnings"])
 
     profile = control._profile_from_spec({**res2, "cycles": res2["cycles"]})
     assert profile.cycles[0].recovery_window_hours == 3.0  # 180 min, not clipped
@@ -385,7 +387,7 @@ def test_20_unified_api_endpoints_and_failed_activation_reporting(isolated_unifi
 
         # Invalid prod spec should fail with HTTP 400 or 409
         bad_prod = _one_cycle_prod_spec()
-        bad_prod["cycles"][0]["recovery_duration_minutes"] = 60
+        bad_prod["cycles"][0]["recovery_duration_minutes"] = 20
         resp_bad = client.post(
             "/api/control-center/unified-schedule/activate",
             json={"confirm": True, "production_spec": bad_prod, "publication_spec": _matching_pub_spec_for_one_cycle()},
@@ -421,10 +423,10 @@ def test_21_unified_draft_validate_missing_and_duplicate_mapping(isolated_unifie
     assert res_missing["production_validation"]["cycle_count"] == 1
 
     bad_prod = _one_cycle_prod_spec()
-    bad_prod["cycles"][0]["recovery_duration_minutes"] = 60
+    bad_prod["cycles"][0]["recovery_duration_minutes"] = 20
     res_bad = control.validate_unified_schedule(prod_spec=bad_prod, pub_spec=pub_missing)
     assert res_bad["valid"] is False
-    assert any("between 120 and 240" in e for e in res_bad["errors"])
+    assert any("between 30 and 1440" in e for e in res_bad["errors"])
 
     pub_dup = {
         "preset_name": "CUSTOM",

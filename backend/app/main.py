@@ -144,7 +144,7 @@ class UploadQueueRequest(BaseModel):
 
 
 class PublishingPolicyRequest(ConfirmedActionRequest):
-    mode: Literal["manual_approval", "automatic"]
+    mode: Literal["manual_approval", "automatic_private_scheduled", "automatic"]
     confirm: bool
 
 
@@ -1892,6 +1892,59 @@ async def api_cancel_queue_item_schedule(
 async def api_verify_scheduled_publications(_: None = Depends(require_local_control)):
     from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
     return youtube_publishing_engine.verify_scheduled_publications()
+
+
+# --- Production Schedule (simple, authoritative) --------------------------------
+class ScheduleSpecRequest(BaseModel):
+    profile_name: str = "CUSTOM"
+    timezone_name: str = "Asia/Kolkata"
+    cycles: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ScheduleActivateRequest(ConfirmedActionRequest):
+    confirm: bool = False
+    spec: ScheduleSpecRequest
+
+
+@app.get("/api/schedule")
+async def api_schedule_view(_: None = Depends(require_local_control)):
+    from backend.app.services import schedule_service
+    return schedule_service.schedule_view()
+
+
+@app.get("/api/schedule/presets/{name}")
+async def api_schedule_preset(name: str, _: None = Depends(require_local_control)):
+    from backend.app.services import schedule_service
+    try:
+        return schedule_service.preset(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/schedule/validate")
+async def api_schedule_validate(req: ScheduleSpecRequest, _: None = Depends(require_local_control)):
+    from backend.app.services import schedule_service
+    return schedule_service.validate(req.model_dump())
+
+
+@app.put("/api/schedule/draft")
+async def api_schedule_save_draft(req: ScheduleSpecRequest, _: None = Depends(require_local_control)):
+    from backend.app.services import schedule_service
+    try:
+        return schedule_service.save_draft(req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/schedule/activate")
+async def api_schedule_activate(req: ScheduleActivateRequest, _: None = Depends(require_local_control)):
+    from backend.app.services import schedule_service
+    try:
+        return schedule_service.activate(req.spec.model_dump(), req.confirm)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/", include_in_schema=False)

@@ -44,7 +44,10 @@ def test_automatic_policy_cannot_be_selected(legacy_automatic_policy):
     with pytest.raises(ValueError, match="Automatic publishing has been removed"):
         control.set_publishing_policy("automatic", confirm=True)
     res = control.set_publishing_policy("manual_approval", confirm=True)
-    assert res == {"mode": "manual_approval", "previous_mode": "automatic", "automatic_enabled": False}
+    assert res == {"mode": "manual_approval", "previous_mode": "automatic", "automatic_enabled": False,
+                   "auto_private_scheduling": False}
+    # A stored legacy "automatic" (public release) never becomes an effective policy.
+    assert control.get_publishing_policy() == "manual_approval"
     assert control.get_stored_publishing_policy() == "manual_approval"
 
 

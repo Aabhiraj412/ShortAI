@@ -499,6 +499,13 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                 cs = cp.setdefault("cycle_state", {})
                 cs["worker_id"] = worker_id
                 cs["worker_claim_time"] = claim_ist.isoformat()
+                # Target YouTube publication for this occurrence (used only for publishAt).
+                target_pub_at = cycle.target_publication_at(cycle_start)
+                if target_pub_at is not None and not cs.get("target_publication_at_utc"):
+                    cs["target_publication_at_utc"] = (
+                        target_pub_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    )
+                    cs["target_publication_at_ist"] = target_pub_at.strftime("%Y-%m-%d %H:%M IST")
                 cs["actual_dispatch_time"] = cs.get("actual_dispatch_time") or claim_ist.isoformat()
                 j.checkpoint_data_json = _json.dumps(cp, ensure_ascii=True)
                 record_cycle_state(j, cycle, cycle_start, target_pub, "RUNNING", claim_ist)

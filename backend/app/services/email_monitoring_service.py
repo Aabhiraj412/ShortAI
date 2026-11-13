@@ -811,17 +811,15 @@ class EmailMonitoringService:
             except Exception:
                 pass
 
-        # Next upcoming cycle
-        next_cycle = "Cycle 1 (00:00 IST)"
-        cur_hour = now_ist.hour
-        if cur_hour < 6:
-            next_cycle = "Cycle 2 (06:00 IST)"
-        elif cur_hour < 12:
-            next_cycle = "Cycle 3 (12:00 IST)"
-        elif cur_hour < 18:
-            next_cycle = "Cycle 4 (18:00 IST)"
-        else:
-            next_cycle = "Cycle 1 (Tomorrow 00:00 IST)"
+        # Next upcoming cycle, from the authoritative active schedule (was hardcoded by hour).
+        next_cycle = "None scheduled"
+        try:
+            from backend.app.services.schedule_service import next_production_cycle
+            nxt = next_production_cycle(now_ist)
+            if nxt:
+                next_cycle = f"{nxt['name']} ({nxt['production_start_ist']})"
+        except Exception:
+            next_cycle = "Unavailable"
 
         # Storage consumption (via media lifecycle report if available)
         storage_mb = 0.0

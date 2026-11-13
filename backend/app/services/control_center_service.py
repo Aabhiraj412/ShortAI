@@ -32,7 +32,11 @@ PRODUCTION_CONTROL_KEY = "control_center.production.control_state"
 PUBLISHING_POLICY_KEY = "control_center.publishing.policy"
 # Only user-controlled publishing exists. "automatic" is a legacy stored value that
 # is read as manual_approval and can no longer be selected.
-PUBLISHING_POLICIES = {"manual_approval"}
+# manual_approval: QC-passed videos wait in the Publishing Queue for a user-chosen time.
+# automatic_private_scheduled: right after QC the video is uploaded PRIVATE with YouTube-native
+#   publishAt = the cycle's target publication time. Nothing is ever made public immediately.
+AUTO_PRIVATE_SCHEDULED = "automatic_private_scheduled"
+PUBLISHING_POLICIES = {"manual_approval", AUTO_PRIVATE_SCHEDULED}
 LEGACY_PUBLISHING_POLICIES = {"automatic"}
 MAX_HISTORY = 500
 
@@ -167,6 +171,10 @@ def _sort_production_cycles_chronologically(cycles: list[dict[str, Any]]) -> lis
     return sorted(cycles, key=_key)
 
 
+MIN_RECOVERY_MINUTES = 30
+MAX_RECOVERY_MINUTES = 1440
+
+
 def preset_schedule(profile_name: str) -> dict[str, Any]:
     name = profile_name.upper()
     if name not in {"FOUR_CYCLES_DAILY", "SINGLE_DAILY", "CUSTOM"}:
@@ -222,7 +230,9 @@ def compute_upcoming_production_cycles(
     ver = int(spec.get("schedule_version", 1))
     cycles = _sort_production_cycles_chronologically(list(spec.get("cycles") or []))
     candidates: list[tuple[datetime, dict[str, Any]]] = []
-    for day_offset in range(0, 8):
+    # Start one day back: a cycle that began yesterday may still be inside its recovery
+    # window after midnight (e.g. 22:00 start, 4 h recovery, now 01:00).
+    for day_offset in range(-1, 8):
         day_date = (now + timedelta(days=day_offset)).date()
         wd = day_date.weekday()
         for c in cycles:
@@ -241,6 +251,16 @@ def compute_upcoming_production_cycles(
             if rec_deadline_dt <= now:
                 continue
             rem_sec = int(max(0, (start_dt - now).total_seconds()))
+            target_txt = str(c.get("target_publish_time") or "").strip()
+            target_dt = None
+            if target_txt:
+                try:
+                    tmin = _time_minutes(target_txt, "target_publish_time")
+                    target_dt = start_dt.replace(hour=tmin // 60, minute=tmin % 60)
+                    if target_dt <= start_dt:
+                        target_dt += timedelta(days=1)
+                except ValueError:
+                    target_dt = None
             candidates.append((
                 start_dt,
                 {
@@ -256,6 +276,9 @@ def compute_upcoming_production_cycles(
                     "recovery_deadline_utc": rec_deadline_dt.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "countdown_seconds": rem_sec,
                     "countdown_label": f"Starts in {_format_remaining(rem_sec)}" if start_dt > now else "In Window",
+                    "in_progress_window": start_dt <= now < rec_deadline_dt,
+                    "target_publish_ist": target_dt.strftime("%Y-%m-%d %H:%M IST") if target_dt else None,
+                    "target_publish_utc": target_dt.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ") if target_dt else None,
                 },
             ))
     candidates.sort(key=lambda pair: pair[0])
@@ -313,9 +336,12 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
         ]
         rec_ok = all(int(c.get("recovery_duration_minutes", 240)) == 240 for c in enabled)
         if timezone_name != canonical["timezone_name"] or enabled_cmp != canonical_cmp or not rec_ok:
-            errors.append("FOUR_CYCLES_DAILY timings and cycles are fixed. Switch profile to CUSTOM to edit cycles.")
+            # Presets are starting points, not locked configurations.
+            profile_name = "CUSTOM"
+            warnings.append("Preset cycles were edited; the schedule is saved as CUSTOM.")
     if not errors and profile_name == "SINGLE_DAILY" and len(enabled) != 1:
-        errors.append("SINGLE_DAILY must contain exactly one enabled cycle.")
+        profile_name = "CUSTOM"
+        warnings.append("Preset cycles were edited; the schedule is saved as CUSTOM.")
 
     ids: set[str] = set()
     rec_windows: list[tuple[int, int, str]] = []
@@ -339,33 +365,42 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            # Legacy: production no longer has a publication target. A stored value is
-            # preserved verbatim (keeps old revisions stable) but has no effect.
+            # Target YouTube publication time: used only to schedule the upload's publishAt.
+            # It never moves the production start, shortens recovery, or blocks completion.
             legacy_target = cycle.get("target_publish_time")
             if legacy_target not in (None, ""):
                 try:
                     _time_minutes(legacy_target, f"{cycle_id}.target_publish_time")
-                except ValueError:
-                    warnings.append(f"{cycle_id}: ignoring unreadable legacy target_publish_time.")
-                    legacy_target = None
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
+            elif is_enabled:
+                warnings.append(
+                    f"{cycle_id}: no target publication time; its video will be uploaded privately "
+                    "and wait for a publication time chosen in the Publishing Queue."
+                )
 
             raw_rec = cycle.get("recovery_duration_minutes", 240)
             if type(raw_rec) is bool:
-                errors.append(f"{cycle_id}.recovery_duration_minutes must be an integer between 120 and 240.")
+                errors.append(f"{cycle_id}.recovery_duration_minutes must be a whole number of minutes.")
                 continue
             try:
                 rec_dur = int(raw_rec)
             except (TypeError, ValueError):
-                errors.append(f"{cycle_id}.recovery_duration_minutes must be an integer between 120 and 240.")
+                errors.append(f"{cycle_id}.recovery_duration_minutes must be a whole number of minutes.")
                 continue
-            if rec_dur < 120 or rec_dur > 240:
-                errors.append(f"{cycle_id}.recovery_duration_minutes must be between 120 and 240 minutes (got {rec_dur}).")
+            if rec_dur < MIN_RECOVERY_MINUTES or rec_dur > MAX_RECOVERY_MINUTES:
+                errors.append(
+                    f"{cycle_id}.recovery_duration_minutes must be between {MIN_RECOVERY_MINUTES} and "
+                    f"{MAX_RECOVERY_MINUTES} minutes (got {rec_dur})."
+                )
                 continue
 
-            next_day = cycle.get("next_day", False)
-            if not isinstance(next_day, bool):
-                errors.append(f"{cycle_id}.next_day must be a boolean.")
-                continue
+            # Derived, never user-entered: the target is the first occurrence after the start.
+            next_day = bool(
+                legacy_target not in (None, "")
+                and _time_minutes(legacy_target, "target_publish_time") <= start
+            )
 
             weekdays = cycle.get("active_weekdays", [0, 1, 2, 3, 4, 5, 6])
             if (
@@ -409,10 +444,11 @@ def validate_production_schedule_detailed(spec: dict[str, Any]) -> dict[str, Any
                 if cycle_id == other_id and start == other_start:
                     continue
                 if any(start < other_end + shift and other_start + shift < end for shift in (-week, 0, week)):
-                    errors.append(f"Recovery windows overlap: {cycle_id} and {other_id}.")
-                    break
-            if errors:
-                break
+                    # Allowed: production capacity runs them one at a time inside their own windows.
+                    msg = (f"Recovery windows of {cycle_id} and {other_id} overlap; if both run late, "
+                           "the second waits for the first to finish.")
+                    if msg not in warnings:
+                        warnings.append(msg)
 
     ordered_cycles = _sort_production_cycles_chronologically(normalized_all)
     enabled_out = [c for c in ordered_cycles if c.get("enabled", True)]
@@ -517,9 +553,10 @@ def _profile_from_spec(spec: dict[str, Any]) -> ScheduleProfile:
         rec_dur = int(item.get("recovery_duration_minutes", 240))
         # Production is bounded only by its recovery window. The legacy target fields
         # of ProductionCycle are informational; default them to the recovery deadline.
-        if item.get("target_publish_time"):
-            target = _time_minutes(item["target_publish_time"], "target_publish_time")
-            rollover = int(bool(item.get("next_day", False)))
+        target_hhmm = str(item.get("target_publish_time") or "").strip() or None
+        if target_hhmm:
+            target = _time_minutes(target_hhmm, "target_publish_time")
+            rollover = int(target <= start)  # derived; the legacy next_day flag is not needed
         else:
             target = (start + rec_dur) % 1440
             rollover = int(start + rec_dur >= 1440)
@@ -533,7 +570,8 @@ def _profile_from_spec(spec: dict[str, Any]) -> ScheduleProfile:
             pub_rollover_days=rollover,
             window_hours=rec_dur / 60.0,
             recovery_window_hours=rec_dur / 60.0,
-            active_weekdays=tuple(item["active_weekdays"]),
+            active_weekdays=tuple(item.get("active_weekdays") or range(7)),
+            target_publish_time=f"{target // 60:02d}:{target % 60:02d}" if target_hhmm else None,
         ))
     return ScheduleProfile(
         name=profile_name,
@@ -610,11 +648,17 @@ def get_stored_publishing_policy() -> str:
 
 def get_publishing_policy() -> str:
     """
-    Effective publishing policy. Always 'manual_approval': QC-approved videos wait in the
-    Publishing Queue until the user picks a publication time. A legacy stored 'automatic'
-    value is preserved in studio_settings but has no effect.
+    Effective publishing policy: 'manual_approval' (default) or 'automatic_private_scheduled'.
+    A legacy stored 'automatic' value (public release) is preserved in studio_settings but
+    has no effect and resolves to 'manual_approval'.
     """
-    return "manual_approval"
+    stored = get_stored_publishing_policy()
+    return stored if stored in PUBLISHING_POLICIES else "manual_approval"
+
+
+def is_auto_private_scheduling_enabled() -> bool:
+    """True only when the operator explicitly selected automatic_private_scheduled."""
+    return get_publishing_policy() == AUTO_PRIVATE_SCHEDULED
 
 
 def evaluate_publishing_readiness() -> dict[str, Any]:
@@ -722,7 +766,7 @@ def is_automatic_publishing_authorized() -> tuple[bool, dict[str, Any]]:
 
 
 def set_publishing_policy(policy: str, confirm: bool) -> dict[str, Any]:
-    """Persists the publishing policy. Only 'manual_approval' is accepted."""
+    """Persists the publishing policy: 'manual_approval' or 'automatic_private_scheduled'."""
     if confirm is not True:
         raise ValueError("Explicit confirmation is required to change publishing policy.")
     normalized = (policy or "").strip().lower()
@@ -739,7 +783,8 @@ def set_publishing_policy(policy: str, confirm: bool) -> dict[str, Any]:
     return {
         "mode": normalized,
         "previous_mode": previous,
-        "automatic_enabled": False,
+        "automatic_enabled": False,  # never automatic PUBLIC release
+        "auto_private_scheduling": normalized == AUTO_PRIVATE_SCHEDULED,
     }
 
 

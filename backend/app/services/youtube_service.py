@@ -8,7 +8,7 @@ import json
 import os
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 from backend.app.services.youtube_publishing_engine import (
     YouTubePublishingEngine,
@@ -298,6 +298,113 @@ class YouTubePublisherService:
             error_details=None,
         )
         return {"result": {"success": True, "status": "pending_queue"}, "item": self.get_upload(ledger_id)}
+
+    AUTO_MIN_LEAD_MINUTES = 15  # YouTube processing headroom before a scheduled publishAt
+
+    def publish_after_qc(
+        self,
+        ledger_id: int,
+        publish_at_utc: Optional[str],
+        *,
+        now_utc: Optional[datetime] = None,
+    ) -> Dict:
+        """
+        Automatic private upload + YouTube-native scheduled publication right after QC.
+
+        Only runs under the explicit 'automatic_private_scheduled' policy. Idempotent and
+        resumable: an existing YouTube video id is never uploaded again; the scheduling and
+        thumbnail steps are retried on their own. Never makes anything public now: a target
+        time that has passed (or is too close) is reported as NEEDS_PUBLICATION_TIME.
+        Returns {"state": SCHEDULED | NEEDS_PUBLICATION_TIME | NEEDS_REVIEW | UPLOAD_FAILED |
+                 SCHEDULE_PENDING | THUMBNAIL_PENDING | ALREADY_PUBLIC, ...}.
+        """
+        from datetime import timedelta
+        from backend.app.services.control_center_service import is_auto_private_scheduling_enabled
+
+        if not is_auto_private_scheduling_enabled():
+            raise PermissionError("Automatic private scheduling is not enabled; the publishing policy is manual_approval.")
+        rec = self.engine.db.get_publication(ledger_id)
+        if not rec:
+            raise ValueError(f"Publishing ledger record {ledger_id} was not found.")
+        if str(rec.get("visibility") or "").lower() == "public" or rec.get("upload_status") in ("uploaded_public", "published"):
+            return {"state": "ALREADY_PUBLIC", "video_id": rec.get("youtube_video_id")}
+
+        now = now_utc or datetime.now(timezone.utc)
+        steps: Dict[str, Any] = {}
+
+        def needs_time(reason: str) -> Dict:
+            self.engine.db.update_queue_metadata_and_schedule(
+                ledger_id, error_details=f"Needs a new publication time: {reason}"
+            )
+            return {"state": "NEEDS_PUBLICATION_TIME", "reason": reason, "video_id": rec.get("youtube_video_id"),
+                    "publish_at_utc": publish_at_utc, "steps": steps}
+
+        if not publish_at_utc:
+            return needs_time("the production cycle has no target publication time")
+        target = datetime.fromisoformat(publish_at_utc.replace("Z", "+00:00"))
+        too_close = target - now < timedelta(minutes=self.AUTO_MIN_LEAD_MINUTES)
+
+        # 1-2. Upload as PRIVATE with publishAt; upload_short persists the video id right after insert.
+        thumb_pending = str(rec.get("error_details") or "").lower().startswith("thumbnail")
+        if not rec.get("youtube_video_id"):
+            if too_close:
+                return needs_time(f"target {publish_at_utc} has passed or is less than "
+                                  f"{self.AUTO_MIN_LEAD_MINUTES} minutes away")
+            if rec["upload_status"] != "approved":
+                self.engine.db.approve_upload(ledger_id)   # approval = the operator's explicit policy choice
+            meta_dict = json.loads(rec["metadata_json"])
+            meta_dict.pop("_schedule_context", None)
+            metadata = YouTubeMetadata(**meta_dict)
+            res = self.engine.upload_short(
+                video_path=rec["video_path"],
+                topic_title=rec["topic_title"],
+                metadata=metadata,
+                thumbnail_path=rec.get("thumbnail_path"),
+                visibility="private",
+                ledger_id=ledger_id,
+                publish_at_iso=publish_at_utc,
+                allow_public_bypass=False,
+            )
+            steps["upload"] = {k: res.get(k) for k in ("status", "video_id", "thumbnail_status", "error")}
+            if res.get("reconciled_from_remote"):
+                # A video with this title already existed on the channel: never schedule it automatically.
+                return {"state": "NEEDS_REVIEW", "reason": "matching video already on the channel",
+                        "video_id": res.get("video_id"), "steps": steps}
+            rec = self.engine.db.get_publication(ledger_id) or rec
+            if not rec.get("youtube_video_id"):
+                return {"state": "UPLOAD_FAILED", "error": res.get("error"), "steps": steps}
+            thumb_pending = res.get("thumbnail_status") == "failed"
+
+        # 3. Schedule (or confirm) publishAt on the uploaded private video.
+        verify = self.engine.verify_remote_schedule(ledger_id, publish_at_utc)
+        if not verify["confirmed"] and verify.get("reason") == "schedule_mismatch":
+            if too_close:
+                return needs_time(f"target {publish_at_utc} passed before scheduling was confirmed; "
+                                  "the video stays private")
+            try:
+                r = self.engine.update_or_reschedule_remote_video(
+                    ledger_id, publish_at_iso=publish_at_utc, include_thumbnail=False
+                )
+                steps["schedule"] = {k: r.get(k) for k in ("status", "error")}
+            except ValueError as exc:   # e.g. already public remotely: never touched
+                return {"state": "NEEDS_REVIEW", "reason": str(exc), "video_id": rec.get("youtube_video_id"), "steps": steps}
+            verify = self.engine.verify_remote_schedule(ledger_id, publish_at_utc)
+        steps["verify"] = verify
+
+        # 4. Thumbnail on its own (never re-uploads the video).
+        if thumb_pending:
+            t = self.engine.retry_thumbnail(ledger_id)
+            steps["thumbnail"] = t
+            thumb_pending = not t.get("success") and t.get("status") != "no_thumbnail"
+
+        if not verify["confirmed"]:
+            state = "SCHEDULE_PENDING"
+        elif thumb_pending:
+            state = "THUMBNAIL_PENDING"
+        else:
+            state = "SCHEDULED"
+        return {"state": state, "video_id": rec.get("youtube_video_id"), "publish_at_utc": publish_at_utc,
+                "remote": verify, "steps": steps}
 
     def get_upload(self, ledger_id: int) -> Optional[Dict]:
         record = self.engine.db.get_publication(ledger_id)

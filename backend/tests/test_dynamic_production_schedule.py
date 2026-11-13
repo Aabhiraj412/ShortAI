@@ -84,14 +84,19 @@ def test_04_edit_production_start_time_and_05_06_recovery_durations(isolated_pro
 
 
 def test_07_reject_below_two_hours_and_08_above_four_hours(isolated_prod_db):
+    # Recovery duration is user-configurable from 30 minutes to 24 hours (was fixed 2-4 h).
     base = _five_cycle_spec()["cycles"][0]
-    too_short = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 119, "target_publish_time": "06:00"}]}
-    with pytest.raises(ValueError, match="between 120 and 240"):
+    too_short = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 29, "target_publish_time": "06:00"}]}
+    with pytest.raises(ValueError, match="between 30 and 1440"):
         control.validate_schedule(too_short)
 
-    too_long = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 241, "target_publish_time": "07:00"}]}
-    with pytest.raises(ValueError, match="between 120 and 240"):
+    too_long = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": 1441, "target_publish_time": "07:00"}]}
+    with pytest.raises(ValueError, match="between 30 and 1440"):
         control.validate_schedule(too_long)
+
+    for ok in (30, 119, 241, 1440):
+        spec = {"profile_name": "CUSTOM", "timezone_name": "Asia/Kolkata", "cycles": [{**base, "recovery_duration_minutes": ok, "target_publish_time": "07:00"}]}
+        assert control.validate_schedule(spec)["cycles"][0]["recovery_duration_minutes"] == ok
 
 
 def test_09_no_publication_buffer_is_required(isolated_prod_db):
@@ -122,8 +127,10 @@ def test_10_midnight_crossing_cycles(isolated_prod_db):
     preview = res["preview_next_cycles"][0]
     assert preview["production_start_ist"].endswith("22:00 IST")
     assert preview["recovery_deadline_ist"].endswith("02:00 IST")
-    # The preview describes production only; no publication fields.
-    assert "target_publish_ist" not in preview
+    # The target publication rolls past midnight automatically and does not change the
+    # production start or the recovery deadline.
+    assert preview["target_publish_ist"].endswith("04:00 IST")
+    assert preview["target_publish_ist"][:10] > preview["production_start_ist"][:10]
     assert "finalization_buffer_minutes" not in preview
 
 
@@ -136,8 +143,11 @@ def test_11_overlapping_recovery_windows_and_12_duplicate_cycles_rejected(isolat
             {"cycle_id": "c2", "name": "C2", "start_time": "10:00", "recovery_duration_minutes": 120, "target_publish_time": "16:00", "active_weekdays": [0], "next_day": False, "enabled": True},
         ],
     }
-    with pytest.raises(ValueError, match="Recovery windows overlap"):
-        control.validate_schedule(overlap_rec)
+    # Overlapping recovery windows are allowed (production capacity runs them one at a
+    # time) but reported.
+    res_overlap = control.validate_production_schedule_detailed(overlap_rec)
+    assert res_overlap["valid"] is True
+    assert any("overlap" in w for w in res_overlap["warnings"])
 
     dup_id = {
         "profile_name": "CUSTOM",

@@ -1559,6 +1559,52 @@ class YouTubePublishingEngine:
                 results.append({"ledger_id": lid, "video_id": vid, "error": str(exc)})
         return {"checked": len(rows), "promoted": promoted, "results": results}
 
+    def retry_thumbnail(self, ledger_id: int) -> Dict[str, Any]:
+        """Uploads only the custom thumbnail of an already-uploaded video (never the video)."""
+        rec = self.db.get_publication(ledger_id)
+        if not rec or not rec.get("youtube_video_id"):
+            raise ValueError("Video has not been uploaded to YouTube yet.")
+        thumb = rec.get("thumbnail_path")
+        if not thumb or not os.path.exists(thumb):
+            return {"success": False, "status": "no_thumbnail", "error": "Thumbnail file is missing."}
+        service = self.oauth.get_authenticated_service()
+        if not service:
+            return {"success": False, "status": "awaiting_auth", "error": "YouTube account is not authenticated."}
+        try:
+            media_thumb = MediaFileUpload(thumb, mimetype=mimetypes.guess_type(thumb)[0] or "image/jpeg")
+            service.thumbnails().set(videoId=rec["youtube_video_id"], media_body=media_thumb).execute()
+            self.db.add_quota_consumption(50)
+        except Exception as exc:
+            msg = f"Thumbnail upload failed: {exc}"
+            self.db.update_queue_metadata_and_schedule(ledger_id, error_details=msg)
+            return {"success": False, "status": "thumbnail_failed", "error": msg}
+        if str(rec.get("error_details") or "").lower().startswith("thumbnail"):
+            self.db.update_queue_metadata_and_schedule(ledger_id, error_details=None)
+        return {"success": True, "status": "thumbnail_uploaded"}
+
+    def verify_remote_schedule(self, ledger_id: int, expected_publish_at_iso: str) -> Dict[str, Any]:
+        """Reads YouTube's state: confirmed only when private with the expected publishAt."""
+        rec = self.db.get_publication(ledger_id)
+        vid = (rec or {}).get("youtube_video_id")
+        if not vid:
+            return {"confirmed": False, "reason": "not_uploaded"}
+        service = self.oauth.get_authenticated_service()
+        if not service:
+            return {"confirmed": False, "reason": "awaiting_auth"}
+        try:
+            items = service.videos().list(part="id,status", id=vid).execute().get("items", [])
+        except Exception as exc:
+            return {"confirmed": False, "reason": f"verification_failed: {exc}"}
+        if not items:
+            return {"confirmed": False, "reason": "processing_or_missing"}  # YouTube processing delay
+        st = items[0].get("status") or {}
+        want = datetime.fromisoformat(expected_publish_at_iso.replace("Z", "+00:00"))
+        got_raw = st.get("publishAt")
+        got = datetime.fromisoformat(got_raw.replace("Z", "+00:00")) if got_raw else None
+        ok = st.get("privacyStatus") == "private" and got is not None and abs((got - want).total_seconds()) < 60
+        return {"confirmed": ok, "privacyStatus": st.get("privacyStatus"), "publishAt": got_raw,
+                "reason": None if ok else "schedule_mismatch"}
+
     def update_or_reschedule_remote_video(
         self,
         ledger_id: int,
@@ -1567,8 +1613,12 @@ class YouTubePublishingEngine:
         make_public_now: bool = False,
         cancel_schedule: bool = False,
         thumbnail_path: Optional[str] = None,
+        include_thumbnail: bool = True,
     ) -> Dict[str, Any]:
-        """Updates an already-uploaded YouTube video's metadata, thumbnail, publishAt, or privacy."""
+        """Updates an already-uploaded YouTube video's metadata, thumbnail, publishAt, or privacy.
+
+        include_thumbnail=False makes a scheduling-only call (the thumbnail is retried on its own).
+        """
         rec = self.db.get_publication(ledger_id)
         if not rec:
             raise ValueError(f"Publishing ledger record {ledger_id} was not found.")
@@ -1655,7 +1705,7 @@ class YouTubePublishingEngine:
         thumb_to_use = thumbnail_path or rec.get("thumbnail_path")
         thumb_uploaded = False
         thumb_error = None
-        if thumb_to_use and os.path.exists(thumb_to_use):
+        if include_thumbnail and thumb_to_use and os.path.exists(thumb_to_use):
             try:
                 thumb_mime = mimetypes.guess_type(thumb_to_use)[0] or "image/jpeg"
                 media_thumb = MediaFileUpload(thumb_to_use, mimetype=thumb_mime)

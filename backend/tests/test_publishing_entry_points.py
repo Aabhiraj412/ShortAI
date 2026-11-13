@@ -39,7 +39,9 @@ IST = ZoneInfo("Asia/Kolkata")
 # and added here deliberately; this test fails otherwise.
 REVIEWED_CALL_SITES = {
     r"\.upload_short\(": {
-        "services/youtube_service.py": 4,  # upload_video (private only; public raises), approve_and_upload, edit_and_schedule, publish_now
+        # upload_video (private only; public raises), approve_and_upload, edit_and_schedule, publish_now,
+        # publish_after_qc (private + publishAt, only under the explicit automatic_private_scheduled policy)
+        "services/youtube_service.py": 5,
         "orchestration/crazzydocs_master_orchestrator.py": 1,  # process_publishing_queue, only reached with execute_upload=True (never by the scheduler)
     },
     r"allow_public_bypass=True": {
