@@ -149,7 +149,10 @@ def schedule_view(now_ist: Optional[datetime] = None) -> dict[str, Any]:
 
 
 def preset(name: str) -> dict[str, Any]:
-    return clean_spec(cc.preset_schedule(name))
+    spec = clean_spec(cc.preset_schedule(name))
+    for i, c in enumerate(spec["cycles"], start=1):
+        c["name"] = f"Cycle {i}"   # short, editable names (no legacy target wording)
+    return spec
 
 
 def validate(spec: dict[str, Any]) -> dict[str, Any]:

@@ -328,12 +328,12 @@
     <div class="status-pills">
       <span class="pill accent" id="pillMode" title="Active Operating Mode (PRODUCTION / MAINTENANCE / VALIDATION)">Mode: --</span>
       <span class="pill ok" id="pillRenderer" title="Approved Video Renderer (Lemo-Opuscar enforced, silent fallback blocked)">Renderer: Lemo-Opuscar</span>
-      <span class="pill" id="pillPolicy" title="YouTube Publishing Policy (automatic vs manual_approval)">Policy: --</span>
+      <span class="pill" id="pillPolicy" title="YouTube publishing policy (manual_approval or automatic_private_scheduled)">Policy: --</span>
       <span class="pill" id="pillScheduler" title="Production Scheduler Daemon status">Scheduler: --</span>
       <span class="pill" id="pillOAuth" title="YouTube OAuth connection status">OAuth: --</span>
       <span class="pill" id="pillQuota" title="Daily YouTube Data API quota usage">Quota: --</span>
       <span class="pill" id="pillNextProd" title="Next scheduled production cycle">Next Prod: --</span>
-      <span class="pill" id="pillNextPub" title="Next scheduled YouTube publication slot">Next Pub: --</span>
+      <span class="pill" id="pillNextPub" title="Target publish time of the next production cycle">Next Target Publish: --</span>
       <span class="pill" id="pillRefresh" title="Last dashboard sync time">Sync: --</span>
       <button class="btn sm primary" id="btnRefreshAll" onclick="refreshAll()">Refresh All</button>
     </div>
@@ -341,59 +341,60 @@
 
   <!-- NAVIGATION TABS -->
   <nav class="nav-tabs" aria-label="Control Center Sections">
-    <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview', this)">Overview &amp; Pipeline</button>
-    <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy Switches</button>
-    <button class="tab-btn" data-tab="pubschedule" onclick="switchTab('pubschedule', this)">Production Scheduler</button>
-    <button class="tab-btn" data-tab="prodconfig" onclick="switchTab('prodconfig', this)">Production &amp; Storage Config</button>
+    <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview', this)">Overview</button>
+    <button class="tab-btn" data-tab="schedule" onclick="switchTab('schedule', this)">Production Schedule</button>
     <button class="tab-btn" data-tab="queue" onclick="switchTab('queue', this)">Publishing Queue</button>
-    <button class="tab-btn" data-tab="processes" onclick="switchTab('processes', this)">Process Monitor &amp; Logs</button>
+    <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
+    <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
+    <button class="tab-btn" data-tab="prodconfig" onclick="switchTab('prodconfig', this)">Production &amp; Storage Config</button>
+    <button class="tab-btn" data-tab="processes" onclick="switchTab('processes', this)">Processes &amp; Logs</button>
   </nav>
 
   <!-- TAB 1: OVERVIEW & PIPELINE -->
   <section id="tab-overview" class="tab-panel active">
     <div class="overview-grid">
       <div class="kpi-card">
-        <div class="kpi-label">Active Cycle</div>
-        <div class="kpi-val" id="kpiActiveCycle">--</div>
-        <div class="kpi-sub" id="kpiCycleSub">4 Cycles Daily (IST)</div>
+        <div class="kpi-label">Operating Mode</div>
+        <div class="kpi-val" id="ovMode">--</div>
+        <div class="kpi-sub" id="ovPolicy">Publishing: --</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Next Production</div>
-        <div class="kpi-val" id="kpiNextProd">--</div>
-        <div class="kpi-sub">Schedule: FOUR_CYCLES_DAILY</div>
+        <div class="kpi-label">Scheduler</div>
+        <div class="kpi-val" id="ovScheduler">--</div>
+        <div class="kpi-sub" id="ovSchedulerSub">--</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Next YouTube Publish</div>
-        <div class="kpi-val" id="kpiNextPub">--</div>
-        <div class="kpi-sub" id="kpiNextPubSub">Private + publishAt UTC</div>
+        <div class="kpi-label">Next Production Cycle</div>
+        <div class="kpi-val" id="ovNextCycle">--</div>
+        <div class="kpi-sub" id="ovNextCycleSub">--</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Pipeline Stage</div>
-        <div class="kpi-val" id="kpiStage">IDLE</div>
-        <div class="kpi-sub" id="kpiTopic">No active production</div>
+        <div class="kpi-label">Active Production</div>
+        <div class="kpi-val" id="ovActiveJob">None</div>
+        <div class="kpi-sub" id="ovActiveJobSub">No production running</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Approved Renderer</div>
-        <div class="kpi-val" id="kpiRenderer">Lemo-Opuscar</div>
-        <div class="kpi-sub">Fallback to Canvas: BLOCKED</div>
+        <div class="kpi-label">Publishing Queue</div>
+        <div class="kpi-val" id="ovQueueCount">--</div>
+        <div class="kpi-sub">Videos not yet published</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">CPU / RAM / Disk</div>
-        <div class="kpi-val" id="kpiResources">--</div>
-        <div class="kpi-sub" id="kpiResourcesSub">Resource safety guard</div>
+        <div class="kpi-label">Last Successful Production</div>
+        <div class="kpi-val" id="ovLastSuccess">--</div>
+        <div class="kpi-sub" id="ovLastSuccessSub">--</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Startup &amp; Monitor</div>
-        <div class="kpi-val" id="kpiStartup">--</div>
-        <div class="kpi-sub" id="kpiMonitorSub">Windows Task Scheduler (pythonw)</div>
+        <div class="kpi-label">YouTube</div>
+        <div class="kpi-val" id="ovYouTube">--</div>
+        <div class="kpi-sub" id="ovYouTubeSub">--</div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-head">
         <div>
-          <h2 class="card-title">12-Stage Autonomous Production Pipeline</h2>
-          <p class="card-desc">Live observability across Topic Discovery, Research, Script, Storyboard, Lemo-Opuscar Rendering, QC, and Scheduled Publishing.</p>
+          <h2 class="card-title">Production Monitor</h2>
+          <p class="card-desc">The production that is running now, or waiting to retry.</p>
         </div>
         <div class="btn-row">
           <button class="btn warn sm" onclick="controlProduction('pause')">Pause Production</button>
@@ -401,39 +402,46 @@
           <button class="btn danger sm" onclick="controlProduction('stop')">Graceful Stop</button>
         </div>
       </div>
-      <div class="progress-bar"><div class="progress-fill" id="pipelineProgressFill" style="width: 0%;"></div></div>
+      <div class="meta-grid" id="monitorMeta">
+        <div class="meta-item"><strong>Current stage</strong><span id="monStage">--</span></div>
+        <div class="meta-item"><strong>Progress</strong><span id="monProgress">--</span></div>
+        <div class="meta-item"><strong>Last activity</strong><span id="monActivity">--</span></div>
+        <div class="meta-item"><strong>Recovery</strong><span id="monRecovery">--</span></div>
+      </div>
+      <div class="progress-bar" style="margin-top:12px;"><div class="progress-fill" id="pipelineProgressFill" style="width: 0%;"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);">
         <span id="pipelineSummary">Idle — awaiting next scheduled cycle</span>
         <span id="pipelinePct">0%</span>
       </div>
+      <div id="monError" style="display:none;margin-top:10px;color:#fca5a5;font-size:13px;white-space:pre-wrap;"></div>
       <div class="stage-chips" id="pipelineStageChips"></div>
     </div>
 
     <div class="card">
       <div class="card-head">
         <div>
-          <h2 class="card-title">Daily Production Cycles (FOUR_CYCLES_DAILY — Asia/Kolkata)</h2>
-          <p class="card-desc">Production cycles and their 4-hour Production Recovery windows are independent of YouTube publication. Actual YouTube publish times follow the Independent Publication Schedule Editor.</p>
+          <h2 class="card-title">Today's Production Cycles — Asia/Kolkata</h2>
+          <p class="card-desc">From the active Production Schedule. Edit cycles in the Production Schedule tab.</p>
         </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead>
-            <tr>
-              <th>Cycle</th>
-              <th>Start (IST)</th>
-              <th>Production Recovery Deadline</th>
-              <th>Original Cycle Target</th>
-              <th>Status</th>
-              <th>Remaining / Progress</th>
-            </tr>
-          </thead>
-          <tbody id="cyclesTableBody">
-            <tr><td colspan="6" style="color:var(--muted)">Loading cycles...</td></tr>
-          </tbody>
+          <thead><tr><th>Cycle</th><th>Production Start</th><th>Recovery Duration</th><th>Target Publish Time</th><th>Status</th></tr></thead>
+          <tbody id="ovCyclesBody"><tr><td colspan="5" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
       </div>
     </div>
+
+    <details class="card" style="padding:12px 16px;">
+      <summary style="cursor:pointer;color:var(--muted);">Technical details</summary>
+      <div class="overview-grid" style="margin-top:12px;">
+        <div class="kpi-card"><div class="kpi-label">Pipeline Stage</div><div class="kpi-val" id="kpiStage">IDLE</div><div class="kpi-sub" id="kpiTopic">No active production</div></div>
+        <div class="kpi-card"><div class="kpi-label">Approved Renderer</div><div class="kpi-val" id="kpiRenderer">Lemo-Opuscar</div><div class="kpi-sub">Fallback to Canvas: BLOCKED</div></div>
+        <div class="kpi-card"><div class="kpi-label">CPU / RAM / Disk</div><div class="kpi-val" id="kpiResources">--</div><div class="kpi-sub" id="kpiResourcesSub">Resource safety guard</div></div>
+        <div class="kpi-card"><div class="kpi-label">Startup &amp; Monitor</div><div class="kpi-val" id="kpiStartup">--</div><div class="kpi-sub" id="kpiMonitorSub">Windows Task Scheduler (pythonw)</div></div>
+        <div class="kpi-card"><div class="kpi-label">Schedule revision</div><div class="kpi-val" id="diagRevision">--</div><div class="kpi-sub" id="diagRevisionSub">--</div></div>
+      </div>
+    </details>
   </section>
 
   <!-- TAB 2: MODE & POLICY SWITCHES -->
@@ -481,8 +489,8 @@
           </div>
           <div class="btn-row">
             <select id="selectPubPolicy" style="width:220px;">
-              <option value="automatic">automatic (Scheduled Private + publishAt)</option>
-              <option value="manual_approval">manual_approval (Hold in Queue)</option>
+              <option value="manual_approval">manual_approval (hold in Publishing Queue)</option>
+              <option value="automatic_private_scheduled">automatic_private_scheduled (upload private after QC, YouTube publishes at the cycle's target time)</option>
             </select>
             <button class="btn primary" onclick="applyPubPolicy()">Apply Policy</button>
           </div>
@@ -526,215 +534,54 @@
   </section>
 
   <!-- TAB 3: PRODUCTION SCHEDULER -->
-  <section id="tab-pubschedule" class="tab-panel">
+  <section id="tab-schedule" class="tab-panel">
     <div class="card">
       <div class="card-head">
         <div>
-          <h2 class="card-title">Production Scheduler <span class="pill" id="uniSyncBadge">Checking...</span></h2>
-          <p class="card-desc">Configure automated daily production cycles independently from YouTube publishing (Asia/Kolkata).</p>
+          <h2 class="card-title">Production Schedule — Asia/Kolkata <span class="pill" id="schedSyncBadge">--</span></h2>
+          <p class="card-desc">Each cycle starts production at its start time and may keep recovering for its recovery duration. When the video passes QC it is uploaded privately and YouTube publishes it at the target publish time. The target time never changes when production starts or how long it may recover.</p>
         </div>
         <div class="btn-row">
-          <button class="btn" id="btnShowAddCycle" onclick="openCycleForm(-1)">+ Add Cycle</button>
-          <button class="btn sm" id="btnRefreshUni" onclick="refreshUnifiedSchedule()">Refresh</button>
+          <select id="schedPresetSelect" style="width:200px;">
+            <option value="FOUR_CYCLES_DAILY">Preset: four cycles a day</option>
+            <option value="SINGLE_DAILY">Preset: one cycle a day</option>
+          </select>
+          <button class="btn sm" onclick="loadSchedulePreset()">Load preset</button>
+          <button class="btn sm primary" onclick="openScheduleCycleEditor(-1)">Add Cycle</button>
         </div>
       </div>
-
-      <!-- SECTION A: SCHEDULER OVERVIEW -->
-      <div id="uniLoadingBanner" class="control-doc" style="display:none;margin-bottom:12px;color:var(--muted);font-size:12px;">
-        Loading schedule status...
-      </div>
-
-      <div class="kpi-grid" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
-        <div class="kpi" style="padding:10px 12px;">
-          <div class="kpi-label">Scheduler Status</div>
-          <div class="kpi-val" id="ovSchedulerStatus" style="font-size:15px;">--</div>
-        </div>
-        <div class="kpi" style="padding:10px 12px;">
-          <div class="kpi-label">Active Schedule</div>
-          <div class="kpi-val" id="ovActiveSchedule" style="font-size:15px;">--</div>
-        </div>
-        <div class="kpi" style="padding:10px 12px;">
-          <div class="kpi-label">Production Cycles / Day</div>
-          <div class="kpi-val" id="ovProdCount" style="font-size:15px;">--</div>
-        </div>
-        <div class="kpi" style="padding:10px 12px;">
-          <div class="kpi-label">Next Production</div>
-          <div class="kpi-val" id="ovNextProd" style="font-size:14px;">--</div>
-        </div>
-        <div class="kpi" style="padding:10px 12px;">
-          <div class="kpi-label">Last Successful Run</div>
-          <div class="kpi-val" id="ovLastSuccess" style="font-size:13px;">--</div>
-        </div>
-        <div style="display:none;"><span id="ovPubCount"></span><span id="ovNextPub"></span></div>
-      </div>
-
-      <details style="margin-bottom:14px;border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:rgba(15,23,42,0.35);">
-        <summary style="cursor:pointer;font-size:12px;color:var(--muted);font-weight:600;">System Diagnostics (Technical Details)</summary>
-        <div class="meta-grid" style="font-size:12px;margin-top:8px;">
-          <div class="meta-item"><strong>Active Version</strong><span id="diagActiveVer">--</span></div>
-          <div class="meta-item"><strong>Active Revision</strong><code id="diagActiveRev">--</code></div>
-          <div class="meta-item"><strong>Scheduler Revision</strong><code id="diagSchedRev">--</code></div>
-          <div class="meta-item"><strong>Draft Revision</strong><code id="diagDraftRev">--</code></div>
-          <div class="meta-item"><strong>Last Activated</strong><span id="diagLastActivated">--</span></div>
-          <div class="meta-item"><strong>Last Scheduler Sync</strong><span id="diagLastSynced">--</span></div>
-          <div class="meta-item"><strong>Recovery Worker</strong><span id="diagWorkerStatus">--</span></div>
-          <div class="meta-item"><strong>Unmapped Slots</strong><span id="diagUnmappedCount">0</span></div>
-        </div>
-      </details>
-
-      <!-- SECTION B: PRODUCTION DAILY SCHEDULE -->
-      <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Daily Production Cycles (IST)</div>
-      <div class="table-wrap" style="margin-bottom:14px;">
-        <table>
-          <thead>
-            <tr>
-              <th>Cycle</th>
-              <th>Production Start</th>
-              <th>Production Recovery</th>
-              <th>Recovery Deadline</th>
-              <th>Enabled</th>
-            </tr>
-          </thead>
-          <tbody id="uniScheduleBody">
-            <tr><td colspan="5" style="color:var(--muted)">Loading production schedule...</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- SECTION C: ADD / EDIT PRODUCTION CYCLE FORM -->
-      <div id="cycleFormCard" class="control-doc" style="display:none;margin-bottom:14px;border-color:var(--accent);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <strong id="cycleFormTitle">Add Production Cycle</strong>
-          <button class="btn sm" onclick="closeCycleForm()">Close</button>
-        </div>
-        <div class="form-grid" style="margin-bottom:10px;">
-          <div>
-            <label class="field-label">Cycle Name</label>
-            <input type="text" id="cfName" placeholder="e.g. Morning" />
-          </div>
-          <div>
-            <label class="field-label">Production Start Time (IST)</label>
-            <input type="time" id="cfProdStart" value="06:00" />
-          </div>
-          <div>
-            <label class="field-label">Production Recovery (hours)</label>
-            <input type="number" id="cfProdRecHours" min="2" max="4" step="0.5" value="4" />
-          </div>
-          <div>
-            <label class="field-label">Enabled</label>
-            <select id="cfEnabled">
-              <option value="true">ON (Enabled)</option>
-              <option value="false">OFF (Disabled)</option>
-            </select>
-          </div>
-          <div style="display:none;">
-            <input type="time" id="cfPubTime" value="12:00" />
-            <input type="checkbox" id="cfNextDay" />
-            <input type="number" id="cfPubPrepMin" value="30" />
-            <input type="number" id="cfPubRecHours" value="4" />
-          </div>
-        </div>
-        <div class="btn-row">
-          <button class="btn primary" onclick="saveCycleForm()">Save Cycle</button>
-          <button class="btn" onclick="closeCycleForm()">Cancel</button>
-        </div>
-      </div>
-
-      <!-- SECTION D: VISUAL 24-HOUR TIMELINE -->
-      <div class="control-doc" style="margin-bottom:14px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-          <strong style="font-size:13px;">24-Hour Visual Schedule Timeline (IST)</strong>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);">
-            <span><span style="display:inline-block;width:10px;height:10px;background:#38bdf8;border-radius:2px;margin-right:4px;"></span>Production</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;margin-right:4px;"></span>Prod Recovery</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#a855f7;border-radius:2px;margin-right:4px;"></span>Pub Prep</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px;"></span>Publish Target</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#14b8a6;border-radius:2px;margin-right:4px;"></span>Pub Recovery</span>
-          </div>
-        </div>
-        <div id="uniVisualTimeline" style="margin-top:6px;"></div>
-        <div id="uniSelectedCycleDetail" style="margin-top:10px;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px;">
-          Click any cycle row in the timeline to inspect its full execution lifecycle.
-        </div>
-      </div>
-
-      <!-- SECTION E: ADVANCED SETTINGS (COLLAPSED BY DEFAULT) -->
-      <details style="margin-bottom:14px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:rgba(15,23,42,0.35);">
-        <summary style="cursor:pointer;font-size:13px;font-weight:600;">Advanced Settings</summary>
-        <div style="margin-top:12px;">
-          <div class="btn-row" style="margin-bottom:12px;">
-            <select id="prodPresetSelect" style="width:220px;">
-              <option value="FOUR_CYCLES_DAILY">Preset: 4 Cycles Daily</option>
-              <option value="SINGLE_DAILY">Preset: Single Daily</option>
-            </select>
-            <button class="btn sm" onclick="loadProdPreset()">Load Preset</button>
-          </div>
-          <div class="form-grid" style="margin-bottom:12px;">
-            <div>
-              <label class="field-label">Timezone</label>
-              <input type="text" id="pubTimezone" value="Asia/Kolkata" onchange="markUnifiedDraftDirty()" />
-            </div>
-            <div>
-              <label class="field-label">Missed Production Slot Behavior</label>
-              <select id="pubMissedBehavior" onchange="markUnifiedDraftDirty()">
-                <option value="next_slot">Next Available Slot</option>
-                <option value="skip">Skip</option>
-                <option value="immediate_if_ready">Immediate If Ready</option>
-              </select>
-            </div>
-            <div>
-              <label class="field-label">Recovery Overlap Policy</label>
-              <select id="pubOverlapPolicy" onchange="markUnifiedDraftDirty()">
-                <option value="STRICT">STRICT (No Overlaps)</option>
-                <option value="SHARED_RECOVERY">SHARED_RECOVERY (Permit w/ Claiming)</option>
-              </select>
-            </div>
-            <div>
-              <label class="field-label">Wait For Publication Slot</label>
-              <select id="pubWaitForSlot" onchange="markUnifiedDraftDirty()">
-                <option value="true">Enabled</option>
-                <option value="false">Disabled</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label class="field-label">Enabled Weekdays</label>
-            <div class="btn-row" id="pubWeekdaysWrap"></div>
-          </div>
-        </div>
-      </details>
-
-      <!-- SECTION F: VALIDATION AND ACTIVATION -->
-      <div class="btn-row" style="margin-bottom:12px;">
-        <button class="btn" id="btnSaveUnifiedDraft" onclick="saveUnifiedDraft()">SAVE DRAFT</button>
-        <button class="btn" id="btnValidateUnified" onclick="validateUnifiedDraft()">VALIDATE SCHEDULE</button>
-        <button class="btn primary" id="btnActivateUnifiedSchedule" onclick="activateUnifiedSchedule()" disabled>ACTIVATE SCHEDULE</button>
-        <button class="btn danger sm" onclick="cancelUnifiedDraft()">Discard Draft</button>
-      </div>
-
-      <div id="uniValidationBox" class="control-doc" style="display:none;margin-bottom:12px;font-size:13px;"></div>
-      <div id="uniActivationStatusBox" class="control-doc" style="display:none;margin-bottom:14px;font-size:13px;"></div>
-
-      <!-- COMPACT EXECUTION MONITORING -->
-      <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Execution Monitoring</div>
       <div class="table-wrap">
         <table>
-          <thead>
-            <tr>
-              <th>Cycle</th>
-              <th>Production</th>
-              <th>Publication</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="uniCompactExecBody">
-            <tr><td colspan="4" style="color:var(--muted)">Loading execution status...</td></tr>
-          </tbody>
+          <thead><tr><th>Cycle</th><th>Production Start</th><th>Recovery Duration</th><th>Target Publish Time</th><th>Days</th><th>Status</th><th></th></tr></thead>
+          <tbody id="schedCyclesBody"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
       </div>
-      <details style="margin-top:10px;border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:rgba(15,23,42,0.35);">
-        <summary style="cursor:pointer;font-size:12px;color:var(--muted);font-weight:600;">Details (Technical Execution &amp; Recovery Diagnostics)</summary>
-        <div id="uniExecDetailsBox" style="margin-top:8px;font-size:12px;color:var(--muted);">No additional diagnostics.</div>
+      <div id="schedEditNote" style="display:none;margin-top:10px;color:#fcd34d;font-size:13px;">You have unsaved changes. Validate, then Activate Schedule to apply them.</div>
+      <div id="schedMessages" style="margin-top:10px;font-size:13px;"></div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn" onclick="saveScheduleDraft()">Save Draft</button>
+        <button class="btn primary" onclick="validateSchedule()">Validate</button>
+        <button class="btn ok" id="schedActivateBtn" onclick="activateSchedule()">Activate Schedule</button>
+        <button class="btn sm" onclick="discardScheduleEdits()">Discard changes</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Upcoming Production</h2><p class="card-desc">Calculated from the current date and time in Asia/Kolkata.</p></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Cycle</th><th>Production Start</th><th>Recovers Until</th><th>Target Publish</th><th></th></tr></thead>
+          <tbody id="schedUpcomingBody"><tr><td colspan="5" style="color:var(--muted)">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;color:var(--muted);">Technical details</summary>
+        <div class="meta-grid" style="margin-top:8px;">
+          <div class="meta-item"><strong>Active revision</strong><span id="schedRev">--</span></div>
+          <div class="meta-item"><strong>Scheduler loaded revision</strong><span id="schedDaemonRev">--</span></div>
+          <div class="meta-item"><strong>Activated</strong><span id="schedActivated">--</span></div>
+          <div class="meta-item"><strong>Scheduler synced</strong><span id="schedSynced">--</span></div>
+        </div>
       </details>
     </div>
   </section>
@@ -983,6 +830,31 @@
 
 <div class="toast" id="toastBox"></div>
 
+<div id="cycleEditorModal" class="modal-backdrop" style="display:none;position:fixed;inset:0;background:rgba(2,6,23,0.72);z-index:60;align-items:center;justify-content:center;">
+  <div class="modal-card" style="max-width:520px;width:100%;">
+    <h3 class="card-title" id="cycleEditorTitle">Edit Cycle</h3>
+    <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+      <label>Cycle ID<input id="ceId" type="text" placeholder="cycle_1"></label>
+      <label>Name<input id="ceName" type="text" placeholder="Morning production"></label>
+      <label>Production start (IST)<input id="ceStart" type="time"></label>
+      <label>Recovery duration
+        <span style="display:flex;gap:6px;"><input id="ceRecH" type="number" min="0" max="24" style="width:70px;"> h <input id="ceRecM" type="number" min="0" max="59" step="5" style="width:70px;"> min</span>
+      </label>
+      <label>Target publish time (IST)<input id="ceTarget" type="time"></label>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:22px;"><input id="ceEnabled" type="checkbox"> Enabled</label>
+    </div>
+    <div style="margin-top:10px;">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">Days</div>
+      <div id="ceDays" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+    </div>
+    <div id="ceHint" style="margin-top:8px;font-size:12px;color:var(--muted);"></div>
+    <div class="btn-row" style="margin-top:14px;justify-content:flex-end;">
+      <button class="btn" onclick="closeScheduleCycleEditor()">Cancel</button>
+      <button class="btn primary" onclick="applyScheduleCycleEditor()">Apply</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const STORAGE_KEYS = [
@@ -1079,9 +951,9 @@ async function refreshOverviewAndHealth() {
     document.getElementById("metaModeVal").textContent = mode;
     document.getElementById("selectOperatingMode").value = mode;
 
-    const pol = pubState.mode || overview.publishing_mode || "automatic";
+    const pol = pubState.mode || overview.publishing_mode || "manual_approval";
     document.getElementById("pillPolicy").textContent = `Policy: ${pol}`;
-    document.getElementById("pillPolicy").className = "pill " + (pol === "automatic" ? "ok" : "warn");
+    document.getElementById("pillPolicy").className = "pill";
     document.getElementById("metaPolicyVal").textContent = pol;
     document.getElementById("selectPubPolicy").value = pol;
 
@@ -1094,6 +966,12 @@ async function refreshOverviewAndHealth() {
     document.getElementById("pillOAuth").className = "pill " + (oauthOk ? "ok" : "err");
 
     document.getElementById("pillQuota").textContent = `Quota: ${quota.used ?? 0}/${quota.limit ?? 10000}`;
+    const setOv = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setOv("ovMode", mode);
+    setOv("ovPolicy", pol === "automatic_private_scheduled" ? "Publishing: private upload + YouTube schedule" : "Publishing: hold in queue (manual)");
+    setOv("ovScheduler", schedOn ? "Running" : schedState);
+    setOv("ovYouTube", oauthOk ? "Connected" : "Disconnected");
+    setOv("ovYouTubeSub", `Quota ${quota.used ?? 0}/${quota.limit ?? 10000}`);
     document.getElementById("pillRefresh").textContent = `Sync: ${new Date().toLocaleTimeString()}`;
 
     document.getElementById("kpiStage").textContent = overview.pipeline_stage || worker.stage || "IDLE";
@@ -1121,38 +999,7 @@ async function refreshOverviewAndHealth() {
 
 async function refreshControlAndCycles() {
   try {
-    const [cc, liveCycles] = await Promise.all([
-      apiJson("/api/control-center/state"),
-      apiJson("/api/control-center/cycles/live")
-    ]);
-
-    const cycles = liveCycles.cycles || [];
-    const activeC = cycles.find(c => ["RUNNING", "RETRYING", "PAUSED", "ACTIVE_WINDOW"].includes(c.status));
-    const nextC = cycles.find(c => c.status === "UPCOMING");
-    document.getElementById("kpiActiveCycle").textContent = activeC ? activeC.name : "None Active";
-    document.getElementById("kpiNextProd").textContent = nextC ? nextC.start_time_ist : "00:00 IST";
-    document.getElementById("pillNextProd").textContent = `Next Prod: ${nextC ? nextC.start_time_ist : "00:00 IST"}`;
-
-    const tbody = document.getElementById("cyclesTableBody");
-    tbody.innerHTML = cycles.map(c => `
-      <tr>
-        <td><strong>${c.name}</strong></td>
-        <td>${c.start_time_ist}</td>
-        <td>${c.recovery_expiration_ist}</td>
-        <td>${c.target_publish_ist}</td>
-        <td><span class="chip ${c.status === "COMPLETED" ? "completed" : (c.status === "RUNNING" ? "running" : "")}">${c.status}</span></td>
-        <td>${c.remaining_recovery_label || "--"} (${Math.round(c.job_progress_pct || 0)}%)</td>
-      </tr>
-    `).join("") || `<tr><td colspan="6">No cycle data</td></tr>`;
-
-    const pubSched = cc.publication_schedule || {};
-    const upcoming = pubSched.upcoming_slots || [];
-    const nextPub = upcoming[0];
-    document.getElementById("kpiNextPub").textContent = nextPub ? nextPub.ist_display : "--";
-    document.getElementById("kpiNextPubSub").textContent = nextPub ? `UTC publishAt: ${nextPub.utc_iso}` : "No slot";
-    document.getElementById("pillNextPub").textContent = `Next Pub: ${nextPub ? nextPub.ist_display : "--"}`;
-
-    await refreshUnifiedSchedule();
+    const cc = await apiJson("/api/control-center/state");
 
     const pcfg = cc.production_config || {};
     document.getElementById("cfgRenderer").value = pcfg.renderer || "lemo-opuscar";
@@ -1177,11 +1024,6 @@ async function refreshPipeline() {
     const data = await apiJson("/api/dashboard/progress");
     const rec = data.active_production || data.latest_production || data;
     const pct = Math.round(rec.overall_progress_pct || 0);
-    document.getElementById("pipelineProgressFill").style.width = `${pct}%`;
-    document.getElementById("pipelinePct").textContent = `${pct}%`;
-    document.getElementById("pipelineSummary").textContent = rec.topic_title
-      ? `${rec.topic_title} · ${rec.current_stage || rec.status || "IDLE"}`
-      : "Idle — awaiting next scheduled cycle";
     const chips = document.getElementById("pipelineStageChips");
     const stages = rec.stages || {};
     chips.innerHTML = Object.keys(stages).map(k => {
@@ -1365,612 +1207,253 @@ async function cancelQueueItemSchedule(ledgerId) {
   }
 }
 
-function hhmmToMin(hhmm) {
-  const parts = String(hhmm || "00:00").split(":");
-  return (Number(parts[0] || 0) * 60) + Number(parts[1] || 0);
-}
+// ---------------------------------------------------------------------------
+// Production Schedule (simple cycles) — /api/schedule is the single source of truth.
+// Everything time-related is computed by the server from the current clock; this
+// page refreshes it every 15 s, so nothing shown here is a stale cached value.
+// ---------------------------------------------------------------------------
+const schedState = { view: null, cycles: [], dirty: false, editIndex: -1 };
 
-function minToHhmm(totalMin, allowNextDay = true) {
-  const cross = totalMin >= 1440;
-  const m = ((totalMin % 1440) + 1440) % 1440;
-  const label = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-  return { hhmm: label, cross, label: `${label}${allowNextDay && cross ? " (+1 day)" : ""}` };
+function escHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-
-function calcProdDeadlinePreview(startTime, recDurMin) {
-  return minToHhmm(hhmmToMin(startTime) + Number(recDurMin || 240)).label;
+function fmtDuration(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  return h && m ? `${h} h ${m} min` : (h ? `${h} hours` : `${m} min`);
 }
-
-function findMappedSlot(cycle, pubSlots) {
-  if (!cycle) return null;
-  let slot = (pubSlots || []).find(s => s.mapped_cycle_id && s.mapped_cycle_id === cycle.cycle_id);
-  if (!slot) {
-    slot = (pubSlots || []).find(s => s.time_ist === cycle.target_publish_time);
-  }
-  return slot || null;
+function hhmmMinutes(v) { const [h, m] = String(v || "").split(":").map(Number); return h * 60 + m; }
+function targetLabel(start, target) {
+  if (!target) return '<span style="color:var(--muted)">Not set</span>';
+  return escHtml(target) + (hhmmMinutes(target) <= hhmmMinutes(start) ? ' <span style="color:var(--muted)">(next day)</span>' : "");
 }
+function daysLabel(days) {
+  const d = (days || []).slice().sort();
+  if (d.length === 7) return "Every day";
+  if (d.join(",") === "0,1,2,3,4") return "Weekdays";
+  return d.map(i => WEEKDAYS[i]).join(", ") || "None";
+}
+function shortIst(s) { return s ? s.replace(/^\d{4}-/, "").replace(" IST", "") : "--"; }
 
-function ensureSlotForCycle(cycle) {
-  if (!stateCache.pubSpec) stateCache.pubSpec = { timezone_name: "Asia/Kolkata", slots: [] };
-  if (!Array.isArray(stateCache.pubSpec.slots)) stateCache.pubSpec.slots = [];
-  let slot = findMappedSlot(cycle, stateCache.pubSpec.slots);
-  if (!slot) {
-    slot = {
-      slot_id: `pub_${cycle.cycle_id}`,
-      label: `${cycle.name || cycle.cycle_id} Publish`,
-      time_ist: cycle.target_publish_time || "18:00",
-      prep_window_minutes: 30,
-      recovery_duration_minutes: 240,
-      recovery_offset_minutes: 0,
-      mapped_cycle_id: cycle.cycle_id,
-      enabled: cycle.enabled !== false
-    };
-    stateCache.pubSpec.slots.push(slot);
+function renderScheduleTable() {
+  const tbody = document.getElementById("schedCyclesBody");
+  if (!tbody) return;
+  const statusById = {}, activeById = {};
+  ((schedState.view || {}).cycles || []).forEach(c => { statusById[c.cycle_id] = c.status; activeById[c.cycle_id] = c; });
+  const fields = ["name", "start_time", "recovery_duration_minutes", "target_publish_time", "enabled"];
+  const rowStatus = c => {
+    const a = activeById[c.cycle_id];
+    if (!a) return "New (not active yet)";
+    const changed = fields.some(f => (a[f] ?? null) !== (c[f] ?? null))
+      || (a.active_weekdays || []).join() !== (c.active_weekdays || []).join();
+    if (changed) return "Edited (not active yet)";
+    return statusById[c.cycle_id] || (c.enabled ? "Scheduled" : "Disabled");
+  };
+  if (!schedState.cycles.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">No cycles. Add a cycle or load a preset.</td></tr>`;
   } else {
-    slot.mapped_cycle_id = cycle.cycle_id;
+    tbody.innerHTML = schedState.cycles.map((c, i) => `
+      <tr style="${c.enabled ? "" : "opacity:0.55"}">
+        <td><strong>${escHtml(c.name)}</strong><br><span style="color:var(--muted);font-size:11px;">${escHtml(c.cycle_id)}</span></td>
+        <td>${escHtml(c.start_time)}</td>
+        <td>${fmtDuration(Number(c.recovery_duration_minutes))}</td>
+        <td>${targetLabel(c.start_time, c.target_publish_time)}</td>
+        <td>${daysLabel(c.active_weekdays)}</td>
+        <td><span class="chip">${escHtml(rowStatus(c))}</span></td>
+        <td><div style="display:flex;gap:4px;flex-wrap:wrap;">
+          <button class="btn sm" onclick="openScheduleCycleEditor(${i})">Edit</button>
+          <button class="btn sm" onclick="toggleScheduleCycle(${i})">${c.enabled ? "Disable" : "Enable"}</button>
+          <button class="btn sm danger" onclick="deleteScheduleCycle(${i})">Delete</button>
+        </div></td>
+      </tr>`).join("");
   }
-  return slot;
+  document.getElementById("schedEditNote").style.display = schedState.dirty ? "block" : "none";
 }
 
-function markUnifiedDraftDirty() {
-  stateCache.uniDirty = true;
-  stateCache.uniValidated = false;
-  if (stateCache.prodSpec && stateCache.prodSpec.profile_name === "FOUR_CYCLES_DAILY") {
-    stateCache.prodSpec.profile_name = "CUSTOM";
-  }
-  updateActivationButtons();
-  renderVisualTimeline();
+function renderOverviewCycles(view) {
+  const body = document.getElementById("ovCyclesBody");
+  if (!body) return;
+  const rows = (view.cycles || []);
+  body.innerHTML = rows.length ? rows.map(c => `
+    <tr style="${c.enabled ? "" : "opacity:0.55"}">
+      <td><strong>${escHtml(c.name)}</strong></td>
+      <td>${escHtml(c.start_time)}</td>
+      <td>${fmtDuration(Number(c.recovery_duration_minutes))}</td>
+      <td>${targetLabel(c.start_time, c.target_publish_time)}</td>
+      <td><span class="chip ${c.status === "Producing" ? "running" : (c.status === "Completed" ? "completed" : (c.status === "Failed" ? "failed" : ""))}">${escHtml(c.status)}</span></td>
+    </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">No active schedule.</td></tr>`;
 }
 
-function updateActivationButtons() {
-  const actBtn = document.getElementById("btnActivateUnifiedSchedule");
-  if (actBtn) {
-    const canAct = Boolean(stateCache.uniValidated && !stateCache.uniDirty && !stateCache.isSubmittingUni);
-    actBtn.disabled = !canAct;
-    actBtn.title = canAct ? "Activate validated schedule" : "Click VALIDATE SCHEDULE before activating";
+function renderScheduleView(view) {
+  schedState.view = view;
+  if (!schedState.dirty) {
+    schedState.cycles = (view.cycles || []).map(c => ({
+      cycle_id: c.cycle_id, name: c.name, start_time: c.start_time,
+      recovery_duration_minutes: c.recovery_duration_minutes, target_publish_time: c.target_publish_time,
+      enabled: c.enabled, active_weekdays: c.active_weekdays,
+    }));
   }
-}
-
-function renderUnifiedOverview(u) {
-  const sync = u.scheduler_sync || {};
-  const isSynced = Boolean(sync.is_synchronized);
-  const badge = document.getElementById("uniSyncBadge");
+  renderScheduleTable();
+  renderOverviewCycles(view);
+  const up = document.getElementById("schedUpcomingBody");
+  if (up) {
+    up.innerHTML = (view.upcoming || []).map(u => `
+      <tr><td>${escHtml(u.name)}</td><td>${escHtml(u.production_start_ist)}</td><td>${escHtml(u.recovery_deadline_ist)}</td>
+      <td>${escHtml(u.target_publish_ist || "Not set")}</td><td>${escHtml(u.countdown_label)}</td></tr>`).join("")
+      || `<tr><td colspan="5" style="color:var(--muted)">No upcoming production.</td></tr>`;
+  }
+  const d = view.daemon || {};
+  const badge = document.getElementById("schedSyncBadge");
   if (badge) {
-    if (isSynced) {
-      badge.textContent = "Active & Synchronized";
-      badge.style.background = "rgba(34,197,94,0.18)";
-      badge.style.color = "#86efac";
-    } else {
-      badge.textContent = "Sync Pending";
-      badge.style.background = "rgba(245,158,11,0.18)";
-      badge.style.color = "#fcd34d";
-    }
+    badge.textContent = view.has_active_schedule ? (d.in_sync ? "Active · scheduler in sync" : "Active · scheduler syncing") : "No active schedule";
+    badge.className = "pill " + (d.in_sync ? "ok" : "warn");
   }
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? "--"; };
+  set("schedRev", view.revision); set("schedDaemonRev", d.loaded_revision);
+  set("schedActivated", view.activated_at_ist); set("schedSynced", d.synced_at_ist);
+  set("diagRevision", view.revision); set("diagRevisionSub", d.in_sync ? "Scheduler in sync" : "Scheduler syncing");
 
-  const schedOk = u.lifecycle_state !== "FAILED";
-  const ovSched = document.getElementById("ovSchedulerStatus");
-  if (ovSched) {
-    ovSched.innerHTML = isSynced
-      ? `<span style="color:#86efac;">&#9679; Healthy</span>`
-      : (schedOk ? `<span style="color:#fcd34d;">&#9679; Sync Pending</span>` : `<span style="color:#fca5a5;">&#9679; Attention</span>`);
-  }
-  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  setTxt("ovActiveSchedule", u.active_schedule_name || "FOUR_CYCLES_DAILY");
-  setTxt("ovProdCount", `${u.prod_cycles_per_day ?? (u.mappings || []).length} / day`);
-  setTxt("ovPubCount", `${u.pub_slots_per_day ?? (u.mappings || []).length} / day`);
-  setTxt("ovNextProd", u.next_production ? u.next_production.production_start_ist.replace("2026-", "") : "--");
-  setTxt("ovNextPub", u.next_publication ? u.next_publication.ist_display.replace("2026-", "") : "--");
-  const ls = u.last_successful_execution;
-  setTxt("ovLastSuccess", ls ? (ls.completed_at_ist || "Completed") : "None yet");
-
-  const prod = u.production || {};
-  const pub = u.publication || {};
-  setTxt("diagActiveVer", `v${u.active_schedule_version || 1} (Pub v${(pub.active || {}).schedule_version || 1})`);
-  setTxt("diagActiveRev", u.active_revision || "--");
-  setTxt("diagSchedRev", sync.loaded_revision || "--");
-  setTxt("diagDraftRev", ((prod.draft || {}).revision) || ((pub.draft || {}).revision) || "--");
-  setTxt("diagLastActivated", u.last_activated_at_ist || "--");
-  setTxt("diagLastSynced", sync.synced_at_ist || "--");
-  setTxt("diagWorkerStatus", u.publication_recovery_worker_status || "IDLE");
-  setTxt("diagUnmappedCount", String((u.unmapped_publication_slots || []).length));
+  const nxt = view.next_cycle, cur = view.current_cycle;
+  set("ovNextCycle", nxt ? `${nxt.name}` : "None scheduled");
+  set("ovNextCycleSub", nxt ? `${shortIst(nxt.production_start_ist)} · ${nxt.countdown_label}${nxt.target_publish_ist ? " · publishes " + shortIst(nxt.target_publish_ist) : ""}` : "Add or enable a cycle");
+  set("pillNextProd", `Next Prod: ${nxt ? shortIst(nxt.production_start_ist) : "--"}`);
+  set("pillNextPub", `Next Target Publish: ${nxt && nxt.target_publish_ist ? shortIst(nxt.target_publish_ist) : "--"}`);
+  if (cur) set("ovSchedulerSub", `${cur.name} in recovery window until ${shortIst(cur.recovery_deadline_ist)}`);
 }
 
-function renderUnifiedSchedule(u) {
-  if (!u) return;
-  stateCache.unified = u;
-  const prod = u.production || {};
-  const pub = u.publication || {};
-
-  if (!stateCache.uniDirty) {
-    stateCache.prodSpec = JSON.parse(JSON.stringify(prod.draft || prod.active || { profile_name: "FOUR_CYCLES_DAILY", timezone_name: "Asia/Kolkata", cycles: [] }));
-    stateCache.pubSpec = JSON.parse(JSON.stringify(pub.draft || pub.active || { timezone_name: "Asia/Kolkata", slots: [] }));
-    const prodVal = prod.draft_validation || {};
-    const pubVal = pub.draft_validation || {};
-    stateCache.uniValidated = Boolean(u.lifecycle_state === "VALID" || (prodVal.valid && pubVal.valid));
-  }
-
-  renderUnifiedOverview(u);
-
-  const pSpec = stateCache.prodSpec;
-  const pubSpec = stateCache.pubSpec;
-  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-  setVal("pubTimezone", pubSpec.timezone_name || pSpec.timezone_name || "Asia/Kolkata");
-  setVal("pubMissedBehavior", pubSpec.missed_slot_behavior || "next_slot");
-  setVal("pubOverlapPolicy", pubSpec.recovery_overlap_policy || "STRICT");
-  setVal("pubWaitForSlot", String(pubSpec.wait_for_slot !== false));
-
-  const wdWrap = document.getElementById("pubWeekdaysWrap");
-  if (wdWrap) {
-    const activeDays = new Set(pubSpec.weekdays || WEEKDAYS);
-    wdWrap.innerHTML = WEEKDAYS.map(d => `
-      <label style="display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border:1px solid var(--border);border-radius:8px;cursor:pointer;">
-        <input type="checkbox" class="pub-wd-cb" value="${d}" ${activeDays.has(d) ? "checked" : ""} onchange="markUnifiedDraftDirty()" />
-        <span>${d}</span>
-      </label>
-    `).join("");
-  }
-
-  const tbody = document.getElementById("uniScheduleBody");
-  const cycles = pSpec.cycles || [];
-  if (tbody) {
-    tbody.innerHTML = cycles.map((c, idx) => {
-      const s = findMappedSlot(c, pubSpec.slots || []) || ensureSlotForCycle(c);
-      const prodRecHours = Number(((c.recovery_duration_minutes ?? 240) / 60).toFixed(1));
-      const deadlineLabel = calcProdDeadlinePreview(c.start_time || "00:00", c.recovery_duration_minutes ?? 240);
-      const prepMin = Number(s.prep_window_minutes ?? 30);
-      const pubRecHours = Number(((s.recovery_duration_minutes ?? 240) / 60).toFixed(1));
-      const pubDeadline = minToHhmm(hhmmToMin(c.target_publish_time || "06:00") + Number(s.recovery_duration_minutes ?? 240) + (c.next_day ? 1440 : 0));
-
-      return `
-        <tr>
-          <td>
-            <div style="font-weight:600;margin-bottom:4px;">${c.name || `Cycle ${idx + 1}`}</div>
-            <div style="display:flex;gap:4px;flex-wrap:wrap;">
-              <button class="btn sm" onclick="openCycleForm(${idx})">Edit</button>
-              <button class="btn sm" onclick="moveProdCycle(${idx}, -1)" ${idx === 0 ? "disabled" : ""} title="Move Up">&uarr;</button>
-              <button class="btn sm" onclick="moveProdCycle(${idx}, 1)" ${idx === cycles.length - 1 ? "disabled" : ""} title="Move Down">&darr;</button>
-              <button class="btn danger sm" onclick="removeProdCycle(${idx})">Delete</button>
-            </div>
-          </td>
-          <td><input type="time" value="${c.start_time || "00:00"}" onchange="updateCycleRowField(${idx}, 'start_time', this.value)" /></td>
-          <td>
-            <input type="number" min="2" max="4" step="0.5" value="${prodRecHours}" onchange="updateCycleRowField(${idx}, 'prod_rec_hours', Number(this.value))" style="width:66px;" /> hrs
-          </td>
-          <td><strong>${deadlineLabel}</strong></td>
-          <td>
-            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-              <input type="checkbox" ${c.enabled !== false ? "checked" : ""} onchange="updateCycleRowField(${idx}, 'enabled', this.checked)" />
-              <span>${c.enabled !== false ? "ON" : "OFF"}</span>
-            </label>
-          </td>
-        </tr>
-      `;
-    }).join("") || `<tr><td colspan="5" style="color:var(--muted)">No cycles configured. Click + Add Cycle.</td></tr>`;
-  }
-
-  renderVisualTimeline();
-  renderCompactExecution(u);
-  updateActivationButtons();
+async function refreshSchedule() {
+  try { renderScheduleView(await apiJson("/api/schedule")); }
+  catch (err) { showToast("Schedule refresh failed: " + err.message, true); }
 }
 
-function updateCycleRowField(idx, field, val) {
-  const c = stateCache.prodSpec.cycles[idx];
-  if (!c) return;
-  const s = ensureSlotForCycle(c);
-  if (field === "start_time") c.start_time = val;
-  else if (field === "prod_rec_hours") c.recovery_duration_minutes = Math.round(Number(val || 4) * 60);
-  else if (field === "target_publish_time") {
-    c.target_publish_time = val;
-    s.time_ist = val;
-  } else if (field === "next_day") {
-    c.next_day = Boolean(val);
-  } else if (field === "pub_prep_min") {
-    s.prep_window_minutes = Math.round(Number(val || 30));
-  } else if (field === "pub_rec_hours") {
-    s.recovery_duration_minutes = Math.round(Number(val || 4) * 60);
-  } else if (field === "enabled") {
-    c.enabled = Boolean(val);
-    s.enabled = Boolean(val);
-  }
-  markUnifiedDraftDirty();
-  renderUnifiedSchedule(stateCache.unified);
+function scheduleSpec() {
+  return { profile_name: "CUSTOM", timezone_name: "Asia/Kolkata", cycles: schedState.cycles };
 }
+function markScheduleDirty() { schedState.dirty = true; renderScheduleTable(); document.getElementById("schedMessages").innerHTML = ""; }
+function discardScheduleEdits() { schedState.dirty = false; refreshSchedule(); document.getElementById("schedMessages").innerHTML = ""; }
 
-function renderVisualTimeline() {
-  const container = document.getElementById("uniVisualTimeline");
-  if (!container || !stateCache.prodSpec) return;
-  const cycles = stateCache.prodSpec.cycles || [];
-  const slots = (stateCache.pubSpec && stateCache.pubSpec.slots) || [];
-  const totalSpan = 1800;
-  const pct = (m) => `${Math.max(0, Math.min(100, (m / totalSpan) * 100)).toFixed(2)}%`;
-  const widthPct = (dur) => `${Math.max(0.8, Math.min(100, (dur / totalSpan) * 100)).toFixed(2)}%`;
-
-  const axis = [0, 360, 720, 1080, 1440, 1680].map(m => {
-    const lbl = m >= 1440 ? `${String(Math.floor((m - 1440) / 60)).padStart(2, "0")}:00 +1d` : `${String(Math.floor(m / 60)).padStart(2, "0")}:00`;
-    return `<span style="position:absolute;left:${pct(m)};font-size:10px;color:var(--muted);transform:translateX(-20%);">${lbl}</span>`;
-  }).join("");
-
-  const rowsHtml = cycles.map((c, idx) => {
-    if (c.enabled === false) {
-      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;opacity:0.45;"><div style="width:130px;font-size:12px;">${c.name} (OFF)</div><div style="flex:1;height:18px;background:rgba(148,163,184,0.1);border-radius:6px;"></div></div>`;
-    }
-    const s = findMappedSlot(c, slots) || {};
-    const pStart = hhmmToMin(c.start_time || "00:00");
-    const pRecDur = Number(c.recovery_duration_minutes ?? 240);
-    const pubBase = hhmmToMin(c.target_publish_time || "06:00") + (c.next_day ? 1440 : 0);
-    const prepDur = Number(s.prep_window_minutes ?? 30);
-    const pubRecDur = Number(s.recovery_duration_minutes ?? 240);
-    const selected = stateCache.selectedCycleIdx === idx;
-
-    return `
-      <div onclick="selectTimelineCycle(${idx})" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;cursor:pointer;padding:3px 6px;border-radius:8px;border:1px solid ${selected ? "var(--accent)" : "transparent"};">
-        <div style="width:130px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name || `Cycle ${idx + 1}`}</div>
-        <div style="position:relative;flex:1;height:20px;background:rgba(15,23,42,0.7);border-radius:6px;overflow:hidden;">
-          <div title="Production Start" style="position:absolute;left:${pct(pStart)};width:${widthPct(30)};height:100%;background:#38bdf8;"></div>
-          <div title="Production Recovery" style="position:absolute;left:${pct(pStart)};width:${widthPct(pRecDur)};height:100%;background:rgba(245,158,11,0.55);"></div>
-          <div title="Publication Prep" style="position:absolute;left:${pct(pubBase - prepDur)};width:${widthPct(prepDur)};height:100%;background:#a855f7;"></div>
-          <div title="Target Publish" style="position:absolute;left:${pct(pubBase)};width:${widthPct(18)};height:100%;background:#22c55e;"></div>
-          <div title="Publication Recovery" style="position:absolute;left:${pct(pubBase)};width:${widthPct(pubRecDur)};height:100%;background:rgba(20,184,166,0.45);"></div>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  container.innerHTML = `
-    <div style="position:relative;height:18px;margin-left:140px;margin-bottom:4px;">${axis}</div>
-    ${rowsHtml || `<div style="color:var(--muted);font-size:12px;">No cycles to display.</div>`}
-  `;
+function openScheduleCycleEditor(idx) {
+  schedState.editIndex = idx;
+  const used = new Set(schedState.cycles.map(c => c.cycle_id));
+  let n = schedState.cycles.length + 1; while (used.has(`cycle_${n}`)) n++;
+  const c = idx >= 0 ? schedState.cycles[idx] : {
+    cycle_id: `cycle_${n}`, name: `Cycle ${n}`, start_time: "09:00", recovery_duration_minutes: 240,
+    target_publish_time: "15:00", enabled: true, active_weekdays: [0, 1, 2, 3, 4, 5, 6],
+  };
+  document.getElementById("cycleEditorTitle").textContent = idx >= 0 ? "Edit Cycle" : "Add Cycle";
+  document.getElementById("ceId").value = c.cycle_id;
+  document.getElementById("ceId").disabled = idx >= 0;   // the id is the cycle's identity in history
+  document.getElementById("ceName").value = c.name;
+  document.getElementById("ceStart").value = c.start_time;
+  document.getElementById("ceRecH").value = Math.floor(c.recovery_duration_minutes / 60);
+  document.getElementById("ceRecM").value = c.recovery_duration_minutes % 60;
+  document.getElementById("ceTarget").value = c.target_publish_time || "";
+  document.getElementById("ceEnabled").checked = c.enabled !== false;
+  document.getElementById("ceDays").innerHTML = WEEKDAYS.map((d, i) =>
+    `<label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="ceDay" value="${i}" ${(c.active_weekdays || []).includes(i) ? "checked" : ""}> ${d}</label>`).join("");
+  document.getElementById("ceHint").textContent = "If the target publish time is earlier than the start time, it is the next day.";
+  document.getElementById("cycleEditorModal").style.display = "flex";
 }
-
-function selectTimelineCycle(idx) {
-  stateCache.selectedCycleIdx = idx;
-  renderVisualTimeline();
-  const c = (stateCache.prodSpec.cycles || [])[idx];
-  const detail = document.getElementById("uniSelectedCycleDetail");
-  if (!c || !detail) return;
-  const s = findMappedSlot(c, (stateCache.pubSpec && stateCache.pubSpec.slots) || []) || {};
-  const pStart = hhmmToMin(c.start_time || "00:00");
-  const pRecDur = Number(c.recovery_duration_minutes ?? 240);
-  const pDeadline = minToHhmm(pStart + pRecDur).label;
-  const pubBase = hhmmToMin(c.target_publish_time || "06:00") + (c.next_day ? 1440 : 0);
-  const prepStart = minToHhmm(pubBase - Number(s.prep_window_minutes ?? 30)).label;
-  const pubTarget = minToHhmm(pubBase).label;
-  const pubRecEnd = minToHhmm(pubBase + Number(s.recovery_duration_minutes ?? 240)).label;
-  detail.innerHTML = `
-    <strong>${c.name}</strong>:
-    Prod Start <strong>${c.start_time}</strong> &rarr;
-    Prod Recovery ends <strong>${pDeadline}</strong> &rarr;
-    Pub Prep starts <strong>${prepStart}</strong> &rarr;
-    Target Publish <strong>${pubTarget}</strong> &rarr;
-    Pub Recovery ends <strong>${pubRecEnd}</strong>.
-  `;
+function closeScheduleCycleEditor() { document.getElementById("cycleEditorModal").style.display = "none"; }
+function applyScheduleCycleEditor() {
+  const id = document.getElementById("ceId").value.trim();
+  const rec = Number(document.getElementById("ceRecH").value || 0) * 60 + Number(document.getElementById("ceRecM").value || 0);
+  const c = {
+    cycle_id: id,
+    name: document.getElementById("ceName").value.trim(),
+    start_time: document.getElementById("ceStart").value,
+    recovery_duration_minutes: rec,
+    target_publish_time: document.getElementById("ceTarget").value || null,
+    enabled: document.getElementById("ceEnabled").checked,
+    active_weekdays: [...document.querySelectorAll(".ceDay:checked")].map(x => Number(x.value)),
+  };
+  if (!c.cycle_id || !c.name || !c.start_time) { showToast("Cycle ID, name and start time are required.", true); return; }
+  if (schedState.editIndex < 0 && schedState.cycles.some(x => x.cycle_id === c.cycle_id)) { showToast("That cycle ID is already used.", true); return; }
+  if (schedState.editIndex >= 0) schedState.cycles[schedState.editIndex] = c; else schedState.cycles.push(c);
+  schedState.cycles.sort((a, b) => hhmmMinutes(a.start_time) - hhmmMinutes(b.start_time));
+  closeScheduleCycleEditor();
+  markScheduleDirty();
 }
-
-function renderCompactExecution(u) {
-  const tbody = document.getElementById("uniCompactExecBody");
-  const detBox = document.getElementById("uniExecDetailsBox");
-  const rows = u.compact_execution || [];
-  if (tbody) {
-    tbody.innerHTML = rows.map(r => {
-      const chipCls = r.overall_status === "Success" || r.overall_status === "Scheduled" ? "completed" : (r.overall_status === "In Progress" ? "running" : (r.overall_status === "Attention" ? "failed" : ""));
-      const recNote = r.recovery_needed ? `<div style="font-size:11px;color:#fcd34d;margin-top:2px;">Recovery: ${r.recovery_detail}</div>` : "";
-      return `
-        <tr>
-          <td><strong>${r.cycle_name || r.cycle_id}</strong></td>
-          <td>${r.production_state}${recNote}</td>
-          <td>${r.publication_state}</td>
-          <td><span class="chip ${chipCls}">${r.overall_status}</span></td>
-        </tr>
-      `;
-    }).join("") || `<tr><td colspan="4" style="color:var(--muted)">No execution data available.</td></tr>`;
-  }
-  if (detBox) {
-    detBox.innerHTML = rows.map(r => `
-      <div style="margin-bottom:4px;">
-        <strong>${r.cycle_name || r.cycle_id}:</strong>
-        Job=${r.production_job_id || "none"} | Prod Window=${r.production_start_ist || "--"}..${r.production_recovery_deadline_ist || "--"} |
-        Pub=${r.publication_time_ist || "--"} (Rec end ${r.publication_recovery_deadline_ist || "--"}) | Video=${r.youtube_video_id || "pending"}
-      </div>
-    `).join("") || "No additional diagnostics.";
-  }
-}
-
-function openCycleForm(idx) {
-  stateCache.editingCycleIdx = idx;
-  const card = document.getElementById("cycleFormCard");
-  const title = document.getElementById("cycleFormTitle");
-  if (!card) return;
-  if (idx >= 0 && stateCache.prodSpec && stateCache.prodSpec.cycles[idx]) {
-    const c = stateCache.prodSpec.cycles[idx];
-    const s = findMappedSlot(c, (stateCache.pubSpec && stateCache.pubSpec.slots) || []) || {};
-    title.textContent = `Edit Cycle: ${c.name}`;
-    document.getElementById("cfName").value = c.name || "";
-    document.getElementById("cfProdStart").value = c.start_time || "06:00";
-    document.getElementById("cfProdRecHours").value = Number(((c.recovery_duration_minutes ?? 240) / 60).toFixed(1));
-    document.getElementById("cfPubTime").value = c.target_publish_time || "12:00";
-    document.getElementById("cfNextDay").checked = Boolean(c.next_day);
-    document.getElementById("cfPubPrepMin").value = Number(s.prep_window_minutes ?? 30);
-    document.getElementById("cfPubRecHours").value = Number(((s.recovery_duration_minutes ?? 240) / 60).toFixed(1));
-    document.getElementById("cfEnabled").value = String(c.enabled !== false);
-  } else {
-    title.textContent = "Add Production Cycle";
-    document.getElementById("cfName").value = `Cycle ${(stateCache.prodSpec.cycles || []).length + 1}`;
-    document.getElementById("cfProdStart").value = "15:00";
-    document.getElementById("cfProdRecHours").value = "4";
-    document.getElementById("cfPubTime").value = "21:00";
-    document.getElementById("cfNextDay").checked = false;
-    document.getElementById("cfPubPrepMin").value = "30";
-    document.getElementById("cfPubRecHours").value = "4";
-    document.getElementById("cfEnabled").value = "true";
-  }
-  card.style.display = "block";
-}
-
-function closeCycleForm() {
-  const card = document.getElementById("cycleFormCard");
-  if (card) card.style.display = "none";
-}
-
-function saveCycleForm() {
-  if (!stateCache.prodSpec) stateCache.prodSpec = { profile_name: "CUSTOM", timezone_name: "Asia/Kolkata", cycles: [] };
-  const idx = stateCache.editingCycleIdx ?? -1;
-  const name = document.getElementById("cfName").value.trim() || "Custom Cycle";
-  const start = document.getElementById("cfProdStart").value || "06:00";
-  const prodRecMin = Math.round(Number(document.getElementById("cfProdRecHours").value || 4) * 60);
-  const pubTime = document.getElementById("cfPubTime").value || "12:00";
-  const nextDay = document.getElementById("cfNextDay").checked;
-  const prepMin = Math.round(Number(document.getElementById("cfPubPrepMin").value || 30));
-  const pubRecMin = Math.round(Number(document.getElementById("cfPubRecHours").value || 4) * 60);
-  const enabled = document.getElementById("cfEnabled").value === "true";
-
-  let cycle;
-  if (idx >= 0 && stateCache.prodSpec.cycles[idx]) {
-    cycle = stateCache.prodSpec.cycles[idx];
-    cycle.name = name;
-    cycle.start_time = start;
-    cycle.recovery_duration_minutes = prodRecMin;
-    cycle.target_publish_time = pubTime;
-    cycle.next_day = nextDay;
-    cycle.enabled = enabled;
-  } else {
-    const cid = `cycle_${Date.now().toString().slice(-4)}`;
-    cycle = {
-      cycle_id: cid,
-      name,
-      start_time: start,
-      recovery_duration_minutes: prodRecMin,
-      target_publish_time: pubTime,
-      active_weekdays: [0, 1, 2, 3, 4, 5, 6],
-      next_day: nextDay,
-      enabled
-    };
-    stateCache.prodSpec.cycles.push(cycle);
-  }
-  const slot = ensureSlotForCycle(cycle);
-  slot.label = `${name} Publish`;
-  slot.time_ist = pubTime;
-  slot.prep_window_minutes = prepMin;
-  slot.recovery_duration_minutes = pubRecMin;
-  slot.enabled = enabled;
-
-  closeCycleForm();
-  markUnifiedDraftDirty();
-  renderUnifiedSchedule(stateCache.unified);
-}
-
-function moveProdCycle(idx, delta) {
-  const arr = stateCache.prodSpec.cycles || [];
-  const target = idx + delta;
-  if (target < 0 || target >= arr.length) return;
-  const tmp = arr[idx];
-  arr[idx] = arr[target];
-  arr[target] = tmp;
-  markUnifiedDraftDirty();
-  renderUnifiedSchedule(stateCache.unified);
-}
-
-async function removeProdCycle(idx) {
-  const c = (stateCache.prodSpec.cycles || [])[idx];
-  if (!c) return;
-  const ok = await askConfirm("Delete Production Cycle?", `Remove "${c.name}" and its mapped publication slot from the draft?`);
+function toggleScheduleCycle(i) { schedState.cycles[i].enabled = !schedState.cycles[i].enabled; markScheduleDirty(); }
+async function deleteScheduleCycle(i) {
+  const c = schedState.cycles[i];
+  const ok = await askConfirm(`Delete ${c.name}?`, "The cycle is removed from the draft. Past productions and their history are kept.");
   if (!ok) return;
-  stateCache.prodSpec.cycles.splice(idx, 1);
-  if (stateCache.pubSpec && Array.isArray(stateCache.pubSpec.slots)) {
-    stateCache.pubSpec.slots = stateCache.pubSpec.slots.filter(s => s.mapped_cycle_id !== c.cycle_id && s.time_ist !== c.target_publish_time);
-  }
-  markUnifiedDraftDirty();
-  renderUnifiedSchedule(stateCache.unified);
+  schedState.cycles.splice(i, 1);
+  markScheduleDirty();
 }
-
-async function loadProdPreset() {
-  const preset_name = document.getElementById("prodPresetSelect").value;
-  const [prodSpec, pubRes] = await Promise.all([
-    apiJson(`/api/control-center/schedule/preset/${preset_name}`),
-    apiJson("/api/control-center/publication-schedule/preset", { method: "POST", body: JSON.stringify({ preset_name: "FOLLOW_PRODUCTION_CYCLE" }) })
-  ]);
-  stateCache.prodSpec = prodSpec;
-  stateCache.pubSpec = pubRes.draft;
-  (stateCache.prodSpec.cycles || []).forEach(c => {
-    const s = ensureSlotForCycle(c);
-    s.time_ist = c.target_publish_time;
-    s.label = `${c.name} Publish`;
-  });
-  markUnifiedDraftDirty();
-  renderUnifiedSchedule(stateCache.unified);
-  showToast(`Loaded preset ${preset_name} into draft.`);
-}
-
-async function refreshUnifiedSchedule() {
-  if (stateCache.isRefreshingUni) return;
-  stateCache.isRefreshingUni = true;
-  const banner = document.getElementById("uniLoadingBanner");
-  if (banner) banner.style.display = "block";
+async function loadSchedulePreset() {
+  const name = document.getElementById("schedPresetSelect").value;
   try {
-    const u = await apiJson("/api/control-center/unified-schedule");
-    renderUnifiedSchedule(u);
-  } catch (err) {
-    showToast("Schedule load failed: " + err.message, true);
-  } finally {
-    stateCache.isRefreshingUni = false;
-    if (banner) banner.style.display = "none";
-  }
+    const spec = await apiJson(`/api/schedule/presets/${name}`);
+    schedState.cycles = spec.cycles;
+    markScheduleDirty();
+    showToast("Preset loaded into the editor. You can change it before activating.");
+  } catch (err) { showToast(err.message, true); }
 }
-
-async function refreshPublicationRecovery() {
-  await refreshUnifiedSchedule();
+function showScheduleResult(res) {
+  const box = document.getElementById("schedMessages");
+  const errs = (res.errors || []).map(e => `<div style="color:#fca5a5;">✗ ${escHtml(e)}</div>`).join("");
+  const warns = (res.warnings || []).map(w => `<div style="color:#fcd34d;">! ${escHtml(w)}</div>`).join("");
+  const ok = res.valid ? `<div style="color:#86efac;">✓ Schedule is valid.</div>` : "";
+  box.innerHTML = ok + errs + warns;
+  return res.valid;
 }
-
-function collectUnifiedSpecs() {
-  const pSpec = stateCache.prodSpec || { profile_name: "CUSTOM", timezone_name: "Asia/Kolkata", cycles: [] };
-  pSpec.timezone_name = document.getElementById("pubTimezone").value.trim() || "Asia/Kolkata";
-  pSpec.cycles = (pSpec.cycles || []).map((c, idx) => ({
-    cycle_id: c.cycle_id || `cycle_${idx + 1}`,
-    name: c.name || `Cycle ${idx + 1}`,
-    start_time: c.start_time || "00:00",
-    recovery_duration_minutes: Number(c.recovery_duration_minutes ?? 240),
-    target_publish_time: c.target_publish_time || "06:00",
-    active_weekdays: Array.isArray(c.active_weekdays) && c.active_weekdays.length ? c.active_weekdays : [0, 1, 2, 3, 4, 5, 6],
-    next_day: Boolean(c.next_day),
-    enabled: c.enabled !== false
-  }));
-
-  const pubSpec = stateCache.pubSpec || { slots: [] };
-  pubSpec.timezone_name = pSpec.timezone_name;
-  pubSpec.missed_slot_behavior = document.getElementById("pubMissedBehavior").value;
-  pubSpec.recovery_overlap_policy = document.getElementById("pubOverlapPolicy").value;
-  pubSpec.wait_for_slot = document.getElementById("pubWaitForSlot").value === "true";
-  pubSpec.weekdays = Array.from(document.querySelectorAll(".pub-wd-cb:checked")).map(cb => cb.value);
-  if (!pubSpec.weekdays.length) pubSpec.weekdays = [...WEEKDAYS];
-
-  const activeCycleIds = new Set(pSpec.cycles.map(c => c.cycle_id));
-  pSpec.cycles.forEach(c => {
-    const s = ensureSlotForCycle(c);
-    s.time_ist = c.target_publish_time;
-    s.enabled = c.enabled !== false;
-  });
-  pubSpec.slots = (pubSpec.slots || []).filter(s => !s.mapped_cycle_id || activeCycleIds.has(s.mapped_cycle_id));
-  return { pSpec, pubSpec };
+async function saveScheduleDraft() {
+  try { showScheduleResult(await apiJson("/api/schedule/draft", { method: "PUT", body: JSON.stringify(scheduleSpec()) })); showToast("Draft saved."); }
+  catch (err) { showToast(err.message, true); }
 }
-
-async function saveUnifiedDraft() {
-  if (stateCache.isSubmittingUni) return;
-  stateCache.isSubmittingUni = true;
-  try {
-    const { pSpec, pubSpec } = collectUnifiedSpecs();
-    await apiJson("/api/control-center/unified-schedule/draft", {
-      method: "POST",
-      body: JSON.stringify({ confirm: false, production_spec: pSpec, publication_spec: pubSpec })
-    });
-    stateCache.uniDirty = false;
-    stateCache.uniValidated = false;
-    showToast("Draft saved.");
-    await refreshUnifiedSchedule();
-  } catch (err) {
-    showToast("Save failed: " + err.message, true);
-  } finally {
-    stateCache.isSubmittingUni = false;
-    updateActivationButtons();
-  }
+async function validateSchedule() {
+  try { return showScheduleResult(await apiJson("/api/schedule/validate", { method: "POST", body: JSON.stringify(scheduleSpec()) })); }
+  catch (err) { showToast(err.message, true); return false; }
 }
-
-async function validateUnifiedDraft() {
-  if (stateCache.isSubmittingUni) return;
-  stateCache.isSubmittingUni = true;
-  const vBox = document.getElementById("uniValidationBox");
-  try {
-    const { pSpec, pubSpec } = collectUnifiedSpecs();
-    const res = await apiJson("/api/control-center/unified-schedule/validate", {
-      method: "POST",
-      body: JSON.stringify({ confirm: false, production_spec: pSpec, publication_spec: pubSpec })
-    });
-    const lines = [];
-    (res.errors || []).forEach(e => lines.push(`<div style="color:#fca5a5;"><strong>ERROR:</strong> ${e}</div>`));
-    (res.warnings || []).forEach(w => lines.push(`<div style="color:#fcd34d;"><strong>WARNING:</strong> ${w}</div>`));
-    (res.successes || []).forEach(s => lines.push(`<div style="color:#86efac;"><strong>SUCCESS:</strong> ${s}</div>`));
-    if (vBox) {
-      vBox.style.display = "block";
-      vBox.style.borderColor = res.valid ? "#22c55e" : "#ef4444";
-      vBox.innerHTML = lines.join("");
-    }
-    stateCache.uniDirty = false;
-    stateCache.uniValidated = Boolean(res.valid);
-    showToast(res.valid ? "Schedule validation passed." : "Validation found issues.", !res.valid);
-  } catch (err) {
-    stateCache.uniValidated = false;
-    if (vBox) {
-      vBox.style.display = "block";
-      vBox.style.borderColor = "#ef4444";
-      vBox.innerHTML = `<div style="color:#fca5a5;"><strong>ERROR:</strong> ${err.message}</div>`;
-    }
-    showToast("Validation failed: " + err.message, true);
-  } finally {
-    stateCache.isSubmittingUni = false;
-    updateActivationButtons();
-  }
-}
-
-async function activateUnifiedSchedule() {
-  if (!stateCache.uniValidated || stateCache.uniDirty) {
-    showToast("Validate the current schedule before activating.", true);
-    return;
-  }
-  const ok = await askConfirm(
-    "Activate Schedule?",
-    "Applies the validated schedule, updates APScheduler, and verifies scheduler synchronization."
-  );
-  if (!ok || stateCache.isSubmittingUni) return;
-  stateCache.isSubmittingUni = true;
-  updateActivationButtons();
-  const statusBox = document.getElementById("uniActivationStatusBox");
-  try {
-    const { pSpec, pubSpec } = collectUnifiedSpecs();
-    const res = await apiJson("/api/control-center/unified-schedule/activate", {
-      method: "POST",
-      body: JSON.stringify({ confirm: true, production_spec: pSpec, publication_spec: pubSpec })
-    });
-    stateCache.uniDirty = false;
-    stateCache.uniValidated = false;
-    if (statusBox) {
-      statusBox.style.display = "block";
-      if (res.status === "ACTIVE" && res.is_synchronized) {
-        statusBox.style.borderColor = "#22c55e";
-        statusBox.innerHTML = `<strong style="color:#86efac;">GREEN: Schedule Active and Synchronized.</strong>`;
-      } else if (res.status === "ACTIVE") {
-        statusBox.style.borderColor = "#f59e0b";
-        statusBox.innerHTML = `<strong style="color:#fcd34d;">YELLOW: Schedule Activated, Scheduler Synchronization Pending.</strong>`;
-      } else {
-        statusBox.style.borderColor = "#ef4444";
-        statusBox.innerHTML = `<strong style="color:#fca5a5;">RED: Schedule Activation Failed.</strong> ${res.reason || ""}`;
-      }
-    }
-    showToast("Schedule activated and synchronized.");
-    await refreshControlAndCycles();
-  } catch (err) {
-    if (statusBox) {
-      statusBox.style.display = "block";
-      statusBox.style.borderColor = "#ef4444";
-      statusBox.innerHTML = `<strong style="color:#fca5a5;">RED: Schedule Activation Failed.</strong> ${err.message}`;
-    }
-    showToast("Activation failed: " + err.message, true);
-  } finally {
-    stateCache.isSubmittingUni = false;
-    updateActivationButtons();
-  }
-}
-
-async function cancelUnifiedDraft() {
-  const ok = await askConfirm("Discard Draft?", "Discard unsaved schedule draft changes and restore the active schedule?");
+async function activateSchedule() {
+  if (!(await validateSchedule())) { showToast("Fix the errors before activating.", true); return; }
+  const enabled = schedState.cycles.filter(c => c.enabled).length;
+  const ok = await askConfirm("Activate this schedule?", `${enabled} enabled cycle(s). The scheduler switches to it within a minute. A production that is already running is not interrupted.`);
   if (!ok) return;
-  await Promise.all([
-    apiJson("/api/control-center/schedule/draft", { method: "DELETE" }),
-    apiJson("/api/control-center/publication-schedule/cancel", { method: "POST" })
-  ]);
-  stateCache.uniDirty = false;
-  stateCache.uniValidated = false;
-  const vBox = document.getElementById("uniValidationBox");
-  if (vBox) vBox.style.display = "none";
-  showToast("Draft discarded.");
-  await refreshUnifiedSchedule();
+  try {
+    await apiJson("/api/schedule/activate", { method: "POST", body: JSON.stringify({ confirm: true, spec: scheduleSpec() }) });
+    schedState.dirty = false;
+    showToast("Schedule activated.");
+    refreshSchedule();
+  } catch (err) { showToast("Activation failed: " + err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Production Monitor + Overview cards
+// ---------------------------------------------------------------------------
+async function refreshMonitor() {
+  try {
+    const m = await apiJson("/api/production/monitor");
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? "--"; };
+    const j = m.active_job;
+    set("ovQueueCount", m.publishing_queue_count ?? "--");
+    const ls = m.last_success;
+    set("ovLastSuccess", ls ? (ls.topic || ls.job_id) : "None yet");
+    set("ovLastSuccessSub", ls ? `${ls.completed_at_ist || ""}${ls.publishing_state ? " · " + ls.publishing_state : ""}` : "--");
+    const errBox = document.getElementById("monError");
+    if (!j) {
+      set("ovActiveJob", "None"); set("ovActiveJobSub", "No production running");
+      set("monStage", "Idle"); set("monProgress", "--"); set("monActivity", "--"); set("monRecovery", "--");
+      errBox.style.display = "none";
+      return;
+    }
+    set("ovActiveJob", j.status_label);
+    set("ovActiveJobSub", `${j.job_id}${j.topic ? " · " + j.topic : ""}`);
+    set("monStage", `${j.stage || "--"} (${j.status_label})`);
+    set("monProgress", `${j.progress_pct}%`);
+    const ago = j.seconds_since_activity;
+    set("monActivity", j.last_activity_ist ? `${shortIst(j.last_activity_ist)} (${ago < 120 ? ago + " s" : Math.round(ago / 60) + " min"} ago)` : "--");
+    const r = j.recovery || {};
+    set("monRecovery", r.next_retry_at_ist
+      ? `Retry at ${shortIst(r.next_retry_at_ist)} · attempt ${r.production_attempts}/${r.max_production_attempts}`
+      : (j.status === "HANDOFF_PENDING" ? `Publishing retry ${r.publish_attempts}` : `Attempt ${r.production_attempts + 1}/${r.max_production_attempts}`));
+    document.getElementById("pipelineProgressFill").style.width = `${j.progress_pct}%`;
+    set("pipelinePct", `${Math.round(j.progress_pct)}%`);
+    set("pipelineSummary", `${j.topic || j.job_id} · ${j.stage || j.status}`);
+    if (j.error && j.status !== "RUNNING") { errBox.textContent = j.error; errBox.style.display = "block"; }
+    else errBox.style.display = "none";
+  } catch (err) { /* overview keeps last values */ }
 }
 
 function renderStorageFields(cfg) {
@@ -2215,7 +1698,9 @@ async function refreshAll() {
     refreshOverviewAndHealth(),
     refreshControlAndCycles(),
     refreshPipeline(),
-    refreshPublishing()
+    refreshPublishing(),
+    refreshSchedule(),
+    refreshMonitor()
   ]);
 }
 
@@ -2264,6 +1749,7 @@ setInterval(() => {
   refreshPipeline();
 }, 8000);
 setInterval(refreshDeployment, 30000);
+setInterval(() => { refreshSchedule(); refreshMonitor(); }, 15000);
 </script>
 </body>
 </html>

@@ -1912,6 +1912,12 @@ async def api_schedule_view(_: None = Depends(require_local_control)):
     return schedule_service.schedule_view()
 
 
+@app.get("/api/production/monitor")
+async def api_production_monitor(_: None = Depends(require_local_control)):
+    from backend.app.services import production_monitor_service
+    return production_monitor_service.monitor_view()
+
+
 @app.get("/api/schedule/presets/{name}")
 async def api_schedule_preset(name: str, _: None = Depends(require_local_control)):
     from backend.app.services import schedule_service

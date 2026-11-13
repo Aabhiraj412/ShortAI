@@ -249,7 +249,9 @@ def test_secret_redaction_and_dashboard_endpoints():
     r_dash = client.get("/dashboard")
     assert r_dash.status_code == 200
     assert "Lemo-Opuscar" in r_dash.text
-    assert "Publication Schedule Editor" in r_dash.text
+    # Simplified scheduler: production cycles with a target publish time; no publication-slot editor.
+    assert "Production Schedule — Asia/Kolkata" in r_dash.text
+    assert "Publication Schedule Editor" not in r_dash.text
 
     r_pub = client.get("/api/control-center/publication-schedule")
     assert r_pub.status_code == 200

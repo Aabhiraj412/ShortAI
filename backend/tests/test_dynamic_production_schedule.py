@@ -259,7 +259,8 @@ def test_dashboard_and_timeline_endpoint(isolated_prod_db, monkeypatch):
     with TestClient(main_module.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as client:
         dash = client.get("/dashboard")
         assert dash.status_code == 200
-        assert "Production Scheduler" in dash.text
+        assert "Production Schedule — Asia/Kolkata" in dash.text
+        assert "Publication Schedule" not in dash.text and "uniScheduleBody" not in dash.text
         tl = client.get("/api/control-center/schedule/timeline")
         assert tl.status_code == 200
         assert "upcoming_cycles" in tl.json()

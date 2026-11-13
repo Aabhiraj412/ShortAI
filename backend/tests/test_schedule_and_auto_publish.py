@@ -465,3 +465,33 @@ def test_manual_policy_keeps_previous_completion_behaviour(pub, settings_db, han
     assert handoff_job["events"] == ["PUBLISHING_QUEUE_ENTRY_CREATED", "PRODUCTION_CYCLE_COMPLETED"]
     assert pub["pdb"].get_publication(lid)["youtube_video_id"] is None
     pub["yt"].videos.return_value.insert.assert_not_called()
+
+
+# =============================================================================
+# Simple dashboard
+# =============================================================================
+
+def test_dashboard_shows_simple_sections_and_monitor(settings_db, monkeypatch):
+    from datetime import datetime as _dt
+    monkeypatch.setattr(main_module, "init_db", lambda: None)
+    ss.activate(spec(cyc("a", "06:00", "12:00")), confirm=True)
+    with settings_db() as db:
+        db.add(JobModel(id="a_20261113_0600", date_str="2026-11-13", status="RETRY_SCHEDULED", current_stage="RENDER_FAILED",
+                        progress_pct=60.0, retry_count=1, max_retries=3, heartbeat_at=_dt.utcnow(),
+                        error_details="[RENDER_FAILURE] RenderFailure: page never signalled readiness",
+                        checkpoint_data_json=json.dumps({"cycle_state": {"next_retry_at_utc": "2026-11-13T01:00:00Z",
+                                                                         "error_classification": "RENDER_FAILURE"}})))
+        db.add(JobModel(id="test_auto_job_001", date_str="2026-11-13", status="RUNNING"))  # test rows are ignored
+        db.commit()
+    with TestClient(main_module.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as c:
+        html = c.get("/dashboard").text
+        for section in ("Overview", "Production Schedule — Asia/Kolkata", "Production Monitor", "Publishing Queue",
+                        "Add Cycle", "Save Draft", "Validate", "Activate Schedule", "Technical"):
+            assert section in html, section
+        mon = c.get("/api/production/monitor").json()
+        assert mon["active_job"]["job_id"] == "a_20261113_0600"
+        assert mon["active_job"]["recovery"]["classification"] == "RENDER_FAILURE"
+        assert mon["active_job"]["recovery"]["next_retry_at_ist"].endswith("06:30:00 IST")
+        assert all(not j["job_id"].startswith("test_") for j in mon["recent_jobs"])
+    with TestClient(main_module.app, base_url="http://127.0.0.1:8000", client=("203.0.113.9", 1)) as remote:
+        assert remote.get("/api/production/monitor").status_code == 403

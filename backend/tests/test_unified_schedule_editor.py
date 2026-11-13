@@ -397,10 +397,11 @@ def test_20_unified_api_endpoints_and_failed_activation_reporting(isolated_unifi
         # Dashboard HTML contains production scheduler
         resp_dash = client.get("/dashboard")
         assert resp_dash.status_code == 200
-        assert "Production Scheduler" in resp_dash.text
-        assert "uniScheduleBody" in resp_dash.text
-        assert "uniVisualTimeline" in resp_dash.text
-        assert "uniCompactExecBody" in resp_dash.text
+        # The dashboard now uses the simple Production Schedule editor (/api/schedule);
+        # the unified/publication-slot editor is no longer part of the active UI.
+        assert "Production Schedule — Asia/Kolkata" in resp_dash.text
+        for legacy in ("uniScheduleBody", "uniVisualTimeline", "uniCompactExecBody", "Pub Prep", "Unmapped"):
+            assert legacy not in resp_dash.text
 
 
 def test_21_unified_draft_validate_missing_and_duplicate_mapping(isolated_unified_db):
