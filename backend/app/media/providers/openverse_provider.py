@@ -11,6 +11,7 @@ import urllib.request
 from typing import List
 
 from backend.app.media.license_verifier import LicenseVerifier
+from backend.app.media.net import fetch_json
 from backend.app.media.models import LicenseStatus, LicenseType, MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -43,8 +44,8 @@ class OpenverseProvider(BaseMediaProvider):
 
         assets: List[MediaAsset] = []
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                              headers=dict(req.header_items()))
 
             results = data.get("results", [])
             for item in results:
@@ -88,11 +89,12 @@ class OpenverseProvider(BaseMediaProvider):
                     mime_type=f"image/{(item.get('filetype') or 'jpeg').lower().replace('jpg', 'jpeg')}",
                     verification_status=status,
                     rejection_reason=reason,
-                    search_query=query
+                    search_query=query,
+                    tags=[str(t.get("name")) for t in (item.get("tags") or []) if isinstance(t, dict) and t.get("name")][:30],
                 )
                 assets.append(asset)
         except Exception as e:
-            logger.info("Openverse search query '%s' failed or timed out: %s", query, e)
+            logger.warning("Openverse search query '%s' failed or timed out: %s", query, e)
 
         return assets
 

@@ -11,6 +11,7 @@ import urllib.request
 from typing import List
 
 from backend.app.media.license_verifier import LicenseVerifier
+from backend.app.media.net import fetch_json
 from backend.app.media.models import MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -60,8 +61,8 @@ class InternetArchiveProvider(BaseMediaProvider):
         )
         assets: List[MediaAsset] = []
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                              headers=dict(req.header_items()))
             docs = data.get("response", {}).get("docs", [])
             for doc in docs:
                 ident = doc.get("identifier")
@@ -106,7 +107,7 @@ class InternetArchiveProvider(BaseMediaProvider):
                     search_query=query,
                 ))
         except Exception as e:
-            logger.info("Internet Archive search '%s' failed or timed out: %s", query, e)
+            logger.warning("Internet Archive search '%s' failed or timed out: %s", query, e)
         return assets
 
     async def search_media(self, query: str, limit: int = 6) -> List[MediaAsset]:

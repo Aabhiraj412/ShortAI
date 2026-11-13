@@ -12,6 +12,7 @@ import urllib.request
 from typing import List
 
 from backend.app.media.license_verifier import LicenseVerifier
+from backend.app.media.net import fetch_json
 from backend.app.media.models import LicenseStatus, LicenseType, MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -103,6 +104,8 @@ class WikimediaProvider(BaseMediaProvider):
                 mime_type=mime or "image/jpeg",
                 asset_type="existing_animation" if mime in ("image/gif", "video/webm") else "image",
                 original_filename=raw_title,
+                description=strip_html(ext.get("ImageDescription", {}).get("value", ""))[:800],
+                tags=[c.strip() for c in strip_html(ext.get("Categories", {}).get("value", "")).split("|") if c.strip()][:30],
                 verification_status=status,
                 rejection_reason=reason,
                 search_query=query
@@ -131,12 +134,12 @@ class WikimediaProvider(BaseMediaProvider):
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                              headers=dict(req.header_items()))
             pages = data.get("query", {}).get("pages", {})
             return self._parse_commons_pages(pages, query=topic_title or normalized[0])
         except Exception as e:
-            logger.info("Wikimedia batch file lookup failed: %s", e)
+            logger.warning("Wikimedia batch file lookup failed: %s", e)
             return []
 
     def _sync_fetch(self, query: str, limit: int) -> List[MediaAsset]:
@@ -160,13 +163,13 @@ class WikimediaProvider(BaseMediaProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                              headers=dict(req.header_items()))
 
             pages = data.get("query", {}).get("pages", {})
             return self._parse_commons_pages(pages, query=query)
         except Exception as e:
-            logger.info("Wikimedia search query '%s' failed or timed out: %s", query, e)
+            logger.warning("Wikimedia search query '%s' failed or timed out: %s", query, e)
             return []
 
     async def search_media(self, query: str, limit: int = 10) -> List[MediaAsset]:

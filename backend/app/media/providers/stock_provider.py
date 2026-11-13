@@ -12,6 +12,7 @@ import urllib.request
 from typing import List, Optional
 
 from backend.app.media.license_verifier import LicenseVerifier
+from backend.app.media.net import fetch_json
 from backend.app.media.models import MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -38,8 +39,8 @@ class PexelsProvider(BaseMediaProvider):
         req = urllib.request.Request(url, headers={"Authorization": self.api_key, "User-Agent": "CrazzyDocsStudio/1.0"})
         assets: List[MediaAsset] = []
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                              headers=dict(req.header_items()))
             self.last_status = "ok"
             for ph in data.get("photos", []):
                 src = ph.get("src", {})
@@ -78,7 +79,7 @@ class PexelsProvider(BaseMediaProvider):
                 ))
         except Exception as e:
             self.last_status = f"error: {e}"
-            logger.info("Pexels query '%s' failed: %s", query, e)
+            logger.warning("Pexels query '%s' failed: %s", query, e)
         return assets
 
     async def search_media(self, query: str, limit: int = 6) -> List[MediaAsset]:
@@ -105,8 +106,8 @@ class PixabayProvider(BaseMediaProvider):
         req = urllib.request.Request(url, headers={"User-Agent": "CrazzyDocsStudio/1.0"})
         assets: List[MediaAsset] = []
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                              headers=dict(req.header_items()))
             self.last_status = "ok"
             for hit in data.get("hits", []):
                 dl = hit.get("largeImageURL") or hit.get("webformatURL") or ""
@@ -144,7 +145,7 @@ class PixabayProvider(BaseMediaProvider):
                 ))
         except Exception as e:
             self.last_status = f"error: {e}"
-            logger.info("Pixabay query '%s' failed: %s", query, e)
+            logger.warning("Pixabay query '%s' failed: %s", query, e)
         return assets
 
     async def search_media(self, query: str, limit: int = 6) -> List[MediaAsset]:

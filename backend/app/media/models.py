@@ -59,6 +59,8 @@ class MediaAsset:
     attribution_requirements: str = "Credit creator/source in manifest and video description"
     modification_permitted: bool = True
     share_alike_compatible: bool = True
+    description: str = ""            # provider caption/description (plain text), used for relevance ranking
+    tags: List[str] = field(default_factory=list)   # provider categories / keywords
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
