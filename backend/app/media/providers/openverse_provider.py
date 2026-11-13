@@ -85,7 +85,7 @@ class OpenverseProvider(BaseMediaProvider):
                     width=int(item.get("width") or 0),
                     height=int(item.get("height") or 0),
                     file_size_bytes=int(item.get("filesize") or 0),
-                    mime_type=f"image/{item.get('filetype', 'jpeg').lower().replace('jpg', 'jpeg')}",
+                    mime_type=f"image/{(item.get('filetype') or 'jpeg').lower().replace('jpg', 'jpeg')}",
                     verification_status=status,
                     rejection_reason=reason,
                     search_query=query
