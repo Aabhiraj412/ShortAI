@@ -140,8 +140,10 @@ def test_adaptive_style_selection_and_justified_transitions():
     )
 
     selections = [documentary, pop_info, chalk_talk, creator_motion]
+    # 2026-11-13: the History/Archive ("documentary") look is retired; archival evidence is
+    # now framed by the primary Pop Info style.
     assert [selection.visual_style.value for selection in selections] == [
-        "documentary",
+        "pop_info",
         "pop_info",
         "chalk_talk",
         "creator_motion_graphics",
@@ -160,7 +162,7 @@ def test_adaptive_style_selection_and_justified_transitions():
     ]
     audit = CreativeIdentityPolicy.validate_timeline_beats(
         beats=beats,
-        selected_style="documentary",
+        selected_style="pop_info",
         topic_title="Measured Scientific Discovery",
     )
     assert audit.is_compliant, audit.violations
@@ -171,10 +173,10 @@ def test_adaptive_style_selection_and_justified_transitions():
     )
     assert style_ok, style_violations
 
-    beats[1]["style_transition_rationale"] = ""
+    beats[2]["style_transition_rationale"] = ""   # pop_info -> chalk_talk: a real style change
     rejected = CreativeIdentityPolicy.validate_timeline_beats(
         beats=beats,
-        selected_style="documentary",
+        selected_style="pop_info",
         topic_title="Measured Scientific Discovery",
     )
     assert not rejected.is_compliant

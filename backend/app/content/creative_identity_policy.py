@@ -33,6 +33,17 @@ class ApprovedStyle(str, Enum):
     MAP_BASED_STORYTELLING = "map_based_storytelling"
 
 
+# History/Archive looks are retired as creative references (2026-11-13). The enum value
+# stays so existing storyboards and manifests still parse; the selector never returns it
+# and the storyboard builder refuses it. Pop Info is the primary house style.
+DEACTIVATED_STYLES = frozenset({ApprovedStyle.DOCUMENTARY})
+DEACTIVATED_STYLE_VALUES = frozenset(style.value for style in DEACTIVATED_STYLES) | {
+    "historical_documentary", "history", "archive", "archival", "archive_editorial_montage",
+}
+PRIMARY_STYLE = ApprovedStyle.POP_INFO
+PRIMARY_STYLE_BONUS = 0.35
+
+
 # Exact banned tokens across prompts, asset metadata, manifests, and timeline beats
 PROHIBITED_CHARACTER_TOKENS: Set[str] = {
     "stick_figure", "stickfigure", "stick figure", "stick_man", "stickman",
@@ -129,6 +140,9 @@ class AdaptiveVisualStyleSelector:
         if any(token in assets for token in ("photo", "document", "map", "archival", "footage")):
             scores[ApprovedStyle.DOCUMENTARY] += 1.35
             reasons[ApprovedStyle.DOCUMENTARY].append("authentic visual evidence")
+            # With the History look retired, real evidence is framed in Pop Info layouts.
+            scores[ApprovedStyle.POP_INFO] += 1.0
+            reasons[ApprovedStyle.POP_INFO].append("authentic visual evidence framed as a Pop Info card")
         if any(token in assets for token in ("map", "route", "geographic", "location")):
             scores[ApprovedStyle.MAP_BASED_STORYTELLING] += 1.8
             reasons[ApprovedStyle.MAP_BASED_STORYTELLING].append("geographic evidence is available")
@@ -165,7 +179,10 @@ class AdaptiveVisualStyleSelector:
         if previous is not None:
             scores[previous] += 0.2
 
-        selected = max(ApprovedStyle, key=lambda style: (scores[style], -list(ApprovedStyle).index(style)))
+        scores[ApprovedStyle.POP_INFO] += PRIMARY_STYLE_BONUS
+        reasons[ApprovedStyle.POP_INFO].append("Pop Info is the primary house style")
+        active = [style for style in ApprovedStyle if style not in DEACTIVATED_STYLES]
+        selected = max(active, key=lambda style: (scores[style], -list(ApprovedStyle).index(style)))
         rationale = "; ".join(reasons[selected]) or f"best fit for the {stage or 'current'} narrative beat"
         if previous is None:
             transition = "opening"
@@ -183,7 +200,7 @@ class AdaptiveVisualStyleSelector:
             rationale=rationale,
             transition=transition,
             transition_rationale=transition_rationale,
-            scores={style.value: round(score, 3) for style, score in scores.items()},
+            scores={style.value: round(score, 3) for style, score in scores.items() if style not in DEACTIVATED_STYLES},
         )
 
 

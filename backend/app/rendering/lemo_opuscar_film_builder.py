@@ -201,7 +201,7 @@ function proceduralCard(idx, beat) {
   card.className = "procedural-card";
   const kicker = document.createElement("div");
   kicker.className = "procedural-kicker";
-  kicker.textContent = `${FILM.category || "DOCUMENTARY"} · BEAT ${idx + 1}`;
+  kicker.textContent = (FILM.category || "EXPLAINER").toUpperCase();
   const cue = document.createElement("div");
   cue.className = "procedural-cue";
   cue.textContent = (beat && beat.visual_cue) || FILM.title;
@@ -342,7 +342,7 @@ window.render = function(t) {
     }
   }
 
-  sectionPill.textContent = (activeBeat.section || FILM.category || "DOCUMENTARY").slice(0, 22);
+  sectionPill.textContent = (activeBeat.section || FILM.category || "EXPLAINER").slice(0, 22);
   beatCounter.textContent = `BEAT ${String(activeBeat.beat_number || activeIdx + 1).padStart(2, "0")} / ${String(FILM.beats.length).padStart(2, "0")}`;
 
   if (IS_THUMB) {
@@ -359,7 +359,7 @@ window.render = function(t) {
     const titleAlpha = clampedT < 2.8 ? 1 : clamp01((3.4 - clampedT) / 0.6);
     heroWrap.style.display = "block";
     heroWrap.style.opacity = titleAlpha.toFixed(3);
-    heroKicker.textContent = (FILM.category || "DOCUMENTARY").toUpperCase();
+    heroKicker.textContent = (FILM.category || "EXPLAINER").toUpperCase();
     heroTitle.textContent = FILM.title;
   } else {
     heroWrap.style.display = "none";
@@ -599,7 +599,7 @@ def _render_film_html(payload: Dict[str, Any]) -> str:
     left: 64px;
     right: 64px;
     bottom: 72px;
-    display: flex;
+    display: none;   /* internal beat counter: never part of the viewer's frame */
     align-items: center;
     justify-content: space-between;
     z-index: 10;
@@ -646,18 +646,17 @@ def _render_film_html(payload: Dict[str, Any]) -> str:
   <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
   <div class="topbar">
     <div class="brand-pill"><span class="brand-dot"></span><span>CRAZZYDOCS</span></div>
-    <div class="section-pill" id="sectionPill">DOCUMENTARY</div>
+    <div class="section-pill" id="sectionPill">EXPLAINER</div>
   </div>
   <div class="hero-title-wrap" id="heroWrap">
-    <div class="hero-kicker" id="heroKicker">DOCUMENTARY BRIEF</div>
+    <div class="hero-kicker" id="heroKicker">EXPLAINER</div>
     <div class="hero-title" id="heroTitle">{safe_title}</div>
   </div>
   <div class="caption-wrap" id="captionWrap">
     <div class="caption-box" id="captionBox"></div>
   </div>
-  <div class="footer-bar">
-    <span id="beatCounter">BEAT 01</span>
-    <span>LEMO-OPUSCAR STUDIO</span>
+  <div class="footer-bar" hidden>
+    <span id="beatCounter"></span>
   </div>
   <div class="thumb-overlay" id="thumbOverlay">
     <div class="thumb-badge" id="thumbBadge">CRAZZYDOCS</div>

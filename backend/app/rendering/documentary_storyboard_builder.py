@@ -24,7 +24,7 @@ from backend.app.content.creative_production_policy import (
     CategorySpec,
     get_creative_production_policy,
 )
-from backend.app.content.creative_identity_policy import AdaptiveVisualStyleSelector
+from backend.app.content.creative_identity_policy import AdaptiveVisualStyleSelector, DEACTIVATED_STYLE_VALUES
 from backend.app.content.curiosity_topic_engine import ScoredTopic
 from backend.app.content.visual_diversity_policy import (
     MIN_DISTINCT_ASSETS_FULL_SHORT,
@@ -1174,6 +1174,8 @@ def build_20_beat_storyboard(
             direction = CreativeDirection(creative_direction)
         except ValueError as exc:
             raise ValueError(f"Unknown creative direction: {creative_direction}") from exc
+        if direction.value in DEACTIVATED_STYLE_VALUES:
+            raise ValueError(f"Creative direction '{direction.value}' is deactivated (History/Archive retired).")
         treatment = FilmDirector().direct(
             title=topic.title,
             category=cat_spec.display_name,
@@ -1270,6 +1272,8 @@ def build_20_beat_storyboard(
             previous_style=previous_visual_style,
         )
         visual_style = style_selection.visual_style.value
+        if visual_style in DEACTIVATED_STYLE_VALUES:   # a retired style must never reach a render silently
+            raise ValueError(f"Deactivated visual style '{visual_style}' selected for beat {idx + 1}.")
         scene_layout = _choose_scene_layout(visual_style, stage_label, idx)
         treatment_scene = treatment.scenes[idx] if treatment else None
         if treatment_scene:
