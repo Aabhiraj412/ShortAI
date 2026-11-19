@@ -296,11 +296,30 @@ Analytics now implemented; a configured key is UNVERIFIED until a request succee
 
 ## 15. Commit
 
-COMMIT_PLACEHOLDER
+* `211c04d` feat: Stage 3.30 quota model, junk cleaner audit, retry reliability, API integrations
+* `22c23fe` fix(retry): quota-only handoff re-arm only within the original recovery window
+* this report on top. All fast-forwarded from `874f5cb` and verified with `git ls-remote`; no force-push, no PR.
 
 ## 16. Deployment
 
-DEPLOY_PLACEHOLDER
+* Backup: `D:\Agents\CrazzyDocs_backups\pre_stage_3_30_20261120_005652` (online SQLite backup, `git bundle --all`,
+  retention policy).
+* Deploy 1 (`211c04d`, 01:04 IST): controlled restart endpoint (safe, no blocking jobs) → daemon PID 948; dashboard
+  restarted through its scheduled task → PID 19928. Deployment OK.
+* **Production recovery:** the new re-evaluation re-armed `cycle_1_20261120_0000`'s quota-blocked handoff: one
+  `videos.insert` (private, `WjyJix5unfc`), thumbnail set, `publishAt` 2026-11-20 00:30 UTC = **06:00 IST** (its target),
+  remotely verified; queue row 315 reused (no duplicate).
+* **Unintended effect, fixed:** the same pass also re-armed 14 FAILED handoffs from the 2026-11-17/18 hourly schedule
+  (windows long closed). It made **no YouTube call and no new queue row** (ledger max id unchanged at 315): 10 videos were
+  already public, 4 stay in the queue as NEEDS_PUBLICATION_TIME (`cycle_23/24_20261117`, `cycle_3/4_20261118`). But those
+  14 job rows changed FAILED → COMPLETED (`recovery_reason = QUOTA_HANDOFF_REARMED`, one history entry). `22c23fe` limits
+  the re-arm to an open recovery window. The original rows are in the pre-deploy backup; restoring them is your call (§18).
+* Deploy 2 (`22c23fe`, 01:08 IST): daemon PID 6680. The first dashboard relaunch exited with code 1 (most likely the port
+  was still held by the just-stopped process; the error went to pythonw's absent stderr) and the monitor had reached its
+  3-restarts/hour cap; a second `Start-ScheduledTask` brought it up (PID 9736, HTTP 200 in 14 s).
+* Final state 01:13 IST: Deployment **OK**, daemon 6680 and dashboard 9736 CURRENT (`089ba03cc6a1558f`), one monitor
+  (8132), no pending jobs, schedule FOUR cycles 00:00/06:00/12:00/18:00 IST with 240-min recovery unchanged, renderer
+  lemo-opuscar, Pop Info not activated. YouTube general usage since deploy: 56 units (7 requests).
 
 ## 17. Remaining credentials / authorizations
 
@@ -314,4 +333,19 @@ Already configured and verified live: `GEMINI_API_KEY`, `PIXABAY_API_KEY`, `GNEW
 
 ## 18. Outstanding blockers and decisions
 
-BLOCKERS_PLACEHOLDER
+1. **Analytics consent** (one click, §17) — until then no analytics data.
+2. **14 historical job rows** changed FAILED → COMPLETED by the first deploy (§16). They now match reality (videos public
+   or queued); restore from the backup only if you want the original FAILED records back.
+3. **4 historical videos** in the Publishing Queue need a publication time or removal (`cycle_23/24_20261117`,
+   `cycle_3/4_20261118`); untouched.
+4. **Junk Cleaner policy:** automatic deletion is off by policy, so nothing will ever be reclaimed automatically. Decide
+   whether to allow automatic *quarantine* of eligible intermediates (≈ 1 GB becomes eligible from ~2026-12-10) and
+   whether test renders (1.76 GB) get a retention rule.
+5. **Public-Domain-Mark images** from Openverse are rejected by the license verifier; accepting PDM is a licensing policy
+   decision.
+6. **Openverse** is intermittent from this network (timeouts/504); fallback covers it. A registered Openverse client
+   could raise limits (not wired).
+7. **Dashboard startup status gap:** a dashboard process that dies while binding the port leaves the status at
+   `waiting_for_health` (pythonw has no stderr). Worth recording bind failures in a follow-up.
+8. Unchanged from 3.29: Pop Info engine activation awaits your review of the production-path videos; PCs sleeping at a
+   cycle start still miss cycles (`WakeToRun = False`); Shorts-feed thumbnails cannot be set via the API.
