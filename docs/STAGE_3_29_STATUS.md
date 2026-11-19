@@ -190,21 +190,20 @@ Files: `media/productions/val_prodpath_*` in the Stage 3.29 worktree (`video/sho
 * Backup: `D:\Agents\CrazzyDocs_backups\pre_stage_3_29_20261119_234409` (online SQLite backup of
   `backend\studio.db`, `git bundle --all`, config).
 * **Dashboard: deployed** — PID 8828, loaded revision = source on disk, not stale.
-* **Scheduler daemon: NOT restarted** — PID 13400 still runs the 3.28 code. The restart endpoint reports
-  `safe:false` because two rows look active: the orphan `cycle_10_20261118_0900` (RETRYING, last heartbeat
-  2026-11-18 03:35 UTC) and `cycle_1_20261120_0000` (RUNNING since 00:00 IST). Evidence that nothing is executing:
-  daemon CPU 0.00 s over 8 s, no child processes, no progress entry and no workspace for cycle_1, stage unchanged
-  since creation. cycle_1 is blocked by the orphan, which is exactly the bug the new reconciler fixes. Restarting
-  would bypass the safety interlock, so it waits for your approval (§11).
+* **Scheduler daemon: deployed** (with your approval, 2026-11-20 00:11 IST). Before the restart the endpoint reported
+  `safe:false` because two rows looked active: the orphan `cycle_10_20261118_0900` (RETRYING, last heartbeat
+  2026-11-18 03:35 UTC) and `cycle_1_20261120_0000` (RUNNING, never executed). Re-checked immediately before: daemon
+  CPU 0.00 s over 8 s, no child processes. PID 13400 was stopped; the monitor relaunched the daemon as PID 15368 at
+  00:12:01 on the new code. At 00:12:05 the reconciler closed the orphan (`RECOVERY_WINDOW_EXPIRED`,
+  `ORPHANED_BY_SCHEDULE_CHANGE`), and at 00:12:56 cycle_1 was dispatched and started (`STARTING AUTONOMOUS PRODUCTION
+  RUN`, heartbeat updating). Deployment status: **OK**, daemon and dashboard both CURRENT at `01e566d5ffe839fc`,
+  no warnings.
 * Production activation, schedule (four cycles, revision `4a2e16f244df`, changed by you at 23:13 IST), timezone,
   concurrency and renderer were not changed. The Pop Info engine is **not** activated for production.
 
 ## 11. Blockers and decisions for you
 
-1. **Daemon restart (urgent).** Until the daemon runs the new reconciler, the dead orphan
-   `cycle_10_20261118_0900` holds production capacity and every cycle is deferred and expires — cycle_1 of today
-   (recovery deadline 04:00 IST) included. Needs your OK to stop PID 13400 past the interlock (the monitor relaunches
-   it on the new code within ~30 s; the reconciler then closes the orphan and starts cycle_1).
+1. **Resolved:** daemon restarted with your approval; the orphan is closed and today's cycle_1 is running (§10).
 2. **Engine activation.** Production still renders with the legacy builder. Activating Pop Info means adding
    `CRAZZYDOCS_VISUAL_ENGINE=pop_info_v1` to `.env.local` and restarting the daemon — only after you have watched the
    production-path videos and approved them.
