@@ -256,3 +256,14 @@ def test_handoff_with_a_real_failure_or_an_upload_is_not_rearmed(tmp_path):
     assert rp.rearm_quota_blocked_handoff(mixed, now_utc=NOW) is None
     uploaded = _exhausted_handoff(tmp_path, [OLD_QUOTA_MSG] * 5, video_id="abc")
     assert rp.rearm_quota_blocked_handoff(uploaded, now_utc=NOW) is None
+
+
+def test_quota_handoff_rearm_respects_the_original_recovery_window(tmp_path):
+    """2026-11-20 deploy: cycle_5/cycle_6 of 2026-11-18 (windows long closed) were re-armed. Never again."""
+    old = _exhausted_handoff(tmp_path, [OLD_QUOTA_MSG] * 5)
+    late = datetime(2026, 11, 20, 10, 31)                         # after the 16:00 IST deadline of DEADLINE_IST
+    assert rp.rearm_quota_blocked_handoff(old, now_utc=late) is None and old.status == "FAILED"
+    cp = json.loads(old.checkpoint_data_json)
+    cp["cycle_state"].pop("recovery_expiration_at")
+    old.checkpoint_data_json = json.dumps(cp)
+    assert rp.rearm_quota_blocked_handoff(old, now_utc=NOW) is None  # no recorded deadline: not re-armed

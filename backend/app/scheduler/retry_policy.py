@@ -461,6 +461,9 @@ def rearm_quota_blocked_handoff(job, *, now_utc: Optional[datetime] = None) -> O
     if not pubs or not all(_is_quota_deferral(h.get("message", "")) for h in pubs):
         return None
     now_utc = now_utc or datetime.utcnow()
+    deadline = recovery_deadline_utc(job)
+    if deadline is None or now_utc >= deadline:
+        return None   # historical failures outside their original recovery window are never re-processed
     reason = (f"queue handoff blocked only by YouTube quota deferrals ({len(pubs)}); quota is not a publishing "
               f"failure, so the handoff is re-armed (no re-render, no second upload)")
     job.status = STATUS_HANDOFF_PENDING
