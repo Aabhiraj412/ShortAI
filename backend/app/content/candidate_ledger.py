@@ -419,7 +419,11 @@ class CandidateLedger:
                     """INSERT INTO topic_discovery_runs (run_id, job_id, attempts, started_at, finished_at, flags_json,
                            provider_stats_json, rotation_json, recovery_json, notes_json, candidate_count, eligible_count, updated_at)
                        VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?)
-                       ON CONFLICT(run_id) DO UPDATE SET attempts=attempts+1, finished_at=excluded.finished_at,
+                       ON CONFLICT(run_id) DO UPDATE SET
+                           -- a new discovery pass (retry of the same job) has a new trace start time;
+                           -- re-saving the same pass (identity gate, selection) is not another attempt
+                           attempts=attempts + (excluded.started_at != topic_discovery_runs.started_at),
+                           started_at=excluded.started_at, finished_at=excluded.finished_at,
                            flags_json=excluded.flags_json, provider_stats_json=excluded.provider_stats_json,
                            rotation_json=excluded.rotation_json, recovery_json=excluded.recovery_json,
                            notes_json=excluded.notes_json, candidate_count=excluded.candidate_count,

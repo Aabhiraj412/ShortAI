@@ -142,6 +142,23 @@ def test_selection_status_transitions(tmp_path):
     assert any(e["status"] == "TRANSITION_IGNORED" for e in led.events(cid=other))
 
 
+def test_attempts_count_discovery_passes_not_saves(tmp_path):
+    """Regression (first live shadow run, cycle_6_20261120_0500): one discovery pass saved three
+    times (discovery, identity gate, selection) was reported as attempts=3."""
+    eng = make_engine(tmp_path, candidate_ledger="on")
+    web_for_every_query(eng)
+    led = cl.CandidateLedger(str(tmp_path / "studio.db"))
+    eng.begin_run("cycle_att")
+    ranked = eng.discover_and_rank_live_topics()
+    eng.record_identity_rejections([{"title": ranked[-1].title, "conflicts_with": "cycle_x", "status": "SCRIPTED"}])
+    eng.record_selection(ranked[0], "cycle_att")
+    eng.record_outcome("cycle_att", cl.PRODUCED)
+    assert led.run("cycle_att")["attempts"] == 1
+    eng.begin_run("cycle_att")                  # a genuine retry of the same job
+    eng.discover_and_rank_live_topics()
+    assert led.run("cycle_att")["attempts"] == 2
+
+
 def test_failed_outcome_is_recorded(tmp_path):
     eng = make_engine(tmp_path, candidate_ledger="on")
     web_for_every_query(eng)
