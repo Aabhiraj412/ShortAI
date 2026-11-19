@@ -27,7 +27,8 @@ import html
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -37,6 +38,8 @@ from backend.app.content.creative_production_policy import (
     CreativeProductionPolicy,
     get_creative_production_policy,
 )
+from backend.app.content import candidate_ledger as cl
+from backend.app.content.topic_intelligence_flags import TopicIntelligenceFlags, load_flags
 from backend.app.content.topic_ledger import TopicLedger
 from backend.app.content.validation_topic_history import (
     compute_research_fingerprint,
@@ -305,6 +308,54 @@ class ScoredTopic:
     discovery_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+# ---- Stage 3.31C pool assembly ------------------------------------------------------------------
+# Small supplementary families get a few reserved slots so the pool cap cannot silently drop them.
+POOL_RESERVED_SLOTS: Dict[str, int] = {"gnews": 3, "wikipedia_itn": 2}
+GNEWS_MAX_LEADS = 2           # single-source headlines resolved to an encyclopedic article per run
+_LEAD_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "in", "on", "for", "to", "and", "is", "are", "was", "with", "how", "why", "what",
+    "new", "says", "after", "from", "by", "as", "at", "this", "that", "its", "it", "be", "will", "could", "may",
+})
+
+
+def assemble_candidate_pool(groups: Sequence[Sequence[Dict[str, Any]]], cap: int,
+                            reserved: Optional[Dict[str, int]] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Fills ``cap`` slots: first up to ``reserved[family]`` candidates of each reserved provider
+    family, then everything else in its original order. Returns (pool, dropped); both keep the
+    original relative order, so ranking is unaffected by where a candidate sat in the list."""
+    flat = [c for g in groups for c in g]
+    if len(flat) <= cap:
+        return list(flat), []
+    reserved = reserved or {}
+    keep: set = set()
+    used: Dict[str, int] = {}
+    for idx, c in enumerate(flat):
+        fam = cl.provider_family(c.get("discovery_source", ""))
+        if fam in reserved and used.get(fam, 0) < reserved[fam] and len(keep) < cap:
+            keep.add(idx)
+            used[fam] = used.get(fam, 0) + 1
+    for idx in range(len(flat)):
+        if len(keep) >= cap:
+            break
+        keep.add(idx)
+    pool = [c for i, c in enumerate(flat) if i in keep]
+    dropped = [c for i, c in enumerate(flat) if i not in keep]
+    return pool, dropped
+
+
+class TopicExhaustionReport(dict):
+    """Outcome of one bounded exhaustion-recovery pass (3.31D)."""
+
+    def summary(self) -> str:
+        return (f"TOPIC_EXHAUSTED: recovery {self.get('outcome')} after {len(self.get('steps', []))} step(s), "
+                f"{self.get('requests', 0)} request(s), {self.get('candidates_evaluated', 0)} candidate(s) evaluated"
+                + (f"; stopped by {self['stopped_by']}" if self.get("stopped_by") else ""))
+
+
+class _RecoveryBudgetExhausted(Exception):
+    pass
+
+
 class CuriosityTopicEngine:
     """Discovers, scores, and selects high-curiosity video topics across 20+ configurable categories."""
 
@@ -318,6 +369,7 @@ class CuriosityTopicEngine:
         cooldown_days: int = 30,
         policy: Optional[CreativeProductionPolicy] = None,
         category_tracker: Optional[CategoryDistributionTracker] = None,
+        flags: Optional[TopicIntelligenceFlags] = None,
     ):
         self.ledger = ledger or TopicLedger()
         self.cooldown_days = cooldown_days
@@ -326,6 +378,531 @@ class CuriosityTopicEngine:
         self.last_discovery_audit: List[Dict[str, Any]] = []
         self.last_failed_providers: List[Dict[str, str]] = []
         self.last_discovery_summary: Dict[str, Any] = {}
+        # Stage 3.31 (all off unless the creative-policy config enables them)
+        self.flags: TopicIntelligenceFlags = flags or load_flags()
+        self.trace: Any = cl.NullTrace()
+        self._run_id: Optional[str] = None
+        self._classifier_v2 = None
+        self._rotation_store: Optional[cl.RotationStore] = None
+        self._rotation_advances: Dict[str, Tuple[int, str]] = {}
+        self._last_plan: Dict[str, Any] = {}
+        self.last_recovery_report: Dict[str, Any] = {}
+
+    # ------------------------------------------------------------------------------------------
+    # Stage 3.31 helpers. Every helper is a no-op / identical-to-v1 while its flag is off.
+    # ------------------------------------------------------------------------------------------
+    def begin_run(self, run_id: str) -> None:
+        """Called by the orchestrator before discovery so ledger rows carry the job id."""
+        self._run_id = run_id
+
+    def _db_path(self) -> Optional[str]:
+        return getattr(self.ledger, "db_path", None)
+
+    def _candidate_ledger(self) -> Optional[cl.CandidateLedger]:
+        if not self.flags.is_on("candidate_ledger") or not self._db_path():
+            return None
+        return cl.CandidateLedger(self._db_path())
+
+    def _start_trace(self) -> None:
+        if self.flags.is_on("candidate_ledger") and self._db_path():
+            self.trace = cl.DiscoveryTrace(run_id=self._run_id or "", job_id=self._run_id or "",
+                                           flags={k: v for k, v in self.flags.to_dict().items() if k != "exhaustion_limits"})
+        else:
+            self.trace = cl.NullTrace()
+
+    def _flush_trace(self) -> None:
+        led = self._candidate_ledger()
+        if led is not None and getattr(self.trace, "enabled", False):
+            led.flush(self.trace)
+
+    def _rotation(self) -> Optional[cl.RotationStore]:
+        if not self.flags.is_on("production_query_rotation"):
+            return None
+        if self._rotation_store is None or self._rotation_store.db_path != self._db_path():
+            self._rotation_store = cl.RotationStore(self._db_path())
+        return self._rotation_store
+
+    def _advance(self, key: str, value: str) -> None:
+        """Marks one successful provider request; persisted together at the end of the run."""
+        rot = self._rotation()
+        if rot is not None:
+            self._rotation_advances[key] = (rot.peek(key) + 1, value)
+
+    def _commit_rotation(self) -> None:
+        rot = self._rotation()
+        if rot is not None and self._rotation_advances:
+            rot.commit(self._rotation_advances)
+            if getattr(self.trace, "enabled", False):
+                self.trace.rotation = {k: {"counter": v, "value": s} for k, (v, s) in self._rotation_advances.items()}
+        self._rotation_advances = {}
+
+    def _classifier(self):
+        if self._classifier_v2 is None:
+            from backend.app.content.category_classifier import CategoryClassifierV2
+            self._classifier_v2 = CategoryClassifierV2(self.policy)
+        return self._classifier_v2
+
+    def _apply_category(self, cand: Dict[str, Any], hint_key: Optional[str] = None) -> None:
+        """v2 category handling. ``off``: untouched. ``shadow``: v2 result recorded only.
+        ``on``: v2 assigns the category; a subject with no in-scope category keeps its discovery
+        hint if it has one, otherwise it is marked invalid and rejected before ranking."""
+        mode = self.flags.category_classifier_v2
+        if mode == "off":
+            return
+        res = self._classifier().classify(cand.get("title", ""), cand.get("extended_extract") or cand.get("summary", ""), hint_key)
+        cand["category_v2"] = res.to_dict()
+        if mode != "on":
+            return
+        if res.assigned:
+            cand["category"], cand["category_code"] = res.display_name, res.category_code
+        elif hint_key and res.status != "OUT_OF_SCOPE":
+            spec = self.policy.get_category(hint_key)
+            cand["category"], cand["category_code"] = spec.display_name, spec.category_code
+        else:
+            cand["category_invalid"] = res.status if res.status != "OUT_OF_SCOPE" else f"OUT_OF_SCOPE:{res.out_of_scope_domain}"
+
+    def _hint_key(self, hint: Optional[str]) -> Optional[str]:
+        if not hint:
+            return None
+        try:
+            known = {s.key for s in self.policy.list_categories()} | {s.display_name.lower() for s in self.policy.list_categories()}
+            if hint not in known and hint.lower() not in known:
+                return None          # get_category() falls back to Science for unknown names
+            return self.policy.get_category(hint).key
+        except Exception:
+            return None
+
+    @staticmethod
+    def _origin_hint(origin: str) -> Optional[str]:
+        """'wikipedia_search:geography' -> 'geography' (the category the search was run for)."""
+        if origin.startswith("wikipedia_search:"):
+            return origin.split(":", 1)[1] or None
+        return None
+
+    def _trace_reject_new(self, source: str, title: str, blurb: str, reason: str, stage: str,
+                          detail: Optional[Dict[str, Any]] = None, match: Optional[str] = None) -> None:
+        """Records a candidate that was dropped before scoring. A candidate already registered in
+        this run (same provider family and title) keeps its first decision."""
+        trace = self.trace
+        if not getattr(trace, "enabled", False) or not title:
+            return
+        if cl.candidate_id(source, title) in trace.candidates:
+            return
+        cid = trace.proposal(source, title, blurb)
+        trace.reject(cid, reason, stage, detail, duplicate_match=match)
+
+    def _parse_itn_item(self, item: Any, blocked_terms: Sequence[str]) -> Tuple[Optional[str], str, Optional[str]]:
+        """One "In the news" entry -> (article title, story text, problem). The story is the
+        discovery lead; the linked article is what gets researched."""
+        if not isinstance(item, dict):
+            return None, "", "malformed"
+        story = self._clean_text(str(item.get("story") or ""))
+        links = item.get("links")
+        if not story or not isinstance(links, list) or not links:
+            return None, story, "malformed"
+        excluded = tuple(blocked_terms) + ("country in", "sovereign state", "city in", "capital of", "deaths in")
+        first_title: Optional[str] = None
+        for pg in links:
+            if not isinstance(pg, dict):
+                continue
+            t = str(pg.get("normalizedtitle") or pg.get("title") or "").replace("_", " ").strip()
+            if not t:
+                continue
+            first_title = first_title or t
+            desc = str(pg.get("description") or "").lower()
+            if t.startswith("List of") or any(b in desc or b in t.lower() for b in excluded):
+                continue
+            return t, story, None
+        return first_title, story, "no eligible linked article (blocked, country or list)"
+
+    # ---- 3.31C GNews ------------------------------------------------------------------------------
+    def _gnews_candidates_v2(self, preferred_category: Optional[str], disc_ts: str,
+                             blocked_terms: Sequence[str]) -> List[Dict[str, Any]]:
+        """GNews with provenance and fair use. A headline is a *lead*, never evidence:
+
+        * reported independently by >= 2 outlets (syndicated copies count once) -> candidate
+          labelled ``multi_source_corroborated_headline`` (the pre-3.31 rule);
+        * single outlet -> resolved to a matching encyclopedic article, which becomes the candidate
+          (evidence = the article; the news URL is kept as discovery provenance only);
+        * irrelevant (sport, entertainment, politics) or stale headlines are rejected and recorded.
+        """
+        out: List[Dict[str, Any]] = []
+        trace = self.trace
+        try:
+            from backend.app.content.category_classifier import out_of_scope_domain
+            from backend.app.content.gnews_client import GNewsClient, dedupe_and_cluster, independent_source_count
+            client = GNewsClient()
+            if not client.configured():
+                trace.note("gnews", "key_missing")
+                return out
+            cats: Tuple[str, ...] = ("technology", "science", "business")
+            if preferred_category:
+                pref_key = self.policy.get_category(preferred_category).key
+                cats = tuple(c for c in cats if self.policy.get_category(c.title()).key == pref_key) or ()
+            hint_map = {"technology": "technology", "science": "science", "business": "business_and_economics"}
+            leads_left = GNEWS_MAX_LEADS
+            for cat in cats:
+                src = f"gnews_{cat}"
+                arts = client.top_headlines(cat)
+                trace.query(src, len(arts))
+                if client.last_error_category and client.last_error_category != "empty":
+                    trace.provider_error(src, client.last_error_category)
+                    self.last_failed_providers.append({"provider": src, "error": client.last_error_category})
+                    continue
+                clusters = dedupe_and_cluster(arts, now=client.now())
+                stale_or_dup = len(arts) - sum(len(c["articles"]) for c in clusters)
+                if stale_or_dup:
+                    trace.note(f"{src}_stale_or_duplicate_articles", stale_or_dup)
+                for c in clusters:
+                    arts_c = c["articles"]
+                    title = self._clean_text(c["title"])
+                    text = " ".join(self._clean_text((a.get("description") or "") + " " + (a.get("content") or "").split("[")[0])
+                                    for a in arts_c)
+                    src_list = [f"{(a.get('source') or {}).get('name') or 'News'} ({a.get('publishedAt')}): {a.get('url')}"
+                                for a in arts_c]
+                    base = {"discovery_source": src, "title": title, "summary": text[:600], "sources": src_list,
+                            "publication_timestamp": c.get("latest_published_at", ""), "discovery_timestamp": disc_ts,
+                            "verification": "UNVERIFIED_HEADLINE"}
+                    cid = trace.candidate(base, "discovery")
+                    dom, _dom_score = out_of_scope_domain(f"{title}. {text}")
+                    low = f"{title} {text}".lower()
+                    if dom or any(b in low for b in blocked_terms):
+                        trace.reject(cid, cl.LOW_RELEVANCE, "gnews_relevance", {"domain": dom or "blocked_term"})
+                        continue
+                    indep = independent_source_count(c)
+                    sents = self._split_clean_sentences(text)
+                    if indep >= 2 and len(text) >= 160 and len(sents) >= 3:
+                        classified = self.policy.classify_topic(title, text)
+                        slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:36]
+                        cand = {
+                            "id": f"gnews_{slug}", "title": title,
+                            "category": classified.display_name if classified else c.get("category", "Science"),
+                            "category_code": classified.category_code if classified else "NEWS",
+                            "summary": text[:600], "extended_extract": text, "factual_bullets": sents[:6],
+                            "curiosity": 8.6, "surprise": 8.4, "storytelling": 8.2, "visual_potential": 7.8,
+                            "emotional_connection": 8.2,
+                            "factual_reliability": 7.5,      # corroborated headlines, not independently fact-checked
+                            "verification": "multi_source_corroborated_headline",
+                            "independent_sources": indep,
+                            "sources": src_list, "key_entities": self._extract_entities(title, text),
+                            "image_urls": [a["image"] for a in arts_c if str(a.get("image") or "").startswith("http")][:3],
+                            "discovery_source": src, "discovery_timestamp": disc_ts,
+                            "publication_timestamp": c.get("latest_published_at", ""),
+                            "research_fingerprint": compute_research_fingerprint(summary=text[:600], extended_extract=text,
+                                                                                 factual_bullets=sents[:6], sources=src_list),
+                        }
+                        self._apply_category(cand, hint_map.get(cat))
+                        out.append(cand)
+                        continue
+                    if leads_left <= 0:
+                        trace.reject(cid, cl.INSUFFICIENT_EVIDENCE, "gnews_corroboration",
+                                     {"independent_sources": indep, "rule": "single source; lead budget used"})
+                        continue
+                    leads_left -= 1
+                    lead = self._resolve_news_lead(title, cat, c, src_list, hint_map.get(cat), blocked_terms)
+                    if lead is None:
+                        trace.reject(cid, cl.INSUFFICIENT_EVIDENCE, "gnews_lead",
+                                     {"independent_sources": indep, "rule": "no matching encyclopedic article"})
+                        continue
+                    trace.reject(cid, cl.INSUFFICIENT_EVIDENCE, "gnews_lead",
+                                 {"independent_sources": indep, "converted_to": lead["title"]})
+                    out.append(lead)
+        except Exception as exc:   # GNews availability never decides whether a cycle can run
+            logger.warning("GNews discovery skipped: %s", type(exc).__name__)
+            self.last_failed_providers.append({"provider": "gnews", "error": type(exc).__name__})
+            trace.provider_error("gnews", type(exc).__name__)
+        return out
+
+    def _resolve_news_lead(self, headline: str, cat: str, cluster: Dict[str, Any], src_list: List[str],
+                           hint_key: Optional[str], blocked_terms: Sequence[str]) -> Optional[Dict[str, Any]]:
+        """Finds the encyclopedic article a single-source headline is about (one search request)."""
+        words = [w for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]+", headline) if w.lower() not in _LEAD_STOPWORDS]
+        head_tokens = {w.lower() for w in words if len(w) > 2}
+        if len(head_tokens) < 2:
+            return None
+        query = " ".join(words[:8])
+        url = ("https://en.wikipedia.org/w/api.php?action=query&list=search"
+               f"&srsearch={urllib.parse.quote(query)}&srnamespace=0&srlimit=3&format=json")
+        s_json = self._http_get_json(url, timeout=8.0) or {}
+        hits = s_json.get("query", {}).get("search", [])
+        self.trace.query("gnews_lead_resolution", len(hits))
+        origin = f"gnews_lead_{cat}"
+        for hit in hits:
+            t = hit.get("title", "")
+            if not t or t.startswith("List of") or any(b in t.lower() for b in blocked_terms):
+                continue
+            overlap = head_tokens & {w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]+",
+                                                                    t + " " + self._clean_text(hit.get("snippet", "")))}
+            if len(overlap) < 2:
+                continue
+            dup, _s, why = self.ledger.check_content_collision(candidate_title=t, candidate_hook=t, candidate_entities=[t],
+                                                               cooldown_days=self.cooldown_days)
+            if dup:
+                self._trace_reject_new(origin, t, "", cl.classify_duplicate_reason(why), "pre_enrichment", match=why)
+                continue
+            cand = self.enrich_wikipedia_candidate(t, event_blurb="", discovery_origin=origin)
+            if not cand:
+                continue
+            cand["sources"] = list(cand.get("sources") or []) + [
+                f"News lead (discovery provenance, not evidence): {s}" for s in src_list[:3]]
+            cand["verification"] = "NEWS_LEAD_ENCYCLOPEDIC_EVIDENCE"
+            cand["news_lead"] = {"headline": headline, "published_at": cluster.get("latest_published_at"),
+                                 "outlets": cluster.get("sources", [])}
+            self._apply_category(cand, hint_key)
+            return cand
+        return None
+
+    # ---- 3.31A orchestrator hooks (no-ops while the ledger flag is off) ----------------------------
+    def record_identity_rejections(self, rejections: Sequence[Dict[str, Any]]) -> None:
+        try:
+            trace = self.trace
+            if not getattr(trace, "enabled", False):
+                return
+            for r in rejections:
+                cid = trace.id_for_title(r.get("title", ""))
+                if cid:
+                    trace.reject(cid, cl.RECENTLY_USED, "identity_gate", {"status": r.get("status")},
+                                 duplicate_match=str(r.get("conflicts_with") or ""))
+            self._flush_trace()
+        except Exception as exc:
+            logger.warning("Candidate ledger: identity rejections not recorded (%s)", type(exc).__name__)
+
+    def record_selection(self, topic: Any, job_id: str) -> None:
+        try:
+            trace = self.trace
+            if not getattr(trace, "enabled", False):
+                return
+            cid = trace.id_for_title(getattr(topic, "title", ""), getattr(topic, "discovery_source", ""))
+            if not cid:
+                return
+            trace.select(cid)
+            self._flush_trace()
+            led = self._candidate_ledger()
+            if led is not None:
+                led.mark_selected(trace.run_id, cid, job_id)
+        except Exception as exc:
+            logger.warning("Candidate ledger: selection not recorded (%s)", type(exc).__name__)
+
+    def record_outcome(self, job_id: str, outcome: str, reason: str = "") -> None:
+        try:
+            led = self._candidate_ledger()
+            if led is None:
+                return
+            run_id = self.trace.run_id if getattr(self.trace, "enabled", False) else (self._run_id or job_id)
+            led.mark_outcome(run_id, outcome, reason)
+        except Exception as exc:
+            logger.warning("Candidate ledger: outcome not recorded (%s)", type(exc).__name__)
+
+    # ---- 3.31D bounded exhaustion recovery -----------------------------------------------------
+    def recover_from_exhaustion(
+        self,
+        accept: Optional[Callable[[List[ScoredTopic]], Tuple[List[ScoredTopic], List[Dict[str, Any]]]]] = None,
+        *,
+        deadline_utc: Optional[datetime] = None,
+        reserve_seconds: float = 0.0,
+        now_utc: Optional[datetime] = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> List[ScoredTopic]:
+        """Controlled extra discovery when the pool holds no usable topic.
+
+        Steps (each bounded, stopped as soon as one acceptable topic exists):
+          1. next result page of the queries this run already used;
+          2. the next query of each category this run searched;
+          3. categories this run did not search (least recently produced first);
+          4. featured-feed dates this run did not read (most-read, on-this-day, featured article).
+
+        Every candidate passes the unchanged gates: ledger duplicate / cooldown check, factual and
+        extract gates, the v2 category gate when enabled, and finally ``accept`` (the orchestrator
+        passes the creative-identity filter). Nothing is forced through. Bounds: steps, HTTP
+        requests, candidates, wall-clock time capped by the job's recovery deadline minus the time a
+        production attempt needs, and a per-request politeness gap.
+        """
+        lim = self.flags.exhaustion_limits
+        report = TopicExhaustionReport(triggered=True, steps=[], requests=0, candidates_evaluated=0,
+                                       outcome=None, stopped_by=None, limits=asdict(lim))
+        self.last_recovery_report = report
+        if not self.flags.is_on("exhaustion_recovery"):
+            report.update(outcome="disabled")
+            return []
+        budget = float(lim.max_elapsed_seconds)
+        if deadline_utc is not None:
+            now = now_utc or datetime.utcnow()
+            dl = deadline_utc.astimezone(timezone.utc).replace(tzinfo=None) if deadline_utc.tzinfo else deadline_utc
+            budget = min(budget, (dl - now).total_seconds() - float(reserve_seconds))
+        report["budget_seconds"] = round(budget, 1)
+        if budget <= 0:
+            report.update(outcome="skipped", stopped_by="recovery_deadline")
+            self._record_recovery(report)
+            return []
+
+        start = clock()
+        state = {"requests": 0, "last": None}
+        had_instance_getter = "_http_get_json" in self.__dict__
+        original_get = self._http_get_json            # instance override (tests) or the static method
+
+        def guarded_get_json(url: str, timeout: float = 12.0) -> Optional[Dict]:
+            elapsed = clock() - start
+            if state["requests"] >= lim.max_requests:
+                report["stopped_by"] = report["stopped_by"] or "max_requests"
+                raise _RecoveryBudgetExhausted("max_requests")
+            if elapsed >= budget:
+                report["stopped_by"] = report["stopped_by"] or "time_budget"
+                raise _RecoveryBudgetExhausted("time_budget")
+            if state["last"] is not None:
+                gap = lim.min_request_interval_seconds - (clock() - state["last"])
+                if gap > 0:
+                    sleep(gap)
+            state["requests"] += 1
+            state["last"] = clock()
+            return original_get(url, timeout=max(1.0, min(timeout, budget - elapsed)))
+
+        seen = set(getattr(self, "_last_seen_titles", set()) or set())
+        plan = dict(self._last_plan or {})
+        used_specs = list(getattr(self, "_last_selected_specs", []) or [])
+        self._http_get_json = guarded_get_json          # instance attribute shadows the static method
+        try:
+            for step_name in ("next_page_same_queries", "next_query_each_category", "additional_categories",
+                              "additional_feed_dates")[: max(0, lim.max_attempts)]:
+                if report["stopped_by"]:
+                    break
+                step = {"step": step_name, "proposals": 0, "evaluated": 0, "eligible": 0, "accepted": 0}
+                proposals = self._recovery_proposals(step_name, plan, used_specs)
+                step["proposals"] = len(proposals)
+                cands: List[Dict[str, Any]] = []
+                for title, blurb, origin, hint in proposals:
+                    if report["stopped_by"]:
+                        break
+                    if report["candidates_evaluated"] >= lim.max_candidates:
+                        report["stopped_by"] = "max_candidates"
+                        break
+                    norm = re.sub(r"\W+", "", title.lower())
+                    if norm in seen:
+                        continue
+                    seen.add(norm)
+                    dup, _s, why = self.ledger.check_content_collision(
+                        candidate_title=title, candidate_hook=blurb or title, candidate_entities=[title],
+                        cooldown_days=self.cooldown_days)
+                    if dup:
+                        self._trace_reject_new(origin, title, blurb, cl.classify_duplicate_reason(why),
+                                               "recovery_pre_enrichment", match=why)
+                        continue
+                    report["candidates_evaluated"] += 1
+                    step["evaluated"] += 1
+                    cand = self.enrich_wikipedia_candidate(title, event_blurb=blurb, discovery_origin=origin)
+                    if not cand:
+                        self._trace_reject_new(origin, title, blurb, cl.INSUFFICIENT_EVIDENCE, "recovery_enrichment")
+                        continue
+                    self._apply_category(cand, hint_key=self._origin_hint(origin) or self._hint_key(hint))
+                    cands.append(cand)
+                ranked: List[ScoredTopic] = []
+                if cands:
+                    ranked, _rows, _d, _s = self._score_and_filter(cands, True, stage_suffix=":recovery")
+                step["eligible"] = len(ranked)
+                if ranked and accept is not None:
+                    ranked, rejections = accept(ranked)
+                    self.record_identity_rejections(rejections)
+                step["accepted"] = len(ranked)
+                report["steps"].append(step)
+                report["requests"] = state["requests"]
+                if ranked:
+                    report.update(outcome="recovered", elapsed_seconds=round(clock() - start, 2))
+                    self._record_recovery(report)
+                    return ranked
+            report.update(outcome="exhausted", requests=state["requests"], elapsed_seconds=round(clock() - start, 2))
+            self._record_recovery(report)
+            return []
+        finally:
+            if had_instance_getter:
+                self._http_get_json = original_get
+            else:
+                self.__dict__.pop("_http_get_json", None)
+
+    def _record_recovery(self, report: Dict[str, Any]) -> None:
+        logger.info("[TOPIC EXHAUSTION] recovery %s: %s", report.get("outcome"),
+                    {k: report.get(k) for k in ("steps", "requests", "candidates_evaluated", "stopped_by")})
+        if getattr(self.trace, "enabled", False):
+            self.trace.recovery = dict(report)
+            self._flush_trace()
+
+    def _recovery_proposals(self, step: str, plan: Dict[str, Any], used_specs: List[Any]) -> List[Tuple[str, str, str, Optional[str]]]:
+        """Proposals (title, blurb, origin, hint) for one recovery step. Requests go through the
+        guarded getter, so a budget stop simply ends the step."""
+        out: List[Tuple[str, str, str, Optional[str]]] = []
+        blocked = ("election", "president", "prime minister", "parliament", "season", "league", "album", "film)",
+                   "episode", "birth", "deaths in", "actor", "actress", "singer", "rapper", "politician",
+                   "television", "footballer")
+
+        def search(spec: Any, q_idx: int, offset: int) -> None:
+            q_list = spec.search_queries or [spec.display_name]
+            query = q_list[q_idx % len(q_list)]
+            url = ("https://en.wikipedia.org/w/api.php?action=query&list=search"
+                   f"&srsearch={urllib.parse.quote(query)}&srnamespace=0&srlimit=6&format=json"
+                   + (f"&sroffset={offset}" if offset else ""))
+            try:
+                data = self._http_get_json(url, timeout=10.0) or {}
+            except _RecoveryBudgetExhausted:
+                raise
+            except Exception as exc:
+                self.trace.provider_error(f"wikipedia_search:{spec.key}", str(exc))
+                return
+            hits = data.get("query", {}).get("search", [])
+            self.trace.query(f"wikipedia_search:{spec.key}", len(hits))
+            for hit in hits:
+                t = hit.get("title", "")
+                if t and not t.startswith("List of") and not any(b in t.lower() for b in blocked):
+                    out.append((t, self._clean_text(hit.get("snippet", "")), f"wikipedia_search:{spec.key}", spec.display_name))
+
+        try:
+            queries = plan.get("queries") or {}
+            offsets = plan.get("search_offsets") or {}
+            if step == "next_page_same_queries":
+                for spec in used_specs:
+                    search(spec, queries.get(spec.key, 0), int(offsets.get(spec.key, 0)) + 6)
+            elif step == "next_query_each_category":
+                for spec in used_specs:
+                    if len(spec.search_queries or []) > 1:
+                        search(spec, queries.get(spec.key, 0) + 1, 0)
+            elif step == "additional_categories":
+                used = {s.key for s in used_specs}
+                recent = [c.lower() for c in self.category_tracker.recent_categories(window=24)]
+                others = [s for s in self.policy.list_categories() if s.key not in used]
+                others.sort(key=lambda s: (sum(1 for c in recent if c == s.display_name.lower()), s.key))
+                for spec in others[:4]:
+                    search(spec, 0, 0)
+            elif step == "additional_feed_dates":
+                tried = plan.get("feed_offset")
+                now_utc = datetime.now(timezone.utc)
+                for d_off in [d for d in (2, 4, 6, 9) if d != tried][:2]:
+                    ref = now_utc - timedelta(days=d_off)
+                    try:
+                        feed = self._http_get_json(
+                            f"https://en.wikipedia.org/api/rest_v1/feed/featured/{ref.strftime('%Y/%m/%d')}", timeout=10.0) or {}
+                    except _RecoveryBudgetExhausted:
+                        raise
+                    except Exception as exc:
+                        self.trace.provider_error("wikipedia_featured", str(exc))
+                        continue
+                    self.trace.query("wikipedia_featured", 0)
+                    tag = ref.strftime("%m%d")
+                    tfa = feed.get("tfa") or {}
+                    if tfa.get("title") and not any(b in tfa["title"].lower() for b in blocked):
+                        out.append((tfa["title"], "", f"wikipedia_tfa_{tag}", None))
+                    for art in (feed.get("mostread") or {}).get("articles", [])[:10]:
+                        t, desc = art.get("title", ""), (art.get("description") or "").lower()
+                        if t and ":" not in t and not t.startswith(("Main_Page", "List_of")) \
+                                and not any(b in desc or b in t.lower() for b in blocked + ("deaths",)):
+                            out.append((t, "", f"wikipedia_mostread_{tag}", None))
+                    for ev in (feed.get("onthisday") or [])[:6]:
+                        pages = ev.get("pages") or []
+                        text = self._clean_text(ev.get("text", ""))
+                        if pages and text and not any(b in text.lower() for b in blocked):
+                            t = pages[0].get("title", "")
+                            if t and not t.isdigit():
+                                out.append((t, ev.get("text", ""), f"wikipedia_onthisday_{tag}", "History"))
+        except _RecoveryBudgetExhausted:
+            pass
+        return out
 
     def _recent_sources_and_categories(self) -> Tuple[List[str], List[str]]:
         """Inspects recent validation & ledger items to encourage source/category rotation."""
@@ -493,6 +1070,10 @@ class CuriosityTopicEngine:
             "final_score": final_composite,
             "topic_fingerprint": topic_fp,
         }
+        # Stage 3.31 annotations, present only when their flags are enabled
+        for extra in ("category_v2", "category_invalid", "verification"):
+            if cand.get(extra):
+                meta[extra] = cand[extra]
 
         resolved_code = cand.get("category_code") or self.policy.get_category(cat_name).category_code
         return ScoredTopic(
@@ -739,11 +1320,19 @@ class CuriosityTopicEngine:
     ) -> List[Dict]:
         """Discovers genuine, fresh documentary topics from diverse live external multi-category feeds."""
         self.last_failed_providers = []
+        trace = self.trace
+        rot = self._rotation()                      # None unless production_query_rotation is on
+        self._rotation_advances = {}
+        itn_on = self.flags.is_on("wikipedia_in_the_news")
+        plan: Dict[str, Any] = {"queries": {}, "search_offsets": {}, "feed_offset": None, "nasa_query": None}
         recent_sources, recent_cats = self._recent_sources_and_categories()
         dist_recent = self.category_tracker.recent_categories(window=12)
         all_recent_cats = recent_cats + dist_recent
         vh = getattr(self.ledger, "validation_history", None)
         history_offset = len(vh.load_records()) if vh is not None else 0
+        # 3.31C: production never adds validation records, so history_offset is frozen there and every
+        # cycle repeats the same queries. With rotation on, persisted per-provider counters replace it.
+        order_offset = rot.peek("category_order") if rot is not None else history_offset
 
         source_buckets: Dict[str, List[Tuple[str, str, str, Optional[str]]]] = {
             "wikipedia_search": [],
@@ -752,6 +1341,8 @@ class CuriosityTopicEngine:
             "wikipedia_mostread": [],
             "wikipedia_onthisday": [],
         }
+        if itn_on:
+            source_buckets["wikipedia_itn"] = []
         rss_candidates: List[Dict] = []
 
         blocked_terms = (
@@ -775,62 +1366,102 @@ class CuriosityTopicEngine:
             cat_freq = {s.key: sum(1 for c in recent_lower if c == s.display_name.lower()) for s in all_specs}
             non_hist = [s for s in all_specs if s.key != "history"]
             hist_only = [s for s in all_specs if s.key == "history"]
-            ordered_specs = sorted(non_hist, key=lambda s: (cat_freq.get(s.key, 0), (all_specs.index(s) - history_offset) % max(1, len(all_specs))))
+            ordered_specs = sorted(non_hist, key=lambda s: (cat_freq.get(s.key, 0), (all_specs.index(s) - order_offset) % max(1, len(all_specs))))
             if ordered_specs:
                 selected_specs = ordered_specs[:4]
                 if not hist_only or cat_freq.get("history", 0) == 0:
                     selected_specs = ordered_specs[:3] + hist_only[:1]
             else:
                 selected_specs = all_specs[:4]
+        self._last_selected_specs = list(selected_specs)
 
         for s_idx, spec in enumerate(selected_specs):
             q_list = spec.search_queries or [spec.display_name]
-            query_str = q_list[(history_offset + s_idx) % len(q_list)]
+            rot_key = f"wikipedia_search:{spec.key}"
+            if rot is not None:
+                counter = rot.peek(rot_key)
+                q_idx = counter % len(q_list)
+                sr_offset = ((counter // len(q_list)) % 3) * 6     # next result page once every query was used
+            else:
+                q_idx = (history_offset + s_idx) % len(q_list)
+                sr_offset = 0
+            query_str = q_list[q_idx]
+            plan["queries"][spec.key] = q_idx
+            plan["search_offsets"][spec.key] = sr_offset
             try:
                 search_url = (
                     "https://en.wikipedia.org/w/api.php?action=query&list=search"
                     f"&srsearch={urllib.parse.quote(query_str)}&srnamespace=0&srlimit=6&format=json"
-                )
+                ) + (f"&sroffset={sr_offset}" if sr_offset else "")
                 s_json = self._http_get_json(search_url, timeout=10.0) or {}
-                for hit in s_json.get("query", {}).get("search", []):
+                hits = s_json.get("query", {}).get("search", [])
+                trace.query(rot_key, len(hits))
+                for hit in hits:
                     t = hit.get("title", "")
                     snip = self._clean_text(hit.get("snippet", ""))
                     if not t or t.startswith("List of") or any(b in t.lower() for b in blocked_terms):
+                        if t:
+                            self._trace_reject_new(rot_key, t, snip, cl.LOW_RELEVANCE, "discovery_filter",
+                                                   {"rule": "list page or blocked term"})
                         continue
                     source_buckets["wikipedia_search"].append(
                         (t, snip, f"wikipedia_search:{spec.key}", spec.display_name)
                     )
+                if s_json:
+                    self._advance(rot_key, query_str)
             except Exception as e:
                 logger.warning("Wikipedia search discovery error (%s): %s", query_str, e)
                 self.last_failed_providers.append({"provider": f"wikipedia_search:{spec.key}", "error": str(e)})
+                trace.provider_error(rot_key, str(e))
 
         # 2. NASA Image & Video Library topic discovery for space/astronomy/earth coverage
         if not preferred_category or self.policy.get_category(preferred_category).key in ("space_and_astronomy", "science", "geography", "environment_and_climate"):
             try:
-                nasa_q = ["james webb exoplanet", "voyager interstellar", "mars rover crater", "black hole accretion"][history_offset % 4]
+                nasa_queries = ["james webb exoplanet", "voyager interstellar", "mars rover crater", "black hole accretion"]
+                nasa_q = nasa_queries[(rot.peek("nasa_library") if rot is not None else history_offset) % 4]
+                plan["nasa_query"] = nasa_q
                 nasa_url = f"https://images-api.nasa.gov/search?q={urllib.parse.quote(nasa_q)}&media_type=image&page_size=4"
                 n_json = self._http_get_json(nasa_url, timeout=8.0) or {}
-                for n_item in n_json.get("collection", {}).get("items", [])[:3]:
+                n_items = n_json.get("collection", {}).get("items", [])
+                trace.query("nasa_library", len(n_items))
+                for n_item in n_items[:3]:
                     nd = (n_item.get("data") or [{}])[0]
                     nt = str(nd.get("title") or "").strip()
                     ndesc = self._clean_text(str(nd.get("description") or ""))
                     if nt and len(ndesc) >= 120:
                         wiki_seed = nasa_q.split()[0] + " " + " ".join(nt.split()[:3])
                         source_buckets["nasa_library"].append((nt.split("(")[0].strip()[:60], ndesc[:240], "nasa_library", "Space and Astronomy"))
+                if n_json:
+                    self._advance("nasa_library", nasa_q)
             except Exception as e:
                 logger.info("NASA topic discovery unavailable: %s", e)
                 self.last_failed_providers.append({"provider": "nasa_library", "error": str(e)})
+                trace.provider_error("nasa_library", str(e))
 
         # 3. Wikipedia Featured / MostRead / OnThisDay (skip onthisday dominance for non-history categories)
         if not preferred_category or self.policy.get_category(preferred_category).key == "history":
             now_utc = datetime.now(timezone.utc)
-            day_offsets = [1, 3, 7]
-            rotated_offsets = day_offsets[history_offset % len(day_offsets):] + day_offsets[:history_offset % len(day_offsets)]
-            for d_off in rotated_offsets[:1]:
+            if rot is not None:
+                feed_cycle = (1, 2, 3, 4, 5, 6, 7)
+                offsets_to_try = [feed_cycle[rot.peek("wikipedia_featured") % len(feed_cycle)]]
+            else:
+                day_offsets = [1, 3, 7]
+                rotated_offsets = day_offsets[history_offset % len(day_offsets):] + day_offsets[:history_offset % len(day_offsets)]
+                offsets_to_try = rotated_offsets[:1]
+            for d_off in offsets_to_try:
+                plan["feed_offset"] = d_off
                 try:
                     ref_dt = now_utc - timedelta(days=d_off)
                     feed_url = f"https://en.wikipedia.org/api/rest_v1/feed/featured/{ref_dt.strftime('%Y/%m/%d')}"
                     feed = self._http_get_json(feed_url, timeout=10.0) or {}
+                    if getattr(trace, "enabled", False):
+                        try:
+                            mr = feed.get("mostread") if isinstance(feed.get("mostread"), dict) else {}
+                            otd = feed.get("onthisday") if isinstance(feed.get("onthisday"), list) else []
+                            trace.query("wikipedia_featured", (1 if feed.get("tfa") else 0)
+                                        + len(mr.get("articles") or []) + len(otd))
+                        except Exception:
+                            trace.query("wikipedia_featured", 0)
 
                     tfa = feed.get("tfa", {})
                     if tfa.get("title") and not any(b in tfa["title"].lower() for b in blocked_terms):
@@ -842,6 +1473,8 @@ class CuriosityTopicEngine:
                         if not t or ":" in t or t.startswith("Main_Page") or t.startswith("List_of"):
                             continue
                         if any(b in desc or b in t.lower() for b in blocked_terms + ("deaths",)):
+                            self._trace_reject_new(f"wikipedia_mostread_{ref_dt.strftime('%m%d')}", t, desc, cl.LOW_RELEVANCE,
+                                                   "discovery_filter", {"rule": "blocked term"})
                             continue
                         source_buckets["wikipedia_mostread"].append((t, "", f"wikipedia_mostread_{ref_dt.strftime('%m%d')}", None))
 
@@ -862,12 +1495,37 @@ class CuriosityTopicEngine:
                             t = pg.get("title", "")
                             if t and not t.isdigit():
                                 source_buckets["wikipedia_onthisday"].append((t, ev.get("text", ""), f"wikipedia_onthisday_{ref_dt.strftime('%m%d')}", "History"))
+
+                    # 3b. Wikipedia "In the news" (3.31C): reuses this feed response, no extra request
+                    if itn_on:
+                        news = feed.get("news")
+                        news_items = news if isinstance(news, list) else []
+                        trace.query("wikipedia_itn", len(news_items))
+                        malformed = 0
+                        for item in news_items[:8]:
+                            itn_title, story, problem = self._parse_itn_item(item, blocked_terms)
+                            if problem == "malformed":
+                                malformed += 1
+                                continue
+                            origin = f"wikipedia_itn_{ref_dt.strftime('%m%d')}"
+                            if problem:
+                                if itn_title:
+                                    self._trace_reject_new(origin, itn_title, story, cl.LOW_RELEVANCE, "discovery_filter", {"rule": problem})
+                                continue
+                            source_buckets["wikipedia_itn"].append((itn_title, story, origin, None))
+                        if malformed:
+                            trace.note("wikipedia_itn_malformed_items", malformed)
+                    if feed:
+                        self._advance("wikipedia_featured", ref_dt.strftime("%Y-%m-%d"))
                 except Exception as e:
                     logger.warning("Wikipedia Featured Feed unavailable (offset=%s): %s", d_off, e)
                     self.last_failed_providers.append({"provider": "wikipedia_featured_feed", "error": str(e)})
+                    trace.provider_error("wikipedia_featured", str(e))
 
         # Interleave buckets keeping Wikipedia multi-category search & science/mostread ahead of onthisday
         bucket_order = ["wikipedia_search", "nasa_library", "wikipedia_tfa", "wikipedia_mostread", "wikipedia_onthisday"]
+        if itn_on:
+            bucket_order.insert(4, "wikipedia_itn")
         interleaved_proposals: List[Tuple[str, str, str, Optional[str]]] = []
         max_len = max((len(source_buckets[k]) for k in bucket_order), default=0)
         for idx in range(max_len):
@@ -878,21 +1536,28 @@ class CuriosityTopicEngine:
         # Pre-filter known duplicates before enrichment
         enriched_candidates: List[Dict] = []
         seen_titles = set()
-        for wiki_title, blurb, origin, hint_cat in interleaved_proposals:
+        for p_idx, (wiki_title, blurb, origin, hint_cat) in enumerate(interleaved_proposals):
             if len(enriched_candidates) >= max_candidates:
+                for t2, b2, o2, _h2 in interleaved_proposals[p_idx:]:
+                    self._trace_reject_new(o2, t2, b2, cl.POOL_CAPACITY_LIMIT, "enrichment_cap",
+                                           {"max_candidates": max_candidates})
                 break
             norm_key = re.sub(r"\W+", "", wiki_title.lower())
             if norm_key in seen_titles:
+                self._trace_reject_new(origin, wiki_title, blurb, cl.DUPLICATE_EXACT, "cross_provider_dedupe",
+                                       {"rule": "same title proposed earlier in this run"})
                 continue
             seen_titles.add(norm_key)
 
-            pre_dup, _, _ = self.ledger.check_content_collision(
+            pre_dup, _pre_score, pre_reason = self.ledger.check_content_collision(
                 candidate_title=wiki_title,
                 candidate_hook=blurb or wiki_title,
                 candidate_entities=[wiki_title],
                 cooldown_days=self.cooldown_days,
             )
             if pre_dup:
+                self._trace_reject_new(origin, wiki_title, blurb, cl.classify_duplicate_reason(pre_reason),
+                                       "pre_enrichment", match=pre_reason)
                 continue
 
             cand = self.enrich_wikipedia_candidate(wiki_title, event_blurb=blurb, discovery_origin=origin)
@@ -908,7 +1573,11 @@ class CuriosityTopicEngine:
                     if cand_spec.key == pref_spec.key or origin == f"wikipedia_search:{pref_spec.key}":
                         cand["category"] = pref_spec.display_name
                         cand["category_code"] = pref_spec.category_code
+                self._apply_category(cand, hint_key=self._origin_hint(origin) or self._hint_key(hint_cat))
                 enriched_candidates.append(cand)
+            else:
+                self._trace_reject_new(origin, wiki_title, blurb, cl.INSUFFICIENT_EVIDENCE, "enrichment",
+                                       {"rule": "no usable encyclopedic extract (short, disambiguation or fetch failed)"})
 
         # 4. Phys.org Live Multi-Category RSS Feeds (Science, Technology, Space, Biology, Earth)
         disc_ts = datetime.now(timezone.utc).isoformat()
@@ -930,15 +1599,20 @@ class CuriosityTopicEngine:
                     continue
                 root = ET.fromstring(xml_txt)
                 items = root.findall(".//item")
+                trace.query(origin_tag, len(items))
                 for item in items[:3]:
                     title = self._clean_text(item.findtext("title", ""))
                     desc = self._clean_text(item.findtext("description", ""))
                     link = (item.findtext("link", "") or "").strip()
                     pub_date = (item.findtext("pubDate", "") or "").strip()
                     if len(desc) < 160 or not link.startswith("http"):
+                        self._trace_reject_new(origin_tag, title, desc, cl.INSUFFICIENT_EVIDENCE, "rss_filter",
+                                               {"rule": "description under 160 chars or no link"})
                         continue
                     sents = self._split_clean_sentences(desc)
                     if len(sents) < 3:
+                        self._trace_reject_new(origin_tag, title, desc, cl.INSUFFICIENT_EVIDENCE, "rss_filter",
+                                               {"rule": "fewer than 3 usable sentences"})
                         continue
                     thumb_urls: List[str] = []
                     for child in item:
@@ -950,7 +1624,7 @@ class CuriosityTopicEngine:
                     slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:36]
                     ents = self._extract_entities(title, desc)
                     src_list = [f"Phys.org Science Archive Source: {link}"]
-                    rss_candidates.append({
+                    rss_cand = {
                         "id": f"rss_{slug}",
                         "title": title,
                         "category": classified.display_name if classified else rss_cat,
@@ -976,14 +1650,43 @@ class CuriosityTopicEngine:
                             factual_bullets=sents,
                             sources=src_list,
                         ),
-                    })
+                    }
+                    self._apply_category(rss_cand, hint_key=self._hint_key(rss_cat))
+                    rss_candidates.append(rss_cand)
             except Exception as e:
                 logger.warning("Phys.org RSS fetch error (%s): %s", feed_url, e)
                 self.last_failed_providers.append({"provider": origin_tag, "error": str(e)})
+                trace.provider_error(origin_tag, str(e))
 
-        # 5. GNews current events (Stage 3.30): optional supplement, never required.
-        gnews_candidates = self._gnews_candidates(preferred_category, disc_ts)
-        return (enriched_candidates + rss_candidates + gnews_candidates)[: max_candidates + 6]
+        # 5. GNews current events: optional supplement, never required.
+        if self.flags.is_on("gnews_candidates"):
+            gnews_candidates = self._gnews_candidates_v2(preferred_category, disc_ts, blocked_terms)
+        else:
+            gnews_candidates = self._gnews_candidates(preferred_category, disc_ts)
+
+        # Pool assembly. Legacy: concatenate and cut at max_candidates + 6, which drops the GNews
+        # supplement whenever Wikipedia + RSS fill the pool (audit §5). With the GNews or In-the-news
+        # flag on, those small families get reserved slots instead.
+        cap = max_candidates + 6
+        if self.flags.is_on("gnews_candidates") or itn_on:
+            pool, dropped = assemble_candidate_pool(
+                [enriched_candidates, rss_candidates, gnews_candidates], cap,
+                reserved=POOL_RESERVED_SLOTS)
+        else:
+            combined = enriched_candidates + rss_candidates + gnews_candidates
+            pool, dropped = combined[:cap], combined[cap:]
+        if getattr(trace, "enabled", False):
+            for d in dropped:
+                trace.reject(trace.candidate(d, "pool_assembly"), cl.POOL_CAPACITY_LIMIT, "pool_assembly", {"cap": cap})
+
+        self._last_seen_titles = set(seen_titles) | {re.sub(r"\W+", "", str(c.get("title", "")).lower())
+                                                     for c in rss_candidates + gnews_candidates}
+        self._last_plan = plan
+        if rot is not None and self._rotation_advances:
+            self._advance("category_order", ",".join(s.key for s in selected_specs))
+        self._commit_rotation()
+        trace.note("discovery_plan", plan)
+        return pool
 
     def _gnews_candidates(self, preferred_category: Optional[str], disc_ts: str) -> List[Dict[str, Any]]:
         """Events reported by >= 2 distinct outlets in the last 3 days. A headline is not treated as a verified
@@ -1038,6 +1741,7 @@ class CuriosityTopicEngine:
         preferred_category: Optional[str] = None,
     ) -> List[ScoredTopic]:
         """Discovers, verifies, scores, and filters genuinely fresh topics across multiple categories."""
+        self._start_trace()
         live_cands = self.discover_live_candidates(
             max_candidates=max_candidates,
             preferred_category=preferred_category,
@@ -1051,43 +1755,11 @@ class CuriosityTopicEngine:
                 "categories_discovered": [],
                 "providers_used": [],
             }
+            self.trace.note("pool", "empty")
+            self._flush_trace()
             return []
 
-        scored = [self.score_candidate(c) for c in live_cands]
-        valid: List[ScoredTopic] = []
-        audit_rows: List[Dict[str, Any]] = []
-        dups_rejected = 0
-
-        for t in scored:
-            is_valid = (not t.is_duplicate if filter_duplicates else True) and t.composite_score > 0
-            rej = None
-            if t.composite_score <= 0:
-                rej = "Failed factual, extract length, or visual suitability gate"
-            elif filter_duplicates and t.is_duplicate:
-                dups_rejected += 1
-                rej = t.duplicate_reason or "Duplicate/cooldown collision"
-            if is_valid:
-                valid.append(t)
-            row = dict(t.discovery_metadata)
-            row.update({
-                "topic_id": t.id,
-                "topic_title": t.title,
-                "category": t.category,
-                "accepted": is_valid,
-                "rejection_reason": rej,
-                "final_rank": None,
-            })
-            audit_rows.append(row)
-
-        valid.sort(key=lambda x: x.composite_score, reverse=True)
-        rank_map = {t.id: idx + 1 for idx, t in enumerate(valid)}
-        for row in audit_rows:
-            row["final_rank"] = rank_map.get(row["topic_id"])
-            if row["final_rank"] is not None:
-                for vt in valid:
-                    if vt.id == row["topic_id"]:
-                        vt.discovery_metadata["final_rank"] = row["final_rank"]
-                        break
+        valid, audit_rows, dups_rejected, scored = self._score_and_filter(live_cands, filter_duplicates)
 
         self.last_discovery_audit = audit_rows
         self.last_discovery_summary = {
@@ -1101,7 +1773,75 @@ class CuriosityTopicEngine:
             "selected_topic": valid[0].title if valid else None,
             "selected_score": valid[0].composite_score if valid else None,
         }
+        self._flush_trace()
         return valid
+
+    def _score_and_filter(self, live_cands: List[Dict[str, Any]], filter_duplicates: bool = True,
+                          stage_suffix: str = "") -> Tuple[List[ScoredTopic], List[Dict[str, Any]], int, List[ScoredTopic]]:
+        """Scores candidates, applies the factual / duplicate (and, with v2 on, category) gates and
+        ranks the survivors. Every decision is recorded in the trace when the ledger is on."""
+        trace = self.trace
+        cids = [trace.candidate(c, "scoring" + stage_suffix) for c in live_cands]
+        scored = [self.score_candidate(c) for c in live_cands]
+        valid: List[ScoredTopic] = []
+        audit_rows: List[Dict[str, Any]] = []
+        dups_rejected = 0
+        cid_by_obj: Dict[int, Optional[str]] = {}
+        cat_gate = self.flags.is_on("category_classifier_v2")
+
+        for idx, t in enumerate(scored):
+            invalid_cat = cat_gate and bool(t.discovery_metadata.get("category_invalid"))
+            is_valid = (not t.is_duplicate if filter_duplicates else True) and t.composite_score > 0 and not invalid_cat
+            rej = None
+            if t.composite_score <= 0:
+                rej = "Failed factual, extract length, or visual suitability gate"
+            elif filter_duplicates and t.is_duplicate:
+                dups_rejected += 1
+                rej = t.duplicate_reason or "Duplicate/cooldown collision"
+            elif invalid_cat:
+                rej = f"No in-scope category ({t.discovery_metadata.get('category_invalid')})"
+            if is_valid:
+                valid.append(t)
+            row = dict(t.discovery_metadata)
+            row.update({
+                "topic_id": t.id,
+                "topic_title": t.title,
+                "category": t.category,
+                "accepted": is_valid,
+                "rejection_reason": rej,
+                "final_rank": None,
+            })
+            audit_rows.append(row)
+
+            cid = cids[idx] if idx < len(cids) else None
+            cid_by_obj[id(t)] = cid
+            if cid:
+                trace.score(cid, t.composite_score, t.score_breakdown)
+                if t.composite_score <= 0:
+                    unreliable = float(t.score_breakdown.get("factual_reliability", 10.0)) < 7.5
+                    trace.reject(cid, cl.SOURCE_UNRELIABLE if unreliable else cl.INSUFFICIENT_EVIDENCE,
+                                 "scoring_gate" + stage_suffix)
+                elif filter_duplicates and t.is_duplicate:
+                    trace.reject(cid, cl.classify_duplicate_reason(t.duplicate_reason), "duplicate_gate" + stage_suffix,
+                                 duplicate_match=t.duplicate_reason)
+                elif invalid_cat:
+                    trace.reject(cid, cl.INVALID_CATEGORY, "category_gate" + stage_suffix,
+                                 {"classification": t.discovery_metadata.get("category_invalid")})
+
+        valid.sort(key=lambda x: x.composite_score, reverse=True)
+        rank_map = {t.id: idx + 1 for idx, t in enumerate(valid)}
+        for row in audit_rows:
+            row["final_rank"] = rank_map.get(row["topic_id"])
+            if row["final_rank"] is not None:
+                for vt in valid:
+                    if vt.id == row["topic_id"]:
+                        vt.discovery_metadata["final_rank"] = row["final_rank"]
+                        break
+        for rank, t in enumerate(valid, start=1):
+            cid = cid_by_obj.get(id(t))
+            if cid:
+                trace.eligible(cid, "ranking" + stage_suffix, rank)
+        return valid, audit_rows, dups_rejected, scored
 
     def select_best_live_topic(self, preferred_category: Optional[str] = None) -> Tuple[ScoredTopic, HookCandidate]:
         """Selects top live-discovered verified topic. Fails closed; never falls back to historical topics."""

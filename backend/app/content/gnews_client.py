@@ -68,6 +68,28 @@ def similar(a: str, b: str, threshold: float = 0.5) -> bool:
     return len(ta & tb) / len(ta | tb) >= threshold
 
 
+def independent_source_count(cluster: Dict[str, Any]) -> int:
+    """Outlets that published their own report of an event (Stage 3.31C).
+
+    Syndicated copies - the same headline (same title tokens) carried by several outlets - count
+    once, and several articles from one outlet count once, so wire copies cannot pass as
+    corroboration."""
+    by_signature: Dict[str, set] = {}
+    for a in cluster.get("articles", []):
+        outlet = ((a.get("source") or {}).get("name") or _norm_url(a.get("url", "")).split("/")[0] or "").strip().lower()
+        sig = " ".join(sorted(_tokens(a.get("title", ""))))
+        if outlet and sig:
+            by_signature.setdefault(sig, set()).add(outlet)
+    counted: set = set()
+    count = 0
+    for sig in sorted(by_signature):
+        outlets = by_signature[sig]
+        if outlets - counted:
+            count += 1
+            counted |= outlets
+    return count
+
+
 def dedupe_and_cluster(articles: List[Dict[str, Any]], *, now: datetime,
                        max_age_days: int = MAX_AGE_DAYS) -> List[Dict[str, Any]]:
     """Drops stale and duplicate articles, then groups articles describing the same event."""

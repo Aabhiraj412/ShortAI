@@ -168,6 +168,42 @@ class CrazzyDocsMasterOrchestrator:
             logger.warning("Creative identity backfill skipped: %s", exc)
         return registry
 
+    # ---- Stage 3.31D: bounded topic-exhaustion recovery (off unless its flag is on) ------------------
+    def _topic_exhaustion_recovery(self, job_id: str, identity_registry, is_full_live: bool) -> list:
+        """One bounded extra discovery pass when no usable topic is left. Returns [] (and the caller
+        keeps its original failure) when the flag is off, the engine lacks the feature, or nothing
+        acceptable is found. Duplicate, cooldown, factual and identity gates all still apply."""
+        engine = getattr(self, "topic_engine", None)
+        if engine is not None and hasattr(engine, "last_recovery_report"):
+            engine.last_recovery_report = {}          # never report a previous cycle's recovery
+        flags = getattr(engine, "flags", None)
+        if not is_full_live or flags is None or not flags.is_on("exhaustion_recovery") \
+                or not callable(getattr(engine, "recover_from_exhaustion", None)):
+            return []
+        deadline, reserve = None, 0.0
+        try:
+            from backend.app.scheduler import retry_policy
+            reserve = float(retry_policy.load_settings().min_attempt_seconds)
+            with SessionLocal() as db_session:
+                job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                deadline = retry_policy.recovery_deadline_utc(job) if job is not None else None
+        except Exception as exc:
+            logger.info("Exhaustion recovery: no recovery deadline available (%s); using the time cap only", type(exc).__name__)
+        accept = None
+        if identity_registry is not None:
+            accept = lambda ranked: identity_registry.filter_fresh(ranked, job_id=job_id)  # noqa: E731
+        try:
+            return list(engine.recover_from_exhaustion(accept, deadline_utc=deadline, reserve_seconds=reserve) or [])
+        except Exception as exc:   # recovery problems must never mask the original failure
+            logger.warning("Topic exhaustion recovery failed: %s", type(exc).__name__)
+            return []
+
+    def _exhaustion_suffix(self) -> str:
+        report = getattr(getattr(self, "topic_engine", None), "last_recovery_report", None) or {}
+        if not report or report.get("outcome") in (None, "disabled"):
+            return ""
+        return " [" + (report.summary() if hasattr(report, "summary") else str(report.get("outcome"))) + "]"
+
     def _synthesize_topic_script(self, topic: ScoredTopic, hook_text: str) -> str:
         """Dynamically generates a factual script for the topic (final video accepted at 30-58 s)."""
         s1 = hook_text.strip()
@@ -492,6 +528,9 @@ class CrazzyDocsMasterOrchestrator:
 
                 creative_policy = get_creative_production_policy(execution_context)
                 if is_full_live:
+                    _begin = getattr(self.topic_engine, "begin_run", None)
+                    if callable(_begin):
+                        _begin(job_id)                      # Stage 3.31A ledger run id (no-op while off)
                     ranked = self.topic_engine.discover_and_rank_live_topics(
                         filter_duplicates=filter_dups,
                         preferred_category=preferred_category,
@@ -500,7 +539,10 @@ class CrazzyDocsMasterOrchestrator:
                     ranked = self.topic_engine.discover_and_rank_topics(filter_duplicates=filter_dups)
 
                 if not ranked:
-                    raise RuntimeError("No eligible candidate topics found passing duplicate and factual gates.")
+                    ranked = self._topic_exhaustion_recovery(job_id, identity_registry, is_full_live)
+                    if not ranked:
+                        raise RuntimeError("No eligible candidate topics found passing duplicate and factual gates."
+                                           + self._exhaustion_suffix())
 
                 # A failed production never reaches the ledger, so without this the same
                 # top-ranked subject is re-selected cycle after cycle (2026-11-13 audit).
@@ -509,10 +551,16 @@ class CrazzyDocsMasterOrchestrator:
                     for rej in identity_rejections:
                         logger.info("[CREATIVE IDENTITY] Skipping '%s': already selected by %s (%s)",
                                     rej["title"], rej["conflicts_with"], rej["status"])
+                    _rec_rej = getattr(self.topic_engine, "record_identity_rejections", None)
+                    if callable(_rec_rej):
+                        _rec_rej(identity_rejections)
+                    if not ranked:
+                        ranked = self._topic_exhaustion_recovery(job_id, identity_registry, is_full_live)
                     if not ranked:
                         raise DuplicateCreativeIdentity(
                             "integrity gate: every discovered topic was already selected by an earlier "
                             f"production ({len(identity_rejections)} rejected); refusing to repeat a subject."
+                            + self._exhaustion_suffix()
                         )
 
                 selected_topic: Optional[ScoredTopic] = None
@@ -532,6 +580,9 @@ class CrazzyDocsMasterOrchestrator:
                     selected_topic = ranked[0]
 
                 logger.info("Selected topic: '%s' (Composite Score: %.2f)", selected_topic.title, selected_topic.composite_score)
+                _rec_sel = getattr(self.topic_engine, "record_selection", None)
+                if callable(_rec_sel) and is_full_live:
+                    _rec_sel(selected_topic, job_id)
 
                 # Immediately record selection in isolated validation history when not in PRODUCTION
                 val_hist = getattr(self.ledger, "validation_history", None)
@@ -1554,6 +1605,9 @@ class CrazzyDocsMasterOrchestrator:
                 publication_status="produced",
             )
             self.ledger.record_content(rec, allow_override=False, execution_context=execution_context.value)
+            _rec_out = getattr(getattr(self, "topic_engine", None), "record_outcome", None)
+            if callable(_rec_out):
+                _rec_out(job_id, "PRODUCED")
             if identity_registry is not None:
                 try:
                     identity_registry.update(
@@ -1729,6 +1783,9 @@ class CrazzyDocsMasterOrchestrator:
 
         except Exception as e:
             logger.error("Master pipeline failed at %s: %s", locals().get("obs_stage", "orchestration_pipeline"), e)
+            _rec_out = getattr(getattr(self, "topic_engine", None), "record_outcome", None)
+            if callable(_rec_out):
+                _rec_out(job_id, "FAILED", str(e)[:300])
             val_hist = getattr(self.ledger, "validation_history", None)
             if execution_context != ExecutionContext.PRODUCTION and val_hist is not None:
                 try:
