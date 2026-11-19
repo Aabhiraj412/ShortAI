@@ -105,33 +105,37 @@ def is_backend_healthy(health_url: str = "http://127.0.0.1:8000/api/dashboard/he
 
 def ensure_dashboard_running(
     open_browser: bool = False,
-    wait_timeout_sec: float = 25.0,
+    wait_timeout_sec: float = 180.0,
     dashboard_url: str = "http://127.0.0.1:8000/dashboard",
     health_url: str = "http://127.0.0.1:8000/api/dashboard/health",
 ) -> bool:
-    """Starts dashboard runner if unhealthy and opens browser only after health probe passes."""
+    """Starts the dashboard only when no instance is starting or running, waits (bounded) for its health
+    check, then opens the browser at most once per Windows boot."""
+    from backend.app.core import dashboard_startup as ds
     if not is_backend_healthy(health_url=health_url):
-        logger.info("[STARTUP] Launching dashboard service cleanly...")
-        subprocess.Popen(
-            [_pythonw_exe(), str(PROJECT_ROOT / "backend" / "scripts" / "run_dashboard.py")],
-            cwd=str(PROJECT_ROOT),
-            creationflags=_detached_flags(),
-        )
-        deadline = time.monotonic() + wait_timeout_sec
-        while time.monotonic() < deadline:
-            if is_backend_healthy(health_url=health_url):
-                break
-            time.sleep(0.5)
+        if ds.server_instance_active():
+            logger.info("[STARTUP] A dashboard instance is already starting; waiting for it instead of launching another.")
+            ds.write_status("waiting_for_existing_instance", source="startup_manager")
+        else:
+            logger.info("[STARTUP] Launching dashboard service cleanly...")
+            ds.write_status("launching", source="startup_manager")
+            subprocess.Popen(
+                [_pythonw_exe(), str(PROJECT_ROOT / "backend" / "scripts" / "run_dashboard.py")],
+                cwd=str(PROJECT_ROOT),
+                creationflags=_detached_flags(),
+            )
+        ds.wait_until_healthy(wait_timeout_sec, 1.0, probe=lambda: is_backend_healthy(health_url=health_url))
 
     healthy = is_backend_healthy(health_url=health_url)
-    if healthy and open_browser:
-        logger.info("[STARTUP] Backend healthy; opening browser at %s", dashboard_url)
-        try:
-            webbrowser.open(dashboard_url)
-        except Exception as exc:
-            logger.warning("[STARTUP] Failed to launch browser: %s", exc)
-    elif not healthy:
+    if healthy:
+        ds.write_status("healthy", source="startup_manager")
+        if open_browser and ds.open_browser_once(dashboard_url, source="startup_manager"):
+            logger.info("[STARTUP] Backend healthy; opened browser at %s", dashboard_url)
+        elif open_browser:
+            logger.info("[STARTUP] Backend healthy; browser already opened in this Windows session.")
+    else:
         logger.warning("[STARTUP] Dashboard backend did not pass health gate within %.1fs; browser suppressed.", wait_timeout_sec)
+        ds.write_status("failed", source="startup_manager", reason=f"not healthy within {wait_timeout_sec:.0f}s")
     return healthy
 
 
@@ -238,7 +242,13 @@ def run_health_monitor_loop(
             if wall_jump > 90.0:
                 logger.info("[MONITOR] Sleep/resume clock jump detected (%.1fs); re-verifying health.", wall_jump)
 
-            if not probe():
+            from backend.app.core import dashboard_startup as ds
+            starting = (not probe()) and health_probe is None and ds.server_instance_active()
+            if starting:
+                # a dashboard process holds the server lock: it is still starting (cold boot) or busy;
+                # launching another would only fail on the port. Not a crash.
+                logger.info("[MONITOR] Dashboard not answering yet but its process is alive; not restarting.")
+            elif not probe():
                 allowed, backoff = tracker.can_restart("dashboard")
                 if allowed:
                     logger.warning("[MONITOR] Dashboard unhealthy; backing off %.1fs before restart.", backoff)

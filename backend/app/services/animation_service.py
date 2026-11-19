@@ -34,8 +34,9 @@ MUSIC_DIR = os.path.join(BASE_DIR, "assets", "audio", "music")
 MEDIA_VIDEO_DIR = os.path.join(BASE_DIR, "media", "video")
 THUMB_DIR = os.path.join(BASE_DIR, "thumbnails", "output")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
-FFMPEG_EXE = os.path.join(BASE_DIR, "tools", "ffmpeg", "bin", "ffmpeg.exe")
-FFPROBE_EXE = os.path.join(BASE_DIR, "tools", "ffmpeg", "bin", "ffprobe.exe")
+from backend.app.core.paths import get_ffmpeg_path as _ffmpeg, get_ffprobe_path as _ffprobe
+FFMPEG_EXE = _ffmpeg()      # honours CRAZZYDOCS_TOOLS_DIR; same path in production
+FFPROBE_EXE = _ffprobe()
 
 os.makedirs(MEDIA_VIDEO_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)

@@ -94,16 +94,18 @@ class QualityControlEngine:
             errors.append("Video does not contain an audio stream.")
             checks["audio_presence"] = "FAIL"
             
-        # 7. Video Duration & Frame Count Standard (50-60s @ 30 FPS)
+        # 7. Video Duration Standard: 30-58 s inclusive, measured on the rendered file (Stage 3.29)
         if not allow_custom_duration:
-            if info["duration"] < 49.5:
-                errors.append(f"Production video duration is too short ({info['duration']:.2f}s < 50.0s). Standard is 50-60s.")
-                checks["duration"] = f"FAIL ({info['duration']:.2f}s < 50.0s)"
-            elif info["duration"] > 60.5:
-                errors.append(f"Production video duration is too long ({info['duration']:.2f}s > 60.0s). Standard is 50-60s.")
-                checks["duration"] = f"FAIL ({info['duration']:.2f}s > 60.0s)"
+            from backend.app.rendering.duration_standards import (
+                PRODUCTION_MAX_DURATION_SEC, PRODUCTION_MIN_DURATION_SEC)
+            if round(info["duration"], 3) < PRODUCTION_MIN_DURATION_SEC:
+                errors.append(f"Production video duration is too short ({info['duration']:.2f}s < {PRODUCTION_MIN_DURATION_SEC:.1f}s). Standard is 30-58s.")
+                checks["duration"] = f"FAIL ({info['duration']:.2f}s < {PRODUCTION_MIN_DURATION_SEC:.1f}s)"
+            elif round(info["duration"], 3) > PRODUCTION_MAX_DURATION_SEC:
+                errors.append(f"Production video duration is too long ({info['duration']:.2f}s > {PRODUCTION_MAX_DURATION_SEC:.1f}s). Standard is 30-58s.")
+                checks["duration"] = f"FAIL ({info['duration']:.2f}s > {PRODUCTION_MAX_DURATION_SEC:.1f}s)"
             else:
-                checks["duration"] = f"PASS ({info['duration']:.2f}s, target 50-60s)"
+                checks["duration"] = f"PASS ({info['duration']:.2f}s, accepted 30-58s)"
         else:
             if info["duration"] >= 3.0:
                 checks["duration"] = f"PASS ({info['duration']:.2f}s, custom duration approved)"

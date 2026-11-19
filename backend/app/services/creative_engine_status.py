@@ -98,7 +98,13 @@ def status() -> Dict[str, Any]:
     last = reports[0] if reports else None
     failed_checks = [r for r in reports if r.get("passed") is False][:5]
     engine = active_visual_engine()
+    try:
+        from backend.app.rendering.render_parity import parity_report
+        parity = parity_report()
+    except Exception as exc:   # never break the status card
+        parity = {"matches": None, "differences": [], "error": str(exc)[:200]}
     return {
+        "parity": parity,
         "engine_version": ENGINE_VERSION,
         "active_engine": engine,
         "feature_flag": {"name": "CRAZZYDOCS_VISUAL_ENGINE", "value": engine,

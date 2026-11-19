@@ -19,7 +19,8 @@ import subprocess
 from PIL import Image, ImageDraw, ImageFilter
 
 from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE
-FFMPEG_EXE = os.path.join(WORKSPACE, "tools", "ffmpeg", "bin", "ffmpeg.exe")
+from backend.app.core.paths import get_ffmpeg_path as _ffmpeg
+FFMPEG_EXE = _ffmpeg()      # honours CRAZZYDOCS_TOOLS_DIR; same path in production
 SRC_DIR = os.path.join(WORKSPACE, "Youtube Channel Src")
 BRANDING_DIR = os.path.join(WORKSPACE, "assets", "branding", "crazzydocs")
 PREVIEWS_DIR = os.path.join(WORKSPACE, "docs", "previews")

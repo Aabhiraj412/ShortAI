@@ -152,16 +152,16 @@ class ScriptGenerator:
         # 1. Word count check (115 - 140 words, target: 126 words)
         wc = script.word_count
         if wc < TARGET_SCRIPT_WORD_COUNT_MIN:
-            errors.append(f"Script word count ({wc} words) is below minimum {TARGET_SCRIPT_WORD_COUNT_MIN} words. Runtime would be under 50s.")
+            errors.append(f"Script word count ({wc} words) is below minimum {TARGET_SCRIPT_WORD_COUNT_MIN} words. Runtime would be under {PRODUCTION_MIN_DURATION_SEC:.0f}s.")
         elif wc > TARGET_SCRIPT_WORD_COUNT_MAX:
-            errors.append(f"Script word count ({wc} words) exceeds maximum {TARGET_SCRIPT_WORD_COUNT_MAX} words. Runtime would exceed 60s.")
+            errors.append(f"Script word count ({wc} words) exceeds maximum {TARGET_SCRIPT_WORD_COUNT_MAX} words. Runtime would exceed {PRODUCTION_MAX_DURATION_SEC:.0f}s.")
 
-        # 2. Duration check (50.0 - 60.0 seconds)
+        # 2. Duration check (30.0 - 58.0 seconds, inclusive)
         dur = script.estimated_duration_sec
         if dur < PRODUCTION_MIN_DURATION_SEC:
-            errors.append(f"Estimated duration ({dur:.1f}s) is below 50.0s production floor.")
+            errors.append(f"Estimated duration ({dur:.1f}s) is below {PRODUCTION_MIN_DURATION_SEC:.1f}s production floor.")
         elif dur > PRODUCTION_MAX_DURATION_SEC:
-            errors.append(f"Estimated duration ({dur:.1f}s) exceeds 60.0s YouTube Shorts ceiling.")
+            errors.append(f"Estimated duration ({dur:.1f}s) exceeds {PRODUCTION_MAX_DURATION_SEC:.1f}s YouTube Shorts ceiling.")
 
         # 3. Intro fluff check
         hook_lower = script.hook.lower()

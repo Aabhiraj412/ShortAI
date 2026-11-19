@@ -206,3 +206,40 @@ def test_photo_anchor_is_never_a_time_phrase():
     title = "Double axes and coarse pottery reveal connections across the Rhine 5,000 years ago"
     anchor = photos.topic_anchor(title, "Five thousand years ago. Years ago the Rhine. Double axes and coarse pottery.")
     assert "years" not in anchor.lower() and "ago" not in anchor.lower()
+
+
+# ------------------------------------------------------------------ 3.29 production-path findings
+def test_decimal_numbers_are_never_cut_at_the_point():
+    h, hi = sp.key_phrase("By November 2026, Forbes valued his net worth at US$141.9 billion, placing him high.")
+    assert "141.9 billion" in h or "2026" in h
+    assert "US$141 " not in h + " " and not h.endswith("US$141")
+    h2, _ = sp.key_phrase("Each award is worth 3,000 dollars, or more.")
+    assert "3,000" in h2
+
+
+def test_one_long_payoff_sentence_is_split_at_a_meaningful_clause():
+    secs = [{"id": "a", "stage": "HOOK", "text": "Jensen Huang co-founded Nvidia in 1993 with two engineers."},
+            {"id": "b", "stage": "PAYOFF", "text": "By November 2026, Forbes valued his net worth at US$141.9 billion, "
+                                                   "placing him as the world thirteenth-wealthiest person prior to his 2026 resignation."}]
+    tm = [{"id": "a", "start_sec": 0, "end_sec": 8}, {"id": "b", "start_sec": 8, "end_sec": 20}]
+    p = sp.plan_scenes(job_id="j", topic_title="Jensen Huang", category="Technology", sections=secs, timings=tm,
+                       total_duration=24)
+    assert len(p["scenes"]) == 3 and p["scenes"][-1]["template"] == "reveal"
+    assert p["scenes"][-1]["end_sec"] - p["scenes"][-1]["start_sec"] < 12
+    assert any("141.9" in n["text"] for n in p["scenes"][1]["numbers"])
+
+
+def test_short_trailing_fragment_is_never_made_the_payoff():
+    secs = [{"id": "a", "stage": "HOOK", "text": "Climate anxiety affects young people in different ways."},
+            {"id": "b", "stage": "PAYOFF", "text": "Climate anxiety can fuel a fight for real solutions everywhere, or freeze you entirely."}]
+    tm = [{"id": "a", "start_sec": 0, "end_sec": 6}, {"id": "b", "start_sec": 6, "end_sec": 16}]
+    p = sp.plan_scenes(job_id="k", topic_title="Climate anxiety", category="Science", sections=secs, timings=tm,
+                       total_duration=20)
+    assert not p["scenes"][-1]["narration"].lower().startswith("or freeze")
+
+
+def test_headline_never_keeps_half_a_quotation():
+    h, _ = sp.key_phrase('Each person builds their own "subjective reality" from input.')
+    assert h.count('"') % 2 == 0
+    h2, _ = sp.key_phrase('The so-called "dark forest" theory explains silence.')
+    assert h2.count('"') % 2 == 0

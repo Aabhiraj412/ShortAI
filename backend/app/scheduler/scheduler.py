@@ -289,6 +289,8 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
 
     capacity = production_capacity(excluding_job_id=job_id)
     if not capacity["available"]:
+        logger.warning("[SCHEDULER] Deferring cycle %s (%s): production concurrency limit reached (%s of %s active).",
+                       cycle_id, job_id, capacity.get("active"), capacity.get("maximum"))
         return {
             "status": "DEFERRED",
             "job_id": job_id,
@@ -886,7 +888,12 @@ def reconcile_youtube_publications() -> Dict:
     """Periodically reconciles scheduled YouTube videos via YouTube Data API without auto-publishing."""
     try:
         from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
-        return youtube_publishing_engine.verify_scheduled_publications()
+        result = youtube_publishing_engine.verify_scheduled_publications()
+        try:   # Stage 3.29: compare YouTube's thumbnail with the uploaded artifact (read-only)
+            result["thumbnails"] = youtube_publishing_engine.verify_uploaded_thumbnails()
+        except Exception as t_exc:
+            logger.debug("[SCHEDULER] Thumbnail verification skipped: %s", t_exc)
+        return result
     except Exception as exc:
         logger.debug("[SCHEDULER] YouTube status reconciliation skipped: %s", exc)
         return {"checked": 0, "promoted": 0, "error": str(exc)}

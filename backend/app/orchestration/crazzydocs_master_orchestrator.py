@@ -169,7 +169,7 @@ class CrazzyDocsMasterOrchestrator:
         return registry
 
     def _synthesize_topic_script(self, topic: ScoredTopic, hook_text: str) -> str:
-        """Dynamically generates a 50-58 second factual script for the topic."""
+        """Dynamically generates a factual script for the topic (final video accepted at 30-58 s)."""
         s1 = hook_text.strip()
         if not s1.endswith((".", "!", "?")):
             s1 += "."
@@ -886,7 +886,7 @@ class CrazzyDocsMasterOrchestrator:
                 render_telemetry: Dict[str, Any] = {}
             else:
                 narration_text = self._synthesize_topic_script(selected_topic, best_hook.hook_text)
-                dur = max(50.5, min(58.5, round(len(narration_text.split()) / 2.3, 2)))
+                dur = max(30.0, min(58.0, round(len(narration_text.split()) / 2.3, 2)))
                 visual_beats = self._build_topic_visual_beats(selected_topic, best_hook.hook_text, dur)
                 voice_path = os.path.join(prod_ws.audio_dir, f"voiceover_{job_id}.mp3")
                 if not os.path.exists(voice_path):
@@ -975,7 +975,8 @@ class CrazzyDocsMasterOrchestrator:
                     _cached_manifest = prod_ws.load_manifest() or {}
                     _cached_renderer = str(_cached_manifest.get("renderer") or "").strip().lower()
                     _renderer_ok = (not is_full_live) or (_cached_renderer == "lemo-opuscar")
-                    if _renderer_ok and (not is_full_live or (50.0 <= _cached_dur < 60.0)) and abs(_cached_dur - dur) <= 1.5:
+                    from backend.app.rendering.duration_standards import duration_accepted as _dur_ok
+                    if _renderer_ok and (not is_full_live or _dur_ok(_cached_dur)) and abs(_cached_dur - dur) <= 1.5:
                         _reuse_video = True
                     else:
                         logger.warning(
@@ -1030,8 +1031,11 @@ class CrazzyDocsMasterOrchestrator:
                 # Feature flag: the legacy film builder runs unless the operator sets
                 # CRAZZYDOCS_VISUAL_ENGINE=pop_info_v1 (environment or .env.local).
                 visual_engine = active_visual_engine()
+                from backend.app.rendering import render_parity
+                render_parity_report = render_parity.log_parity(job_id)
                 if visual_engine != "legacy":
                     logger.info("[STAGE 9] Visual engine %s selected by feature flag", visual_engine)
+                    _approved = render_parity.APPROVED_RENDER_OPTIONS
                     pop_info_result = self._render_with_bounded_retries(
                         job_id,
                         lambda: render_pop_info(
@@ -1039,7 +1043,12 @@ class CrazzyDocsMasterOrchestrator:
                             topic=selected_topic.title, category=selected_topic.category,
                             script_data=script_data or {}, section_timings=section_timings or [],
                             voice_path=voice_path, duration_sec=dur, output_path=Path(final_video_path),
-                            photos=photos_from_media_assets(acquired_assets),
+                            # same options as the approved test renders: scene-level photo selection
+                            # (topic-level photos only when scene selection is switched off)
+                            photos=[] if _approved["select_photos"] else photos_from_media_assets(acquired_assets),
+                            select_photos=_approved["select_photos"],
+                            run_quality_gate=_approved["run_quality_gate"],
+                            key_entities=list(getattr(selected_topic, "key_entities", None) or []),
                             identity_check=(None if identity_registry is None else
                                             lambda fp: self._check_visual_identity(identity_registry, job_id, fp)),
                         ),
@@ -1265,6 +1274,20 @@ class CrazzyDocsMasterOrchestrator:
                 )
                 winning_headline = winning_thumb.headline_text
                 winning_thumb_score = getattr(getattr(winning_thumb, "score", None), "composite_score", None)
+                # Stage 3.29: the YouTube upload artifact (1280x720, <2 MB, validated) is made here and
+                # stored beside the 9:16 design; the sidecar lets a later retry rebuild it identically.
+                try:
+                    from backend.app.services import thumbnail_pipeline as _tpl
+                    _tpl.write_sidecar(thumb_path, headline=winning_headline,
+                                       source_image=getattr(winning_thumb, "focal_asset_path", None))
+                    yt_thumb = _tpl.youtube_artifact_for(thumb_path, headline=winning_headline)
+                    yt_val = _tpl.validate_thumbnail(yt_thumb)
+                    logger.info("[STAGE 10] YouTube thumbnail %s: %s", "valid" if yt_val["ok"] else "INVALID",
+                                yt_thumb if yt_val["ok"] else "; ".join(yt_val["problems"]))
+                    if yt_thumb:
+                        prod_ws.register_artifact("STAGE_10_YOUTUBE_THUMBNAIL", "thumbnail", yt_thumb, copy_into_workspace=False)
+                except Exception as _t_exc:
+                    logger.warning("[STAGE 10] YouTube thumbnail artifact not created: %s", _t_exc)
                 production_observability.complete_stage(job_id, "thumbnail_generation", f"Selected winning thumbnail '{winning_headline}' (Score {winning_thumb.score.composite_score:.1f})")
                 if persist_to_db:
                     self._update_checkpoint(job_id, "THUMBNAIL", 85.0, {
@@ -1295,8 +1318,53 @@ class CrazzyDocsMasterOrchestrator:
             prod_ws.register_artifact("STAGE_11_METADATA", "metadata", meta_json_path, copy_into_workspace=False)
 
             logger.info("[STAGE 11] Running quality control gate...")
-            if dur >= 60.0 or dur < 50.0:
-                raise ValueError(f"QC Failure: Duration {dur:.2f}s is outside Shorts 50-58s window.")
+            # Duration is measured on the final rendered MP4 (not the planned script) and must be
+            # inside the inclusive 30-58 s window (Stage 3.29).
+            from backend.app.rendering.duration_standards import duration_violation
+            measured_dur = dur
+            if final_video_path and os.path.isfile(final_video_path):
+                try:
+                    from backend.app.services.animation_service import probe_video as _probe_final
+                    measured_dur = float((_probe_final(final_video_path) or {}).get("duration") or dur)
+                except Exception as _probe_exc:
+                    logger.warning("[STAGE 11] Could not probe final video duration (%s); using %.2fs.", _probe_exc, dur)
+            _dur_problem = duration_violation(measured_dur)
+
+            def _thumb_manifest(path, headline):
+                try:
+                    from backend.app.services import thumbnail_pipeline as _tpl
+                    yt = None
+                    if path:
+                        cand = Path(path).with_name(Path(path).stem + _tpl.YOUTUBE_SUFFIX)
+                        yt = str(cand) if cand.is_file() else None
+                    return {"design_path": path, "headline": headline, "youtube_artifact": yt,
+                            "youtube_validation": _tpl.validate_thumbnail(yt) if yt else None}
+                except Exception as _exc:
+                    return {"design_path": path, "headline": headline, "error": str(_exc)[:200]}
+
+            def _write_render_manifest(qc_state, scope):
+                # every generated video has a render manifest (renderer, engine, configuration, parity,
+                # script fingerprint, asset provenance, scene types, quality results)
+                try:
+                    from backend.app.rendering import render_parity as _rp
+                    _film = scope.get("film_manifest") or {}
+                    _pop = scope.get("pop_info_result") or {}
+                    _path = os.path.join(prod_ws.prod_dir, "manifests", f"render_manifest_{job_id}.json")
+                    _rp.write_render_manifest(
+                        _path, job_id=job_id, execution_context=execution_context.value,
+                        visual_engine=str(scope.get("visual_engine") or _film.get("engine") or "legacy"),
+                        script_data=script_data or {}, film=_film,
+                        quality={"visual_quality_gate": _pop.get("quality"), **qc_state},
+                        measured_duration_sec=measured_dur, video_path=str(final_video_path),
+                        thumbnail=_thumb_manifest(scope.get("thumb_path"), scope.get("winning_headline")),
+                        parity=scope.get("render_parity_report"))
+                    prod_ws.register_artifact("STAGE_11_RENDER_MANIFEST", "manifest", _path, copy_into_workspace=False)
+                except Exception as _mexc:
+                    logger.warning("[MANIFEST] Could not write render manifest for %s: %s", job_id, _mexc)
+
+            _write_render_manifest({"duration_check": _dur_problem or "PASS", "qc": "pending"}, locals())
+            if _dur_problem:
+                raise ValueError(f"QC Failure: {_dur_problem}")
 
             qc_checks_report: Dict = {}
             if is_full_live:
@@ -1323,6 +1391,8 @@ class CrazzyDocsMasterOrchestrator:
                 with open(qc_report_path, "w", encoding="utf-8") as f:
                     json.dump({"passed": qc_passed, "errors": qc_errors, "checks": qc_checks_report}, f, indent=2)
                 prod_ws.register_artifact("STAGE_11_QC", "report", qc_report_path, copy_into_workspace=False)
+                _write_render_manifest({"duration_check": "PASS", "qc": "PASS" if qc_passed else "FAIL",
+                                        "qc_errors": qc_errors}, locals())
                 if not qc_passed:
                     raise ValueError(f"QC Failure: {'; '.join(qc_errors)}")
 
@@ -1377,6 +1447,8 @@ class CrazzyDocsMasterOrchestrator:
                             db_session.commit()
                 raise ValueError(f"BLOCKED_QC: {integrity_report.rejection_reasons}")
 
+            _write_render_manifest({"duration_check": "PASS", "qc": "PASS" if is_full_live else "skipped (not live)",
+                                    "integrity_gate": "PASS", "integrity_checks": len(integrity_report.checks)}, locals())
             production_observability.complete_stage(job_id, "quality_control", f"QC and {len(integrity_report.checks)}-point Integrity Gate PASSED")
             obs_stage = "finalization"
             production_observability.start_stage(job_id, "finalization", "Finalizing canonical workspace, manifest & notifications...", progress=30.0)

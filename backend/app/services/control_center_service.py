@@ -1853,8 +1853,8 @@ def validate_production_config(cfg: dict[str, Any]) -> dict[str, Any]:
     if not (1 <= conc <= 2):
         errors.append("Concurrency must be 1 or 2.")
     dur = int(cfg.get("duration_target_sec", 54))
-    if not (50 <= dur <= 58):
-        errors.append("duration_target_sec must be between 50 and 58 for YouTube Shorts.")
+    if not (30 <= dur <= 58):
+        errors.append("duration_target_sec must be between 30 and 58 for YouTube Shorts.")
     if str(cfg.get("resolution") or "1080x1920") != "1080x1920":
         errors.append("resolution must be 1080x1920.")
     if int(cfg.get("fps", 30)) != 30:

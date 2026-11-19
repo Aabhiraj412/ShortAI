@@ -229,7 +229,7 @@ class QualityGate:
                 allow_custom_duration=False,
             )
             results["check_11_production_duration"] = {
-                "name": "Production Duration Standard (50-60s @ 30 FPS)",
+                "name": "Production Duration Standard (30-58s inclusive @ 30 FPS)",
                 "passed": dur_ok,
                 "details": f"{v_dur:.2f}s ({stream_props.get('nb_frames', 0)} frames)",
                 "violations": dur_violations,

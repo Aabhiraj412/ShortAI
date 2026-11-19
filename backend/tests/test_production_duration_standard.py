@@ -68,17 +68,19 @@ def test_duration_validation_rules():
     ok, errs = validate_production_duration(55.0, 1650)
     assert ok, f"Target 55s failed: {errs}"
 
-    # 2. Minimum duration boundary (50.0s, 1500 frames) -> Must PASS
-    ok, errs = validate_production_duration(50.0, 1500)
-    assert ok, f"Min 50s failed: {errs}"
+    # 2. Minimum duration boundary (Stage 3.29: 30.0s, 900 frames) -> Must PASS
+    ok, errs = validate_production_duration(30.0, 900)
+    assert ok, f"Min 30s failed: {errs}"
 
-    # 3. Maximum duration boundary (60.0s, 1800 frames) -> Must PASS
+    # 3. Maximum duration boundary (58.0s, 1740 frames) -> Must PASS; 60.0s (old limit) -> Must FAIL
+    ok, errs = validate_production_duration(58.0, 1740)
+    assert ok, f"Max 58s failed: {errs}"
     ok, errs = validate_production_duration(60.0, 1800)
-    assert ok, f"Max 60s failed: {errs}"
+    assert not ok, "60s (outside the 30-58s window) was incorrectly accepted"
 
-    # 4. Under-duration rejection (42.0s, 1260 frames) -> Must FAIL
-    ok, errs = validate_production_duration(42.0, 1260)
-    assert not ok, "Under-duration (42s) was incorrectly accepted"
+    # 4. Under-duration rejection (24.0s, 720 frames) -> Must FAIL
+    ok, errs = validate_production_duration(24.0, 720)
+    assert not ok, "Under-duration (24s) was incorrectly accepted"
     assert any("below the minimum" in e for e in errs)
 
     # 5. Over-duration rejection (68.0s, 2040 frames) -> Must FAIL

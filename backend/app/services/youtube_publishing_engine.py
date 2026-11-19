@@ -1251,6 +1251,92 @@ class YouTubePublishingEngine:
         self.db = db or PublishingDatabase()
         self.max_daily_quota = max_daily_quota
 
+    # ------------------------------------------------------------------ thumbnails (Stage 3.29)
+    def thumbnail_store(self):
+        from backend.app.services.thumbnail_pipeline import ThumbnailStateStore
+        return ThumbnailStateStore(self.db.db_path)
+
+    def _upload_thumbnail(self, service: Any, ledger_id: Optional[int], video_id: str,
+                          thumbnail_path: Optional[str]) -> Dict[str, Any]:
+        """Validated 1280x720 artifact -> thumbnails().set on the EXISTING video id -> persisted state.
+        Remote verification runs later (CDN propagation) in verify_uploaded_thumbnails()."""
+        from backend.app.services import thumbnail_pipeline as tpl
+        store = self.thumbnail_store() if ledger_id is not None else None
+        prev = store.get(ledger_id) if store else {}
+        attempts = int(prev.get("upload_attempts") or 0) + 1
+        artifact = tpl.youtube_artifact_for(thumbnail_path) if thumbnail_path else None
+        validation = tpl.validate_thumbnail(artifact)
+        if not artifact or not validation["ok"]:
+            err = "Thumbnail invalid: " + "; ".join(validation["problems"] or ["no thumbnail"])
+            if store:
+                store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
+                             upload_status="invalid", upload_attempts=attempts, last_error=err)
+            logger.warning("Thumbnail not uploaded for %s: %s", video_id, err)
+            return {"uploaded": False, "status": "invalid", "error": err, "artifact": artifact}
+        try:
+            media_thumb = MediaFileUpload(artifact, mimetype=mimetypes.guess_type(artifact)[0] or "image/jpeg")
+            service.thumbnails().set(videoId=video_id, media_body=media_thumb).execute()
+            self.db.add_quota_consumption(50)
+        except HttpError as h_err:
+            restricted = h_err.resp.status in (401, 403)
+            err = f"Thumbnail upload failed (HTTP {h_err.resp.status})."
+            st = "restricted" if restricted else "failed"
+            if store:
+                store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
+                             upload_status=st, upload_attempts=attempts, last_error=err)
+            logger.warning("Custom thumbnail %s for %s: %s", st, video_id, err)
+            return {"uploaded": False, "status": "eligibility_restricted" if restricted else "failed",
+                    "error": err, "artifact": artifact}
+        except Exception as exc:
+            err = f"Thumbnail upload failed: {type(exc).__name__}"
+            if store:
+                store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
+                             upload_status="failed", upload_attempts=attempts, last_error=err)
+            logger.warning("Thumbnail upload failed for %s; the video upload remains available.", video_id)
+            return {"uploaded": False, "status": "failed", "error": err, "artifact": artifact}
+        if store:
+            store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
+                         upload_status="uploaded", upload_attempts=attempts,
+                         uploaded_at=datetime.utcnow().isoformat() + "Z", verify_status="pending",
+                         verify_attempts=0, last_error=None)
+        logger.info("Custom thumbnail uploaded for video: %s (%s)", video_id, os.path.basename(artifact))
+        return {"uploaded": True, "status": "uploaded", "error": None, "artifact": artifact}
+
+    def verify_uploaded_thumbnails(self, max_attempts: int = 6, min_age_sec: int = 120,
+                                   fetch=None) -> Dict[str, Any]:
+        """Compares YouTube's thumbnail with the uploaded artifact. A thumbnail still not shown after
+        max_attempts checks marks the publication not ready (error_details), never re-uploads the video."""
+        from backend.app.services import thumbnail_pipeline as tpl
+        store = self.thumbnail_store()
+        now = datetime.utcnow()
+        checked, results = 0, []
+        for lid, st in store.all().items():
+            if st.get("upload_status") != "uploaded" or st.get("verify_status") not in ("pending", "mismatch", "unavailable"):
+                continue
+            try:
+                up = datetime.fromisoformat(str(st.get("uploaded_at") or "").rstrip("Z"))
+            except ValueError:
+                up = now
+            if (now - up).total_seconds() < min_age_sec:
+                continue
+            checked += 1
+            res = tpl.verify_remote(st["video_id"], st["artifact_path"], fetch=fetch)
+            n = int(st.get("verify_attempts") or 0) + 1
+            fields = {"verify_status": res["status"], "verify_detail_json": res, "verify_attempts": n}
+            if res["status"] == "verified":
+                fields["verified_at"] = now.isoformat() + "Z"
+                rec = self.db.get_publication(lid) or {}
+                if str(rec.get("error_details") or "").lower().startswith("thumbnail"):
+                    self.db.update_queue_metadata_and_schedule(lid, error_details=None)
+            elif n >= max_attempts:
+                msg = (f"Thumbnail verification failed: YouTube still shows a different image after {n} checks "
+                       f"({res['status']}). Use Retry thumbnail; the video itself is unchanged.")
+                fields.update(verify_status="failed", last_error=msg)
+                self.db.update_queue_metadata_and_schedule(lid, error_details=msg)
+            store.update(lid, **fields)
+            results.append({"ledger_id": lid, **res})
+        return {"checked": checked, "results": results}
+
     def check_remote_channel_duplicate(
         self,
         service: Any,
@@ -1569,30 +1655,10 @@ class YouTubePublishingEngine:
         thumb_uploaded = False
         thumb_error = None
         thumb_status = "not_provided"
-        if thumbnail_path and os.path.exists(thumbnail_path) and video_id:
-            try:
-                thumb_mime = mimetypes.guess_type(thumbnail_path)[0] or "image/jpeg"
-                media_thumb = MediaFileUpload(thumbnail_path, mimetype=thumb_mime)
-                service.thumbnails().set(videoId=video_id, media_body=media_thumb).execute()
-                thumb_uploaded = True
-                thumb_status = "uploaded"
-                self.db.add_quota_consumption(50)
-                logger.info("Custom thumbnail uploaded for video: %s", video_id)
-            except HttpError as h_err:
-                thumb_error = f"Thumbnail upload failed (HTTP {h_err.resp.status})."
-                if h_err.resp.status in (401, 403):
-                    thumb_status = "eligibility_restricted"
-                    logger.warning(
-                        "Custom thumbnail restricted (YouTube channel must be phone-verified for custom thumbnails): %s",
-                        thumb_error
-                    )
-                else:
-                    thumb_status = "failed"
-                    logger.warning("Custom thumbnail HTTP error: %s", thumb_error)
-            except Exception:
-                thumb_error = "Thumbnail upload failed."
-                thumb_status = "failed"
-                logger.warning("Thumbnail upload failed; the video upload remains available.")
+        if video_id:
+            # always after the video has its id; validated 1280x720 artifact; state persisted
+            t_res = self._upload_thumbnail(service, ledger_id, video_id, thumbnail_path)
+            thumb_uploaded, thumb_status, thumb_error = t_res["uploaded"], t_res["status"], t_res["error"]
 
         verified = False
         remote_publish_at = None
@@ -1606,8 +1672,9 @@ class YouTubePublishingEngine:
                     st_obj = item.get("status") or {}
                     remote_publish_at = st_obj.get("publishAt")
                     remote_privacy = st_obj.get("privacyStatus")
-                    thumbs = (item.get("snippet") or {}).get("thumbnails") or {}
-                    thumbnail_verified = bool(thumb_uploaded and (thumbs or True))
+                    # the remote image is compared with the artifact later (CDN propagation);
+                    # never reported as verified here
+                    thumbnail_verified = False
                     break
         except Exception:
             verified = False
@@ -1635,6 +1702,13 @@ class YouTubePublishingEngine:
         )
         if ledger_id is None:
             ledger_id = self.db.record_publication(rec)
+            if video_id and ledger_id is not None:   # thumbnail state is keyed by the new ledger row
+                t_art = (locals().get("t_res") or {}).get("artifact")
+                self.thumbnail_store().update(
+                    ledger_id, video_id=video_id, artifact_path=t_art,
+                    upload_status="uploaded" if thumb_uploaded else ("invalid" if thumb_status == "invalid" else "failed"),
+                    upload_attempts=1, uploaded_at=datetime.utcnow().isoformat() + "Z" if thumb_uploaded else None,
+                    verify_status="pending" if thumb_uploaded else None, last_error=thumb_error)
         else:
             self.db.finish_upload(ledger_id, video_id, status_code, publish_at_iso, thumb_error)
             self.db.update_upload_state(
@@ -1714,12 +1788,9 @@ class YouTubePublishingEngine:
         service = self.oauth.get_authenticated_service()
         if not service:
             return {"success": False, "status": "awaiting_auth", "error": "YouTube account is not authenticated."}
-        try:
-            media_thumb = MediaFileUpload(thumb, mimetype=mimetypes.guess_type(thumb)[0] or "image/jpeg")
-            service.thumbnails().set(videoId=rec["youtube_video_id"], media_body=media_thumb).execute()
-            self.db.add_quota_consumption(50)
-        except Exception as exc:
-            msg = f"Thumbnail upload failed: {exc}"
+        t_res = self._upload_thumbnail(service, ledger_id, rec["youtube_video_id"], thumb)
+        if not t_res["uploaded"]:
+            msg = t_res["error"] or "Thumbnail upload failed."
             self.db.update_queue_metadata_and_schedule(ledger_id, error_details=msg)
             return {"success": False, "status": "thumbnail_failed", "error": msg}
         if str(rec.get("error_details") or "").lower().startswith("thumbnail"):
@@ -1850,14 +1921,8 @@ class YouTubePublishingEngine:
         thumb_uploaded = False
         thumb_error = None
         if include_thumbnail and thumb_to_use and os.path.exists(thumb_to_use):
-            try:
-                thumb_mime = mimetypes.guess_type(thumb_to_use)[0] or "image/jpeg"
-                media_thumb = MediaFileUpload(thumb_to_use, mimetype=thumb_mime)
-                service.thumbnails().set(videoId=vid, media_body=media_thumb).execute()
-                self.db.add_quota_consumption(50)
-                thumb_uploaded = True
-            except Exception as t_exc:
-                thumb_error = f"Thumbnail upload failed: {t_exc}"
+            t_res = self._upload_thumbnail(service, ledger_id, vid, thumb_to_use)
+            thumb_uploaded, thumb_error = t_res["uploaded"], t_res["error"]
 
         verified = False
         remote_privacy = None

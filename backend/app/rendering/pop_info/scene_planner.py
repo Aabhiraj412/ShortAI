@@ -225,7 +225,8 @@ def key_phrase(text: str, max_words: int = 5) -> Tuple[str, str]:
     names, numbers and content density, so the emphasis reads as a phrase, not a cut fragment.
     """
     best, best_score = "", -9.0
-    for clause in [c for c in re.split(r"[,;:.!?\u2014\u2013]|\s-\s", text or "") if c.strip()]:
+    # a "." or "," inside a number ("US$141.9 billion", "3,000") is not a clause break (3.29)
+    for clause in [c for c in re.split(r"(?<!\d)[.,]|[.,](?!\d)|[;:!?\u2014\u2013]|\s-\s", text or "") if c.strip()]:
         words = clause.split()
         for i in range(len(words)):
             for n in range(2, max_words + 1):
@@ -257,6 +258,11 @@ def key_phrase(text: str, max_words: int = 5) -> Tuple[str, str]:
     if not best:
         return "", ""   # no clean phrase: the caller picks another source, never a raw word run
     headline = best.strip(" .,!?;:\"'")
+    # a window can cut a quotation in half ('own "subjective reality'): drop unbalanced quote marks (3.29)
+    for q in ('"', "“", "”"):
+        if q in headline and (headline.count('"') % 2 or headline.count("“") != headline.count("”")):
+            headline = re.sub("[\"“”]", "", headline)
+            break
     return headline, pick_highlight(headline)
 
 
@@ -464,6 +470,23 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
             head, tail = " ".join(parts[:-keep]), " ".join(parts[-keep:])
             cut = s0 + speech * len(head) / total_chars
             chunks[-1:] = [(stage, head, s0, cut), (stage, tail, cut, end)]
+        else:
+            # One long sentence (3.29: a 15 s static payoff in a production-path render): split once at the
+            # clause boundary nearest the middle, only when both halves carry a real idea, so a fragment
+            # like "or freeze you entirely" never becomes the payoff.
+            speech = max(0.1, min(spoken_end, end) - s0)
+            best = None
+            for m in re.finditer(r"(?<!\d),\s+", text):
+                head, tail = text[:m.start()].strip(), text[m.end():].strip()
+                h_sec = speech * len(head) / max(1, len(text))
+                if (len(_content_words(head)) >= 5 and len(_content_words(tail)) >= 5 and h_sec >= 2.0
+                        and (end - s0 - h_sec) >= 2.0 and tail.split()[0].lower() not in ("or", "and", "but")):
+                    score = abs(len(head) - len(tail))
+                    if best is None or score < best[0]:
+                        best = (score, head, tail, h_sec)
+            if best:
+                _, head, tail, h_sec = best
+                chunks[-1:] = [(stage, head, s0, s0 + h_sec), (stage, tail, s0 + h_sec, end)]
 
     from backend.app.rendering.pop_info import creative_director as cd
     direction = cd.video_direction(job_id=job_id, topic_title=topic_title, category=category,

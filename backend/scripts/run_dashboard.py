@@ -204,21 +204,21 @@ def is_server_ready(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
-def poll_and_open_browser(target_url: str, health_url: str, max_wait_sec: float = 30.0, poll_interval: float = 0.5):
-    """Wait for server to become responsive, then open browser."""
-    start_time = time.time()
-    logger.info(f"Waiting for dashboard to become ready at {health_url}...")
-    while time.time() - start_time < max_wait_sec:
-        if is_server_ready(health_url):
-            logger.info(f"Dashboard server is ready! Opening browser to: {target_url}")
-            try:
-                webbrowser.open(target_url)
-                logger.info("Browser launch request issued successfully.")
-            except Exception as e:
-                logger.error(f"Failed to open browser automatically: {e}")
-            return
-        time.sleep(poll_interval)
-    logger.warning(f"Dashboard server did not become ready within {max_wait_sec}s. Skipping automatic browser launch.")
+def poll_and_open_browser(target_url: str, health_url: str, max_wait_sec: float = 180.0, poll_interval: float = 1.0):
+    """Wait (bounded) for the server to answer its health check, then open the browser once per boot.
+    A cold Windows boot needed ~28 s before the server answered (2026-11-14), so 30 s was too short."""
+    from backend.app.core import dashboard_startup as ds
+    logger.info(f"Waiting up to {max_wait_sec:.0f}s for dashboard health at {health_url}...")
+    ds.write_status("waiting_for_health", source="run_dashboard", timeout_sec=max_wait_sec)
+    if not ds.wait_until_healthy(max_wait_sec, poll_interval, probe=lambda: is_server_ready(health_url)):
+        logger.warning(f"Dashboard server did not become ready within {max_wait_sec}s. Skipping automatic browser launch.")
+        ds.write_status("failed", source="run_dashboard", reason=f"not healthy within {max_wait_sec:.0f}s")
+        return
+    ds.write_status("healthy", source="run_dashboard")
+    if ds.open_browser_once(target_url, source="run_dashboard"):
+        logger.info(f"Dashboard server is ready; opened browser to {target_url}")
+    else:
+        logger.info("Dashboard server is ready; browser already opened in this Windows session.")
 
 
 def main():
@@ -233,13 +233,24 @@ def main():
     dashboard_url = f"http://{args.host}:{args.port}/dashboard"
     health_url = f"http://{args.host}:{args.port}/api/dashboard/overview"
 
+    from backend.app.core import dashboard_startup as ds
+
     # 1. Non-destructive port verification: check if CrazzyDocs dashboard is already responding
     if is_server_ready(health_url):
         logger.info(f"CrazzyDocs Dashboard server is ALREADY running and healthy at {dashboard_url}.")
         if args.open_browser:
-            logger.info(f"Opening browser to active dashboard: {dashboard_url}")
-            webbrowser.open(dashboard_url)
+            ds.open_browser_once(dashboard_url, source="run_dashboard(existing)")
         print(f"[OK] Dashboard is already active at: {dashboard_url}")
+        return 0
+
+    # 1b. Single instance: another launcher is already starting (or running) the server. Never start a
+    # second one; at most wait for it and open the browser once.
+    server_lock = ds.ServerLock()
+    if not server_lock.acquire():
+        logger.info("Another dashboard instance holds the server lock (starting or running); not launching a duplicate.")
+        ds.write_status("duplicate_launch_skipped", source="run_dashboard")
+        if args.open_browser:
+            poll_and_open_browser(dashboard_url, health_url)
         return 0
 
     # 2. Check if the port is bound by another process (do not terminate, notify user)
@@ -261,6 +272,7 @@ def main():
         browser_thread.start()
 
     logger.info(f"Starting CrazzyDocs Dashboard server on {args.host}:{args.port} (Root redirects to /dashboard)...")
+    ds.write_status("launching", source="run_dashboard", port=args.port)
 
     try:
         import uvicorn
@@ -275,7 +287,10 @@ def main():
         return 0
     except Exception as e:
         logger.critical(f"Dashboard server encountered fatal error: {e}", exc_info=True)
+        ds.write_status("failed", source="run_dashboard", reason=f"{type(e).__name__}: {str(e)[:300]}")
         return 1
+    finally:
+        server_lock.release()
 
 
 if __name__ == "__main__":

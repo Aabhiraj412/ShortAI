@@ -1840,6 +1840,17 @@ class QueueConfirmRequest(ConfirmedActionRequest):
 async def api_list_publishing_queue(limit: int = 100, _: None = Depends(require_local_control)):
     svc = YouTubePublisherService()
     items = await asyncio.to_thread(svc.list_uploads, limit=limit)
+    try:   # Stage 3.29: thumbnail generation/upload/verification state per row
+        from backend.app.services.thumbnail_pipeline import ready_label
+        states = svc.engine.thumbnail_store().all()
+        for it in items:
+            st = states.get(int(it.get("id") or 0), {})
+            it["thumbnail_state"] = {k: st.get(k) for k in ("upload_status", "verify_status", "upload_attempts",
+                                                            "verify_attempts", "uploaded_at", "verified_at", "last_error")}
+            it["thumbnail_ready"] = ready_label(st) if st else ("not uploaded yet" if not it.get("youtube_video_id")
+                                                                 else "no record (uploaded before Stage 3.29)")
+    except Exception as exc:
+        logging.getLogger(__name__).debug("thumbnail state unavailable: %s", exc)
     oauth = await asyncio.to_thread(svc.oauth.get_auth_status_cached)
     quota_used = svc.engine.db.get_quota_used_today()
     return {
@@ -1999,6 +2010,13 @@ class OperatorRetryRequest(ConfirmedActionRequest):
 class RecoveryPolicyRequest(ConfirmedActionRequest):
     confirm: bool = False
     settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/api/providers/health")
+async def api_provider_health(_: None = Depends(require_local_control)):
+    """Provider inventory and health; never returns credential values (Stage 3.29)."""
+    from backend.app.services import provider_audit
+    return await asyncio.to_thread(provider_audit.summary)
 
 
 @app.get("/api/production/recovery-policy")

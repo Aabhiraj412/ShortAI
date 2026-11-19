@@ -503,7 +503,7 @@ class CreativeProductionPolicy:
             "scoring_disclaimer": "Estimates storytelling and engagement suitability; does not predict or guarantee viral view counts.",
             "visual_priority_order": list(self.visual_policy.priority_order),
             "visual_policy": asdict(self.visual_policy),
-            "target_duration_sec": [50.0, 58.0],
+            "target_duration_sec": [30.0, 58.0],
         }
 
 

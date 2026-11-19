@@ -334,6 +334,7 @@
       <span class="pill" id="pillQuota" title="Daily YouTube Data API quota usage">Quota: --</span>
       <span class="pill" id="pillNextProd" title="Next scheduled production cycle">Next Prod: --</span>
       <span class="pill" id="pillNextPub" title="Target publish time of the next production cycle">Next Target Publish: --</span>
+      <span class="pill" id="pillStartup" title="Dashboard auto-start status (logon task, health wait, browser once per boot)">Startup: --</span>
       <span class="pill" id="pillRefresh" title="Last dashboard sync time">Sync: --</span>
       <button class="btn sm primary" id="btnRefreshAll" onclick="refreshAll()">Refresh All</button>
     </div>
@@ -390,6 +391,13 @@
       </div>
     </div>
 
+    <div class="card" id="provCard">
+      <div class="card-head"><div><h2 class="card-title">API Providers</h2>
+        <p class="card-desc">Every integration, whether its credential is set (values never shown) and its recent health.</p></div></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Provider</th><th>Status</th><th>Credential</th><th>Used by production</th><th>Recent health</th></tr></thead>
+      <tbody id="provBody"><tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr></tbody></table></div>
+    </div>
+
     <div class="card" id="ceCard">
       <div class="card-head">
         <div>
@@ -401,6 +409,7 @@
       <div class="meta-grid">
         <div class="meta-item"><strong>Engine</strong><span id="ceEngine">--</span></div>
         <div class="meta-item"><strong>Production uses</strong><span id="ceFlag">--</span></div>
+        <div class="meta-item"><strong>Production vs approved test config</strong><span id="ceParity">--</span></div>
         <div class="meta-item"><strong>Visual style</strong><span id="ceStyle">--</span></div>
         <div class="meta-item"><strong>Script source</strong><span id="ceScript">--</span></div>
         <div class="meta-item"><strong>Gemini API</strong><span id="ceApi">--</span></div>
@@ -667,8 +676,8 @@
             </select>
           </div>
           <div>
-            <label class="field-label">Target Duration (50-58s)</label>
-            <input type="number" id="cfgDuration" value="54" min="50" max="58" />
+            <label class="field-label">Target Duration (30-58s)</label>
+            <input type="number" id="cfgDuration" value="54" min="30" max="58" />
           </div>
           <div>
             <label class="field-label">Beat Count (12-30)</label>
@@ -1125,6 +1134,9 @@ function renderQueueTable() {
     const thumbHtml = it.thumbnail_path
       ? `<img src="/api/publishing/queue/${it.id}/thumbnail-preview?t=${encodeURIComponent(it.upload_timestamp || it.id)}" alt="thumb" style="width:48px;height:84px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" onerror="this.style.display='none'" />`
       : `<span style="color:var(--muted);font-size:11px;">No thumbnail</span>`;
+    const tReady = it.thumbnail_ready || "";
+    const tCol = tReady === "ready" ? "#86efac" : (tReady.startsWith("NOT READY") ? "#fca5a5" : "var(--muted)");
+    const thumbState = tReady ? `<div style="font-size:10px;color:${tCol};margin-top:3px;max-width:110px;" title="${(it.thumbnail_state && it.thumbnail_state.last_error) || ""}">Thumb: ${tReady}</div>` : "";
     const schedDisplay = it.scheduled_ist_display && it.scheduled_ist_display !== "Not Scheduled"
       ? `<strong>${it.scheduled_ist_display}</strong><br><span style="color:var(--muted);font-size:11px;">UTC: ${it.scheduled_utc_publish_at || "--"}</span>`
       : `<span style="color:var(--muted);">Not Scheduled</span>`;
@@ -1146,7 +1158,7 @@ function renderQueueTable() {
         <td><strong>#${it.id}</strong><br><span style="color:var(--muted);font-size:11px;">${it.topic_title || "--"}</span></td>
         <td><span class="chip ${it.production_cycle_id ? 'completed' : ''}">QC Passed</span><br><span style="color:var(--muted);font-size:11px;">${it.production_cycle_id || "Manual/Imported"}</span></td>
         <td><strong>${it.title || "--"}</strong><br><span style="color:var(--muted);font-size:11px;">${(it.description || "").slice(0, 70)}${(it.description || "").length > 70 ? "..." : ""}</span><br><span style="color:var(--muted);font-size:11px;">Tags: ${tags || "--"}</span></td>
-        <td>${thumbHtml}</td>
+        <td>${thumbHtml}${thumbState}</td>
         <td>${schedDisplay}</td>
         <td><span class="chip ${cls}">${uiSt}</span><br><span style="color:var(--muted);font-size:11px;">Privacy: ${it.youtube_privacy_status || it.visibility || "private"}</span>${errHtml}</td>
         <td><div style="display:flex;flex-direction:column;gap:4px;">${editBtn}${pubNowBtn}${cancelBtn}${ytLink}</div></td>
@@ -1640,6 +1652,11 @@ async function refreshCreativeEngine() {
   ceText("ceDesc", "Pop Info visual engine, script writer and the rendered-video quality gate.");
   ceText("ceEngine", s.engine_version);
   ceText("ceFlag", s.feature_flag.production_uses);
+  const par = s.parity || {};
+  ceText("ceParity", par.matches === true ? "MATCHES the approved configuration"
+    : par.matches === false ? "DIFFERS: " + (par.differences || []).map(d => `${d.key} (approved ${JSON.stringify(d.approved)}, production ${JSON.stringify(d.production)})`).join("; ")
+    : "unknown");
+  const pe = document.getElementById("ceParity"); if (pe) pe.style.color = par.matches === false ? "#fca5a5" : "";
   ceText("ceStyle", s.active_visual_style.replace("_", " "));
   const sg = s.script_generation;
   ceText("ceScript", (s.last_quality && s.last_quality.script_source) || sg.source_when_unconfigured);
@@ -1931,10 +1948,32 @@ async function refreshAll() {
 
 // Deployment diagnostics: warn whenever a running process executes code that no
 // longer matches the source on disk (scheduler daemon or this dashboard).
+async function refreshProviders() {
+  const body = document.getElementById("provBody"); if (!body) return;
+  try {
+    const d = await apiJson("/api/providers/health");
+    const col = { CONFIGURED_HEALTHY: "#86efac", NO_KEY_NEEDED: "#86efac", NOT_REQUIRED_LOCAL: "var(--muted)",
+                  KEY_MISSING: "#fcd34d", NOT_IMPLEMENTED: "var(--muted)", CONFIGURED_INVALID: "#fca5a5", UNAVAILABLE: "#fca5a5" };
+    body.innerHTML = d.providers.map(p => {
+      const h = p.recent_health ? `${p.recent_health.ok} ok / ${p.recent_health.failed} failed` : "--";
+      const cred = p.configured === null || p.configured === undefined ? "none needed" : (p.configured ? "set" : "missing");
+      return `<tr><td title="${p.purpose}">${p.name}</td><td style="color:${col[p.status] || ""}">${p.status.replace(/_/g, " ")}</td>`
+        + `<td>${p.env ? p.env + ": " : ""}${cred}</td><td>${p.production ? "yes" : "no"}</td><td>${h}</td></tr>`;
+    }).join("");
+  } catch (err) { body.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">Provider health unavailable.</td></tr>`; }
+}
+
 async function refreshDeployment() {
   const banner = document.getElementById("staleCodeBanner");
   try {
     const d = await apiJson("/api/control-center/deployment");
+    const st = d.dashboard_startup || {}, sp = document.getElementById("pillStartup");
+    if (sp) {
+      const label = { browser_opened: "OK (browser opened)", browser_already_opened_this_boot: "OK", healthy: "OK",
+                      duplicate_launch_skipped: "OK (duplicate skipped)", failed: "FAILED" }[st.phase] || (st.phase || "--");
+      sp.textContent = `Startup: ${label}`; sp.className = "pill " + (st.phase === "failed" ? "err" : (label.startsWith("OK") ? "ok" : ""));
+      sp.title = `Last startup phase: ${st.phase || "unknown"} at ${st.at_utc || "?"} UTC${st.reason ? " (" + st.reason + ")" : ""}`;
+    }
     if (d.status === "OK") { banner.style.display = "none"; return; }
     document.getElementById("staleCodeText").textContent =
       (d.status === "STALE_CODE" ? "STALE CODE — " : d.status + " — ") + (d.warnings || []).join(" ");
@@ -1969,6 +2008,8 @@ async function requestControlledRestart() {
 
 refreshAll();
 refreshDeployment();
+refreshProviders();
+setInterval(refreshProviders, 300000);
 setInterval(() => {
   refreshOverviewAndHealth();
   refreshPipeline();

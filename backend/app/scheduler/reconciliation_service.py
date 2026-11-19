@@ -336,7 +336,30 @@ class StartupReconciler:
                         )
                         target_publication = cycle_start + timedelta(hours=cycle.window_hours)
 
-                    if (
+                    hb_stale = r_job.heartbeat_at is None or r_job.heartbeat_at < stale_cutoff
+                    if cycle is None and hb_stale:
+                        # Orphan: the job's cycle is not in the active schedule (the schedule was replaced),
+                        # so no scheduler cycle can ever dispatch it. Resuming it here only flipped it back
+                        # to RETRYING every pass, where it held the production slot forever: from
+                        # 2026-11-18 12:00 IST cycle_10_20261118_0900 (RETRYING) and cycle_2_20261118_0600
+                        # (RUNNING) blocked every new cycle (production_capacity -> DEFERRED). Close it with
+                        # a terminal status; artifacts are untouched.
+                        from backend.app.scheduler import retry_policy as _rp
+                        deadline = _rp.recovery_deadline_utc(r_job)
+                        now_utc_naive = now_ist.astimezone(timezone.utc).replace(tzinfo=None)
+                        expired = deadline is None or deadline <= now_utc_naive
+                        r_job.status = "RECOVERY_WINDOW_EXPIRED" if expired else "MISSED"
+                        r_job.recovery_reason = "ORPHANED_BY_SCHEDULE_CHANGE"
+                        r_job.error_details = (
+                            "Cycle is no longer in the active schedule and no worker holds this job"
+                            + (f"; recovery window ended {deadline.isoformat()}Z." if deadline and expired
+                               else "; closed so it no longer occupies the production slot.")
+                        )
+                        logger.warning("[RECONCILER] Closed orphaned job %s as %s (cycle not in active schedule).",
+                                       r_job.id, r_job.status)
+                        report["expired_cycles"].append({"job_id": r_job.id, "cycle_id": r_job.id.rsplit("_", 2)[0],
+                                                         "reason": "ORPHANED_BY_SCHEDULE_CHANGE"})
+                    elif (
                         cycle is not None
                         and cycle_start is not None
                         and target_publication is not None

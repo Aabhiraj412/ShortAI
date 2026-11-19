@@ -155,6 +155,16 @@ def _worker_heartbeat() -> dict[str, Any]:
         }
 
 
+def _dashboard_startup() -> dict[str, Any]:
+    try:
+        from backend.app.core import dashboard_startup as ds
+        st = ds.read_status()
+        return {"phase": st.get("phase"), "at_utc": st.get("at_utc"), "source": st.get("source"),
+                "current_boot": st.get("current_boot"), "reason": st.get("reason")}
+    except Exception as exc:
+        return {"phase": "unknown", "reason": str(exc)[:200]}
+
+
 def _last_successful_production() -> Optional[dict[str, Any]]:
     with control.SessionLocal() as db:
         job = (
@@ -255,6 +265,7 @@ def get_deployment_status(now_utc: Optional[datetime] = None) -> dict[str, Any]:
             "last_sync_ist": sync.get("synced_at_ist"),
         },
         "worker": _worker_heartbeat(),
+        "dashboard_startup": _dashboard_startup(),
         "last_successful_production": _last_successful_production(),
         "restart": {
             "requested": bool(restart_req),

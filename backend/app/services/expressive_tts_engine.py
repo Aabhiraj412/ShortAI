@@ -24,8 +24,10 @@ import edge_tts
 logger = logging.getLogger(__name__)
 
 from backend.app.core.paths import PROJECT_ROOT_STR as WORKSPACE_ROOT
-FFMPEG_PATH = os.path.join(WORKSPACE_ROOT, "tools", "ffmpeg", "bin", "ffmpeg.exe")
-FFPROBE_PATH = os.path.join(WORKSPACE_ROOT, "tools", "ffmpeg", "bin", "ffprobe.exe")
+# same resolution as the rest of the app (honours CRAZZYDOCS_TOOLS_DIR; identical path in production)
+from backend.app.core.paths import get_ffmpeg_path as _ffmpeg, get_ffprobe_path as _ffprobe
+FFMPEG_PATH = _ffmpeg()
+FFPROBE_PATH = _ffprobe()
 
 DEFAULT_VOICE = "en-US-ChristopherNeural"
 

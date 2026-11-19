@@ -28,7 +28,7 @@ import numpy as np
 
 DEFAULT_WEIGHTS = {"hook": 15, "storytelling": 15, "visual_quality": 15, "motion": 15,
                    "pacing": 10, "audio": 10, "typography": 10, "ending": 10}
-DEFAULT_THRESHOLDS = {"pass_score": 70.0, "min_duration": 15.0, "max_duration": 60.0, "target_lufs": -14.0,
+DEFAULT_THRESHOLDS = {"pass_score": 70.0, "min_duration": 30.0, "max_duration": 58.0, "target_lufs": -14.0,
                       "max_true_peak": -1.0, "max_silence_sec": 1.6, "blank_std": 6.0, "frozen_sec": 2.5,
                       "min_scene_sec": 1.5, "max_scene_sec": 9.0}
 SAMPLE_FPS = 4

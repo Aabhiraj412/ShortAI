@@ -148,10 +148,14 @@ def main() -> int:
             photos = [] if scene_photos else photos_for(topic, ws, ExecutionContext.VALIDATION)
             entry["photos_used_candidates"] = len(photos)
             out_mp4 = out_root / f"{job_id}.mp4"
+            # --scene-photos is the approved configuration (render_parity.APPROVED_RENDER_OPTIONS),
+            # the same options the production branch passes.
+            from backend.app.rendering.render_parity import APPROVED_RENDER_OPTIONS
             res = render_pop_info(workspace_root=workspace_root, prod_dir=Path(ws.prod_dir), job_id=job_id,
                                   topic=topic.title, category=topic.category, script_data=script,
                                   section_timings=timings, voice_path=voice, duration_sec=round(vdur + 1.6, 2),
                                   output_path=out_mp4, photos=photos, select_photos=scene_photos,
+                                  run_quality_gate=APPROVED_RENDER_OPTIONS["run_quality_gate"],
                                   key_entities=topic.key_entities)
             entry.update({"ok": True, "video": str(out_mp4), "quality": res.get("quality"),
                           "quality_report": res.get("quality_report_path"), "layout": res.get("layout"),
