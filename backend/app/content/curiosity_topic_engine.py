@@ -981,7 +981,55 @@ class CuriosityTopicEngine:
                 logger.warning("Phys.org RSS fetch error (%s): %s", feed_url, e)
                 self.last_failed_providers.append({"provider": origin_tag, "error": str(e)})
 
-        return (enriched_candidates + rss_candidates)[: max_candidates + 6]
+        # 5. GNews current events (Stage 3.30): optional supplement, never required.
+        gnews_candidates = self._gnews_candidates(preferred_category, disc_ts)
+        return (enriched_candidates + rss_candidates + gnews_candidates)[: max_candidates + 6]
+
+    def _gnews_candidates(self, preferred_category: Optional[str], disc_ts: str) -> List[Dict[str, Any]]:
+        """Events reported by >= 2 distinct outlets in the last 3 days. A headline is not treated as a verified
+        fact: the candidate is labelled as corroborated news and keeps every source URL for the research stage."""
+        out: List[Dict[str, Any]] = []
+        try:
+            from backend.app.content.gnews_client import GNewsClient
+            client = GNewsClient()
+            if not client.configured():
+                return out
+            cats = ("technology", "science", "business")
+            if preferred_category:
+                pref_key = self.policy.get_category(preferred_category).key
+                cats = tuple(c for c in cats if self.policy.get_category(c.title()).key == pref_key) or ()
+            for ev in client.corroborated_events(cats)[:3]:
+                arts = ev["articles"]
+                text = " ".join(self._clean_text((a.get("description") or "") + " " + (a.get("content") or "").split("[")[0])
+                                for a in arts)
+                sents = self._split_clean_sentences(text)
+                if len(text) < 160 or len(sents) < 3:
+                    continue
+                title = self._clean_text(ev["title"])
+                classified = self.policy.classify_topic(title, text)
+                slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:36]
+                src_list = [f"{(a.get('source') or {}).get('name') or 'News'} ({a.get('publishedAt')}): {a.get('url')}"
+                            for a in arts]
+                out.append({
+                    "id": f"gnews_{slug}", "title": title,
+                    "category": classified.display_name if classified else ev["category"],
+                    "category_code": classified.category_code if classified else "NEWS",
+                    "summary": text[:600], "extended_extract": text, "factual_bullets": sents[:6],
+                    "curiosity": 8.6, "surprise": 8.4, "storytelling": 8.2, "visual_potential": 7.8,
+                    "emotional_connection": 8.2,
+                    "factual_reliability": 7.5,          # corroborated headlines, not independently fact-checked
+                    "verification": "multi_source_corroborated_headline",
+                    "sources": src_list, "key_entities": self._extract_entities(title, text),
+                    "image_urls": [a["image"] for a in arts if str(a.get("image") or "").startswith("http")][:3],
+                    "discovery_source": f"gnews_{ev['gnews_category']}", "discovery_timestamp": disc_ts,
+                    "publication_timestamp": ev["latest_published_at"],
+                    "research_fingerprint": compute_research_fingerprint(summary=text[:600], extended_extract=text,
+                                                                         factual_bullets=sents[:6], sources=src_list),
+                })
+        except Exception as exc:   # GNews availability never decides whether a cycle can run
+            logger.warning("GNews discovery skipped: %s", type(exc).__name__)
+            self.last_failed_providers.append({"provider": "gnews", "error": type(exc).__name__})
+        return out
 
     def discover_and_rank_live_topics(
         self,

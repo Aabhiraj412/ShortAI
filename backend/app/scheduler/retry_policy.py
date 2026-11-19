@@ -10,8 +10,10 @@ Policy `unlimited_until_recovery_deadline` (default since 2026-11-14, see recove
   missing credentials) never loop: the retry waits for a cooldown AND a meaningful change, i.e. a
   new deployed code revision or an operator acknowledgement. The same inputs are never re-run
   against the same code that already proved it cannot succeed.
-- A failure after a valid video was rendered is never re-run (the video would be regenerated):
-  POST_RENDER_FAILURE stays terminal with the artifacts preserved.
+- A failure after a valid video was rendered (POST_RENDER_FAILURE) keeps its real cause (Stage 3.30):
+  TRANSIENT causes back off and retry, DETERMINISTIC causes (e.g. a QC rule) wait for a code/config change or an
+  operator acknowledgement, PERMANENT causes stay blocked. A post-render retry REUSES the preserved video: it is
+  never re-rendered (the orchestrator fails the attempt instead of rendering again) and never re-uploaded.
 - Publishing (queue handoff) failures use their own counter and never restart production.
 - Every attempt is appended to cycle_state.attempt_history in checkpoint_data_json, so retry
   state and history survive process restarts.
@@ -67,6 +69,8 @@ PERMANENT_MESSAGE_MARKERS = (
 )
 DETERMINISTIC_MESSAGE_MARKERS = (
     "blocked_qc",
+    "qc failure",                 # e.g. "QC Failure: Duration 49.20s is outside ..." (rule-dependent)
+    "preserved video cannot be reused",
     "check_a_topic_narration",
     "invalid research",
     "script validation",
@@ -174,15 +178,23 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
     cs = cp.setdefault("cycle_state", {})
     is_handoff = bool(preserved_video and str(job.current_stage or "").upper() == "PUBLISHING_QUEUE_HANDOFF"
                       and cp.get("queue_handoff"))
+    quota_deferral = is_handoff and _is_quota_deferral(msg)
     if is_handoff:
-        attempts = int(cs.get("publish_attempts", 0)) + 1    # publishing never consumes production attempts
+        # publishing never consumes production attempts; a quota deferral (Stage 3.30) consumes none at all:
+        # the upload simply waits for its quota bucket, it did not fail
+        attempts = int(cs.get("publish_attempts", 0)) + (0 if quota_deferral else 1)
         cs["publish_attempts"] = attempts
+        if quota_deferral:
+            cs["publish_quota_deferrals"] = int(cs.get("publish_quota_deferrals", 0)) + 1
         max_retries = int(s.publish_max_attempts)
         classification = QUEUE_HANDOFF_FAILURE
     else:
         job.retry_count = int(job.retry_count or 0) + 1
         attempts = job.retry_count
         if preserved_video:
+            cs["failure_phase"] = "POST_RENDER"
+            cs["failure_cause"] = classification          # the real cause decides retry eligibility
+            cs["reuse_rendered_video"] = True
             classification = POST_RENDER_FAILURE
 
     render_failure = exc is not None and type(exc).__name__ == "RenderFailure"
@@ -195,11 +207,19 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
     elif render_failure and getattr(exc, "preserved", None):
         cs["preserved_artifacts"] = dict(exc.preserved)
 
-    requires_change = classification in CHANGE_REQUIRED or (classification == RENDER_FAILURE and render_terminal)
+    post_render_cause = cs.get("failure_cause") if classification == POST_RENDER_FAILURE else None
+    requires_change = (classification in CHANGE_REQUIRED or (classification == RENDER_FAILURE and render_terminal)
+                       or post_render_cause in CHANGE_REQUIRED)
     deadline = recovery_deadline_utc(job)
     delay: Optional[int] = None
     status = STATUS_FAILED
-    if is_handoff:
+    if is_handoff and quota_deferral:
+        retry_allowed = True
+        delay = quota_retry_delay_seconds(now_utc)
+        status = STATUS_HANDOFF_PENDING
+        summary = (f"upload deferred by YouTube quota (no publishing attempt used, {attempts}/{max_retries} so far); "
+                   f"retry in {max(1, delay // 60)} min. The video is preserved; it is never re-rendered or re-uploaded.")
+    elif is_handoff:
         retry_allowed = attempts < max_retries
         if retry_allowed:
             delay = backoff_seconds(attempts, job_id=job.id or "", settings=s)
@@ -207,9 +227,10 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
         summary = (f"queue handoff {attempts}/{max_retries} failed; retry in {max(1, (delay or 0) // 60)} min"
                    if retry_allowed else
                    f"queue handoff failed {attempts}/{max_retries} times; video preserved at {preserved_video} for a manual handoff")
-    elif classification == POST_RENDER_FAILURE:
+    elif classification == POST_RENDER_FAILURE and (post_render_cause == PERMANENT or not unlimited or deadline is None):
         retry_allowed = False
-        summary = f"failed after rendering; not retried to avoid regenerating the video. Preserved: {preserved_video}"
+        summary = (f"failed after rendering ({post_render_cause or 'unknown'} cause); not retried automatically. "
+                   f"The rendered video is preserved and would be reused, never re-rendered: {preserved_video}")
     elif unlimited and deadline is not None:
         delay = backoff_seconds(attempts, job_id=job.id or "", settings=s)
         if requires_change:
@@ -228,6 +249,8 @@ def record_failure(job, exc: Optional[BaseException] = None, *, now_utc: Optiona
                        f"(no attempt limit; recovery deadline {_iso(deadline)})")
             if requires_change:
                 summary += "; waits for a code change or operator acknowledgement (same inputs would fail again)"
+            if classification == POST_RENDER_FAILURE:
+                summary += "; the rendered video is reused (no re-render, no re-upload)"
     else:
         # bounded rollback policy, or a job without a recorded recovery deadline
         retry_allowed = (classification in (TRANSIENT,) or (classification == RENDER_FAILURE and not render_terminal)) \
@@ -336,16 +359,25 @@ def rearm_if_recoverable(job, *, now_utc: Optional[datetime] = None, code_revisi
     now_utc = now_utc or datetime.utcnow()
     cp = _load_checkpoint(job)
     cs = cp.setdefault("cycle_state", {})
-    if cp.get("queue_handoff") or cp.get("queue_ledger_id") or rendered_video_path(job):
+    if cp.get("queue_handoff") or cp.get("queue_ledger_id"):
         return None
     classification = cs.get("error_classification")
-    if classification in (POST_RENDER_FAILURE, QUEUE_HANDOFF_FAILURE):
+    if classification == QUEUE_HANDOFF_FAILURE:
         return None
     deadline = recovery_deadline_utc(job)
     if deadline is None or now_utc + timedelta(seconds=int(s.min_attempt_seconds)) > deadline:
-        return None
+        return None   # expired (or no deadline): never re-armed, never modified, deadline never extended
+    post_render = classification == POST_RENDER_FAILURE or bool(rendered_video_path(job))
+    if post_render:
+        reusable = post_render_reusable(job)
+        if not reusable["reusable"]:
+            _note_reevaluation(job, cp, cs, now_utc, f"post-render job stays blocked: {reusable['reason']}")
+            return None
     reclass, _ = classify_error(error_type=str(cs.get("last_error_type") or ""),
                                 message=str(cs.get("last_error_message") or job.error_details or ""))
+    if post_render and reclass == PERMANENT:
+        _note_reevaluation(job, cp, cs, now_utc, "post-render job stays blocked: permanent cause needs an operator")
+        return None
     deterministic = reclass in CHANGE_REQUIRED or classification in CHANGE_REQUIRED
     code_revision = code_revision or current_code_revision()
     if deterministic:
@@ -362,6 +394,8 @@ def rearm_if_recoverable(job, *, now_utc: Optional[datetime] = None, code_revisi
         if not changed:
             return None
         reason = "deterministic failure; code changed since the failure"
+        if post_render:
+            reason = "post-render failure; code changed since the failure; the rendered video will be reused"
     else:
         reason = "attempt limit removed by the unlimited-until-deadline policy"
     job.status = STATUS_RETRY_SCHEDULED
@@ -369,7 +403,13 @@ def rearm_if_recoverable(job, *, now_utc: Optional[datetime] = None, code_revisi
     cs["next_retry_at_utc"] = _iso(now_utc)
     cs["retry_terminal"] = False
     cs["requires_change"] = False
-    cs["error_classification"] = DETERMINISTIC if deterministic else (classification or TRANSIENT)
+    if post_render:
+        cs["error_classification"] = POST_RENDER_FAILURE
+        cs["failure_phase"] = "POST_RENDER"
+        cs["failure_cause"] = DETERMINISTIC if deterministic else (reclass or TRANSIENT)
+        cs["reuse_rendered_video"] = True
+    else:
+        cs["error_classification"] = DETERMINISTIC if deterministic else (classification or TRANSIENT)
     cs["retry_policy"] = s.retry_policy
     cs.setdefault("attempt_history", []).append({"attempt": int(job.retry_count or 0), "kind": "rearm",
                                                 "at_utc": _iso(now_utc), "reason": reason,
@@ -377,6 +417,99 @@ def rearm_if_recoverable(job, *, now_utc: Optional[datetime] = None, code_revisi
     job.checkpoint_data_json = json.dumps(cp, ensure_ascii=True)
     job.error_details = (job.error_details or "")[:3500] + f" | re-armed: {reason}"
     return reason
+
+
+QUOTA_DEFERRAL_MARKERS = ("quota limit reached", "quota exceeded", "quotaexceeded", "upload deferred",
+                          "uploadlimitexceeded", "quota_exceeded")
+
+
+def _is_quota_deferral(message: str) -> bool:
+    m = (message or "").lower()
+    return any(k in m for k in QUOTA_DEFERRAL_MARKERS)
+
+
+def quota_retry_delay_seconds(now_utc: datetime) -> int:
+    """When Google reported the upload bucket exhausted, wait for the next Pacific midnight; otherwise (a local
+    estimate only) check again in 15 minutes. Never a rapid loop."""
+    try:
+        from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
+        from backend.app.services.youtube_quota import next_reset
+        q = youtube_publishing_engine.quota
+        if q.blocked("videos.insert") or q.blocked("general"):
+            reset = next_reset(now_utc.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).replace(tzinfo=None)
+            return max(60, int((reset - now_utc).total_seconds()) + 60)
+    except Exception:
+        pass
+    return 900
+
+
+def rearm_quota_blocked_handoff(job, *, now_utc: Optional[datetime] = None) -> Optional[str]:
+    """Re-evaluation (Stage 3.30): a FAILED queue handoff whose publishing failures were ALL quota deferrals
+    (counted as attempts by the old code) is re-armed as HANDOFF_PENDING. Quota is not a publishing failure.
+    Never for a job that already has a YouTube video id (no second upload); the queue entry is idempotent
+    (same video hash -> same ledger row), so no duplicate queue entry is created. Returns the reason, or None."""
+    if str(job.status or "") != STATUS_FAILED or job.youtube_video_id:
+        return None
+    cp = _load_checkpoint(job)
+    cs = cp.setdefault("cycle_state", {})
+    if cs.get("error_classification") != QUEUE_HANDOFF_FAILURE or not cp.get("queue_handoff"):
+        return None
+    video = (cp.get("queue_handoff") or {}).get("video_path") or cp.get("video_path")
+    if not video or not os.path.isfile(video):
+        return None
+    pubs = [h for h in cs.get("attempt_history") or [] if h.get("kind") == "publish"]
+    if not pubs or not all(_is_quota_deferral(h.get("message", "")) for h in pubs):
+        return None
+    now_utc = now_utc or datetime.utcnow()
+    reason = (f"queue handoff blocked only by YouTube quota deferrals ({len(pubs)}); quota is not a publishing "
+              f"failure, so the handoff is re-armed (no re-render, no second upload)")
+    job.status = STATUS_HANDOFF_PENDING
+    job.recovery_reason = "QUOTA_HANDOFF_REARMED"
+    cs["publish_attempts"] = 0
+    cs["publish_quota_deferrals"] = int(cs.get("publish_quota_deferrals", 0)) + len(pubs)
+    cs["next_retry_at_utc"] = _iso(now_utc)
+    cs["retry_terminal"] = False
+    cs.setdefault("attempt_history", []).append({"kind": "rearm", "at_utc": _iso(now_utc), "reason": reason,
+                                                "code_revision": current_code_revision()})
+    job.checkpoint_data_json = json.dumps(cp, ensure_ascii=True)
+    job.error_details = (job.error_details or "")[:3500] + " | re-armed: quota deferral is not a publishing failure"
+    return reason
+
+
+def _note_reevaluation(job, cp: dict, cs: dict, now_utc: datetime, outcome: str) -> None:
+    """Records (once per code revision) why a re-evaluated job stayed blocked."""
+    rev = current_code_revision()
+    if cs.get("last_reevaluation_revision") == rev:
+        return
+    cs["last_reevaluation_revision"] = rev
+    cs.setdefault("attempt_history", []).append({"kind": "reevaluation", "at_utc": _iso(now_utc),
+                                                "outcome": outcome, "code_revision": rev})
+    job.checkpoint_data_json = json.dumps(cp, ensure_ascii=True)
+
+
+def post_render_reusable(job, *, probe=None) -> dict[str, Any]:
+    """Can the preserved rendered video of a post-render failure be reused as-is under the CURRENT rules?
+    A retry must never re-render it, so a video the current rules reject keeps the job blocked."""
+    path = rendered_video_path(job)
+    if not path:
+        cp = _load_checkpoint(job)
+        path = ((cp.get("cycle_state") or {}).get("preserved_artifacts") or {}).get("video_path")
+    if not path or not os.path.isfile(path) or os.path.getsize(path) < MIN_VALID_VIDEO_BYTES:
+        return {"reusable": False, "reason": "preserved video is missing", "video_path": path}
+    try:
+        if probe is None:
+            from backend.app.services.animation_service import probe_video as probe
+        duration = float((probe(path) or {}).get("duration") or 0.0)
+    except Exception as exc:
+        return {"reusable": False, "reason": f"could not probe the preserved video ({type(exc).__name__})",
+                "video_path": path}
+    from backend.app.rendering.duration_standards import duration_violation
+    problem = duration_violation(duration)
+    if problem:
+        return {"reusable": False, "reason": f"preserved video still fails the current rules: {problem}",
+                "video_path": path, "duration_sec": duration}
+    return {"reusable": True, "reason": "preserved video passes the current duration rule", "video_path": path,
+            "duration_sec": duration}
 
 
 def acknowledge_change(job, *, now_utc: Optional[datetime] = None) -> None:
@@ -395,6 +528,7 @@ def clear_failure_state(job) -> None:
     cs = cp.get("cycle_state")
     if isinstance(cs, dict):
         for key in ("next_retry_at_utc", "retry_backoff_seconds", "error_classification", "last_error_type",
-                    "last_error_message", "retry_terminal", "requires_change", "change_acknowledged"):
+                    "last_error_message", "retry_terminal", "requires_change", "change_acknowledged",
+                    "failure_phase", "failure_cause", "reuse_rendered_video"):
             cs.pop(key, None)
         job.checkpoint_data_json = json.dumps(cp, ensure_ascii=True)

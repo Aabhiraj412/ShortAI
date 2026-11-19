@@ -130,8 +130,14 @@ def test_thumbnail_upload_handling(tmp_path):
     assert res["video_id"] == "test_video_123"
     assert res["visibility"] == "public"
     mock_service.thumbnails().set.assert_called_once()
-    # Check quota: 1600 (video) + 50 (thumbnail) = 1650
-    assert db.get_quota_used_today() == 1650
+    # Stage 3.30: verified quota model (developers.google.com/youtube/v3/determine_quota_cost): videos.insert is
+    # 1 call in its own bucket; thumbnails.set is 50 units of the general bucket. (Was: legacy 1600 + 50 = 1650.)
+    usage = engine.quota.usage()
+    assert usage["videos.insert"]["used_estimate"] == 1 and usage["videos.insert"]["requests"] == 1
+    thumb = [t for t in engine.quota.top_consumers() if t["method"] == "thumbnails.set"]
+    assert thumb == [{"method": "thumbnails.set", "purpose": "thumbnail_upload", "bucket": "general",
+                      "requests": 1, "units": 50}]
+    assert db.get_quota_used_today() == 0          # the legacy counter is no longer written
 
 
 def test_qc_failure_blocks_publishing():

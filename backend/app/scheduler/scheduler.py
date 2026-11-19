@@ -704,8 +704,9 @@ async def dispatch_eligible_recoveries(
     with SessionLocal() as db_session:
         now_utc_naive = now_ist.astimezone(timezone.utc).replace(tzinfo=None)
         for failed in db_session.query(JobModel).filter(JobModel.status == retry_policy.STATUS_FAILED).all():
-            reason = retry_policy.rearm_if_recoverable(
-                failed, now_utc=now_utc_naive, process_started_utc=retry_policy.PROCESS_STARTED_UTC)
+            reason = (retry_policy.rearm_quota_blocked_handoff(failed, now_utc=now_utc_naive)
+                      or retry_policy.rearm_if_recoverable(
+                          failed, now_utc=now_utc_naive, process_started_utc=retry_policy.PROCESS_STARTED_UTC))
             if reason:
                 rearmed.append({"job_id": failed.id, "reason": reason})
                 logger.warning("[SCHEDULER] Re-armed %s for automatic recovery: %s", failed.id, reason)
@@ -899,6 +900,26 @@ def reconcile_youtube_publications() -> Dict:
         return {"checked": 0, "promoted": 0, "error": str(exc)}
 
 
+def run_youtube_analytics_collection() -> Dict:
+    try:
+        from backend.app.services.youtube_analytics import AnalyticsCollector
+        return AnalyticsCollector().collect()
+    except Exception as exc:
+        logger.warning("[SCHEDULER] YouTube Analytics collection failed: %s", type(exc).__name__)
+        return {"state": "failed", "error": type(exc).__name__}
+
+
+def run_junk_cleaner_dry_run() -> Dict:
+    """Daily audit of cleanable assets; never moves or deletes anything."""
+    try:
+        from backend.app.services.junk_cleaner import JunkCleaner
+        rec = JunkCleaner().run(trigger="daily_schedule", live=False)
+        return {k: rec.get(k) for k in ("run_id", "outcome", "scanned", "eligible", "eligible_bytes")}
+    except Exception as exc:
+        logger.warning("[SCHEDULER] Junk Cleaner dry run failed: %s", exc)
+        return {"outcome": "failed", "error": str(exc)}
+
+
 def configure_scheduler_jobs():
     """Configures independent production generation, YouTube status reconciliation, and daily summary jobs."""
     profile = get_active_profile()
@@ -954,6 +975,24 @@ def configure_scheduler_jobs():
         id=summary_job_id,
         replace_existing=True,
         name="Daily Publishing Summary Email",
+    )
+
+    # 5. YouTube Analytics daily collection (Stage 3.30): no API call until the analytics scope is granted.
+    scheduler.add_job(
+        run_youtube_analytics_collection,
+        CronTrigger(hour=7, minute=15, timezone=profile.tz),
+        id="youtube_analytics_collection_job",
+        replace_existing=True,
+        name="YouTube Analytics Collection",
+    )
+
+    # 4. Junk Cleaner daily DRY-RUN (Stage 3.30): audit only; the retention policy forbids automatic deletion.
+    scheduler.add_job(
+        run_junk_cleaner_dry_run,
+        CronTrigger(hour=3, minute=30, timezone=profile.tz),
+        id="junk_cleaner_dry_run_job",
+        replace_existing=True,
+        name="Junk Cleaner Dry Run",
     )
 
     if scheduler.running or os.environ.get("PYTEST_CURRENT_TEST"):

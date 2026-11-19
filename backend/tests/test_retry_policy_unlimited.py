@@ -153,7 +153,15 @@ def test_post_render_failure_is_never_rerun(tmp_path):
     j = job(current_stage="SEO", checkpoint_data_json=json.dumps(
         {"video_path": str(video), "cycle_state": {"recovery_expiration_at": "2026-11-14T04:00:00+05:30"}}))
     d = rp.record_failure(j, ConnectionError("x"), now_utc=NOW, code_revision="r1", settings=S)
-    assert d["terminal"] and d["classification"] == "POST_RENDER_FAILURE"
+    # Stage 3.30: a transient cause after rendering is retried, but the video is reused, never re-rendered
+    assert d["classification"] == "POST_RENDER_FAILURE" and not d["terminal"]
+    assert cs_of(j)["failure_cause"] == "TRANSIENT" and cs_of(j)["reuse_rendered_video"] is True
+    assert "no re-render" in d["summary"]
+    # a permanent cause after rendering stays terminal
+    j2 = job(current_stage="SEO", checkpoint_data_json=json.dumps(
+        {"video_path": str(video), "cycle_state": {"recovery_expiration_at": "2026-11-14T04:00:00+05:30"}}))
+    d2 = rp.record_failure(j2, KeyError("missing field"), now_utc=NOW, code_revision="r1", settings=S)
+    assert d2["terminal"] and d2["classification"] == "POST_RENDER_FAILURE" and cs_of(j2)["failure_cause"] == "PERMANENT"
 
 
 def test_rearm_rules():

@@ -642,7 +642,8 @@ class PublishingDatabase:
             conn.close()
 
     def get_quota_used_today(self) -> int:
-        """Returns total estimated quota units consumed today."""
+        """LEGACY (pre-Stage 3.30) counter: fixed 1,600/upload + 50/thumbnail keyed by the UTC date. No longer written
+        or used for decisions; kept for history. Use YouTubePublishingEngine.quota (youtube_quota.QuotaLedger)."""
         today = datetime.utcnow().strftime("%Y-%m-%d")
         conn = sqlite3.connect(self.db_path)
         try:
@@ -661,7 +662,8 @@ import threading as _threading
 
 # Token refreshes (save_credentials) do not change the connection state, so they do not
 # clear the cache; connecting, installing client secrets and disconnecting do.
-AUTH_STATUS_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_CACHE_SEC", "300"))
+# 900 s (Stage 3.30, was 300): channels.list from dashboard polling is at most 96 calls/day.
+AUTH_STATUS_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_CACHE_SEC", "900"))
 # A failed channel check is retried sooner: it is often temporary (network, quota).
 AUTH_STATUS_FAILURE_CACHE_SEC = float(os.getenv("CRAZZYDOCS_AUTH_STATUS_FAILURE_CACHE_SEC", "60"))
 _auth_status_lock = _threading.RLock()
@@ -857,7 +859,13 @@ class YouTubeOAuthManager:
             try:
                 youtube = build("youtube", "v3", credentials=creds)
                 req = youtube.channels().list(mine=True, part="snippet,statistics,status")
-                res = req.execute()
+                try:
+                    from backend.app.services.youtube_quota import QuotaLedger
+                    _ledger = QuotaLedger(DB_PATH)
+                except Exception:
+                    _ledger = None
+                res = (_ledger.execute(req, "channels.list", purpose="dashboard_auth_status")
+                       if _ledger else req.execute())
                 items = res.get("items", [])
                 if items:
                     ch = items[0]
@@ -1238,6 +1246,37 @@ class MetadataGenerator:
         return len(issues) == 0, issues
 
 
+def _same_instant(a: Optional[str], b: Optional[str]) -> bool:
+    if not a and not b:
+        return True
+    if not a or not b:
+        return False
+    try:
+        return datetime.fromisoformat(a.replace("Z", "+00:00")) == datetime.fromisoformat(b.replace("Z", "+00:00"))
+    except ValueError:
+        return a == b
+
+
+def remote_matches_update(remote_item: Dict[str, Any], body: Dict[str, Any], metadata_only: bool) -> bool:
+    """True when a videos.update with `body` would change nothing on YouTube (Stage 3.30)."""
+    rs = remote_item.get("snippet") or {}
+    ws = body.get("snippet") or {}
+    if (rs.get("title") or "") != (ws.get("title") or ""):
+        return False
+    if (rs.get("description") or "") != (ws.get("description") or ""):
+        return False
+    if list(rs.get("tags") or []) != list(ws.get("tags") or []):
+        return False
+    if str(rs.get("categoryId") or "") != str(ws.get("categoryId") or ""):
+        return False
+    if metadata_only:
+        return True
+    rst = remote_item.get("status") or {}
+    wst = body.get("status") or {}
+    return (rst.get("privacyStatus") == wst.get("privacyStatus")
+            and _same_instant(rst.get("publishAt"), wst.get("publishAt")))
+
+
 class YouTubePublishingEngine:
     """Master YouTube Upload & Publishing Engine."""
 
@@ -1250,6 +1289,15 @@ class YouTubePublishingEngine:
         self.oauth = oauth_manager or YouTubeOAuthManager()
         self.db = db or PublishingDatabase()
         self.max_daily_quota = max_daily_quota
+        self._quota = None
+
+    @property
+    def quota(self):
+        """Per-request YouTube quota ledger (Stage 3.30): verified method costs, separate buckets, Pacific day."""
+        if self._quota is None:
+            from backend.app.services.youtube_quota import QuotaLedger
+            self._quota = QuotaLedger(self.db.db_path)
+        return self._quota
 
     # ------------------------------------------------------------------ thumbnails (Stage 3.29)
     def thumbnail_store(self):
@@ -1266,6 +1314,11 @@ class YouTubePublishingEngine:
         attempts = int(prev.get("upload_attempts") or 0) + 1
         artifact = tpl.youtube_artifact_for(thumbnail_path) if thumbnail_path else None
         validation = tpl.validate_thumbnail(artifact)
+        if (artifact and prev.get("video_id") == video_id and prev.get("artifact_path") == artifact
+                and prev.get("upload_status") == "uploaded" and prev.get("verify_status") != "failed"):
+            # Stage 3.30: this artifact is already set on this video (verified or awaiting verification)
+            logger.info("Thumbnail for %s already uploaded (verify: %s); not resent.", video_id, prev.get("verify_status"))
+            return {"uploaded": True, "status": "already_uploaded", "error": None, "artifact": artifact}
         if not artifact or not validation["ok"]:
             err = "Thumbnail invalid: " + "; ".join(validation["problems"] or ["no thumbnail"])
             if store:
@@ -1273,10 +1326,17 @@ class YouTubePublishingEngine:
                              upload_status="invalid", upload_attempts=attempts, last_error=err)
             logger.warning("Thumbnail not uploaded for %s: %s", video_id, err)
             return {"uploaded": False, "status": "invalid", "error": err, "artifact": artifact}
+        gate = self.quota.check("general", 50)
+        if not gate["allowed"]:
+            err = f"Thumbnail upload deferred: {gate['reason']}"
+            if store:
+                store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
+                             upload_status="deferred_quota", upload_attempts=attempts - 1, last_error=err)
+            return {"uploaded": False, "status": "quota_deferred", "error": err, "artifact": artifact}
         try:
             media_thumb = MediaFileUpload(artifact, mimetype=mimetypes.guess_type(artifact)[0] or "image/jpeg")
-            service.thumbnails().set(videoId=video_id, media_body=media_thumb).execute()
-            self.db.add_quota_consumption(50)
+            self.quota.execute(service.thumbnails().set(videoId=video_id, media_body=media_thumb), "thumbnails.set",
+                               purpose="thumbnail_upload", video_id=video_id, attempt=attempts)
         except HttpError as h_err:
             restricted = h_err.resp.status in (401, 403)
             err = f"Thumbnail upload failed (HTTP {h_err.resp.status})."
@@ -1350,7 +1410,8 @@ class YouTubePublishingEngine:
         or upload uncertainty.
         """
         try:
-            channels_resp = service.channels().list(mine=True, part="contentDetails").execute()
+            channels_resp = self.quota.execute(service.channels().list(mine=True, part="contentDetails"),
+                                               "channels.list", purpose="upload_duplicate_check")
             items = channels_resp.get("items", [])
             if not items:
                 return False, None
@@ -1364,11 +1425,11 @@ class YouTubePublishingEngine:
             if not uploads_playlist_id:
                 return False, None
 
-            playlist_resp = service.playlistItems().list(
+            playlist_resp = self.quota.execute(service.playlistItems().list(
                 playlistId=uploads_playlist_id,
                 part="snippet",
                 maxResults=25,
-            ).execute()
+            ), "playlistItems.list", purpose="upload_duplicate_check")
 
             clean_meta_title = metadata_title.strip().lower()
             clean_topic = topic_title.strip().lower()
@@ -1454,14 +1515,15 @@ class YouTubePublishingEngine:
                 "status": "duplicate_rejected"
             }
 
-        # 3. Check Quota Availability
-        quota_used = self.db.get_quota_used_today()
-        # Cost: 1600 units for video upload + 50 units for thumbnail upload
-        estimated_cost = 1650 if thumbnail_path else 1600
-        if quota_used + estimated_cost > self.max_daily_quota:
-            err = f"Daily YouTube API quota limit reached ({quota_used}/{self.max_daily_quota} units used). Upload deferred."
-            logger.error(err)
-            return {"success": False, "video_id": None, "error": err, "status": "quota_exceeded"}
+        # 3. Check Quota Availability (Stage 3.30): videos.insert has its own bucket (1 call); the duplicate check
+        # and verification use the general bucket (~3 units). The thumbnail is checked separately at its own step.
+        for bucket, cost in (("videos.insert", 1), ("general", 3)):
+            gate = self.quota.check(bucket, cost)
+            if not gate["allowed"]:
+                err = f"YouTube upload deferred: {gate['reason']}."
+                logger.error(err)
+                return {"success": False, "video_id": None, "error": err, "status": "quota_exceeded",
+                        "quota_bucket": bucket}
 
         # 4. Verify Authentication
         service = self.oauth.get_authenticated_service()
@@ -1614,13 +1676,22 @@ class YouTubePublishingEngine:
 
                 video_id = response.get("id")
                 logger.info("Video successfully uploaded! YouTube ID: %s", video_id)
-                self.db.add_quota_consumption(1600)
+                self.quota.record("videos.insert", purpose="video_upload", outcome="ok", video_id=video_id,
+                                  http_status=200)
                 if ledger_id is not None and video_id:
                     self.db.record_video_uploaded(ledger_id, video_id)
 
             except Exception as e:
                 err_str = str(e)
                 status_code = getattr(getattr(e, "resp", None), "status", None)
+                try:   # the insert reached Google only if it carried an HTTP response
+                    from backend.app.services.youtube_quota import classify_http_error
+                    _src = e.__cause__ if getattr(e, "__cause__", None) is not None else e
+                    _c = classify_http_error(_src)
+                    if _c["http_status"] is not None:
+                        self.quota.record("videos.insert", purpose="video_upload", outcome="error", **_c)
+                except Exception:
+                    pass
                 if "QUOTA_EXCEEDED" in err_str or "quotaExceeded" in err_str:
                     fail_status = "quota_exceeded"
                     err_msg = "YouTube API quota exceeded. Retry after quota reset."
@@ -1665,7 +1736,8 @@ class YouTubePublishingEngine:
         remote_privacy = None
         thumbnail_verified = False
         try:
-            verification = service.videos().list(part="id,status,snippet", id=video_id).execute()
+            verification = self.quota.execute(service.videos().list(part="id,status,snippet", id=video_id),
+                                              "videos.list", purpose="upload_verification", video_id=video_id)
             for item in verification.get("items", []):
                 if item.get("id") == video_id:
                     verified = True
@@ -1746,14 +1818,29 @@ class YouTubePublishingEngine:
 
         promoted = 0
         results: List[Dict[str, Any]] = []
+        # Stage 3.30: videos.list takes up to 50 ids per call (1 unit); this used to be one call per video.
+        ids = [r.get("youtube_video_id") for r in rows if r.get("youtube_video_id") and r.get("id") is not None]
+        remote: Dict[str, Any] = {}
+        batch_error: Dict[str, str] = {}
+        for i in range(0, len(ids), 50):
+            chunk = ids[i:i + 50]
+            try:
+                resp = self.quota.execute(service.videos().list(part="id,status", id=",".join(chunk), maxResults=50),
+                                          "videos.list", purpose="status_reconciliation")
+                for it in resp.get("items", []):
+                    remote[it.get("id")] = it
+            except Exception as exc:
+                for v in chunk:
+                    batch_error[v] = str(exc)
         for row in rows:
             vid = row.get("youtube_video_id")
             lid = row.get("id")
             if not vid or lid is None:
                 continue
             try:
-                resp = service.videos().list(part="id,status", id=vid).execute()
-                items = resp.get("items", [])
+                if vid in batch_error:
+                    raise RuntimeError(batch_error[vid])
+                items = [remote[vid]] if vid in remote else []
                 if not items:
                     results.append({"ledger_id": lid, "video_id": vid, "state": "missing_remote"})
                     continue
@@ -1807,7 +1894,8 @@ class YouTubePublishingEngine:
         if not service:
             return {"confirmed": False, "reason": "awaiting_auth"}
         try:
-            items = service.videos().list(part="id,status", id=vid).execute().get("items", [])
+            items = self.quota.execute(service.videos().list(part="id,status", id=vid), "videos.list",
+                                       purpose="schedule_verification", video_id=vid).get("items", [])
         except Exception as exc:
             return {"confirmed": False, "reason": f"verification_failed: {exc}"}
         if not items:
@@ -1862,17 +1950,25 @@ class YouTubePublishingEngine:
             )
             return {"success": False, "status": "awaiting_auth", "error": "YouTube account is not authenticated."}
 
-        if (cancel_schedule or publish_at_iso) and not make_public_now:
-            # The ledger can lag YouTube (a scheduled video goes live at publishAt).
-            # Rescheduling or cancelling a video that is public remotely would unpublish
-            # it, so check YouTube first and refuse when public or unverifiable.
-            try:
-                remote_items = service.videos().list(part="id,status", id=vid).execute().get("items", [])
-                remote_now = (remote_items[0].get("status") or {}).get("privacyStatus") if remote_items else None
-            except Exception as exc:
+        # Stage 3.30: one read (1 unit) of the current remote state, used both for the safety check below and to
+        # skip a 50-unit videos.update when YouTube already has exactly the desired metadata and status.
+        remote_item: Optional[Dict[str, Any]] = None
+        try:
+            remote_items = self.quota.execute(service.videos().list(part="id,status,snippet", id=vid), "videos.list",
+                                              purpose="update_precheck", video_id=vid).get("items", [])
+            remote_item = remote_items[0] if remote_items else None
+        except Exception as exc:
+            if (cancel_schedule or publish_at_iso) and not make_public_now:
                 raise ValueError(
                     "Could not verify the video's current state on YouTube; nothing was changed."
                 ) from exc
+        if (cancel_schedule or publish_at_iso) and not make_public_now:
+            # The ledger can lag YouTube (a scheduled video goes live at publishAt).
+            # Rescheduling or cancelling a video that is public remotely would unpublish
+            # it, so refuse when public or unverifiable.
+            if remote_item is None:
+                raise ValueError("Could not verify the video's current state on YouTube; nothing was changed.")
+            remote_now = (remote_item.get("status") or {}).get("privacyStatus")
             if remote_now == "public":
                 raise ValueError("This video is already public on YouTube; it cannot be rescheduled or unscheduled.")
 
@@ -1905,8 +2001,13 @@ class YouTubePublishingEngine:
         if not metadata_only:
             body["status"] = status_body
         try:
-            service.videos().update(part="snippet" if metadata_only else "snippet,status", body=body).execute()
-            self.db.add_quota_consumption(50)
+            if remote_item is not None and remote_matches_update(remote_item, body, metadata_only):
+                logger.info("YouTube video %s already has the requested metadata/status; videos.update skipped.", vid)
+            else:
+                self.quota.execute(service.videos().update(part="snippet" if metadata_only else "snippet,status",
+                                                           body=body),
+                                   "videos.update", purpose="metadata_update" if metadata_only else "reschedule",
+                                   video_id=vid)
         except Exception as exc:
             err_msg = f"YouTube video update failed: {exc}"
             fail_st = "quota_exceeded" if "quota" in str(exc).lower() else "failed"
@@ -1928,7 +2029,8 @@ class YouTubePublishingEngine:
         remote_privacy = None
         remote_publish_at = None
         try:
-            resp = service.videos().list(part="id,status", id=vid).execute()
+            resp = self.quota.execute(service.videos().list(part="id,status", id=vid), "videos.list",
+                                      purpose="reschedule_verification", video_id=vid)
             items = resp.get("items", [])
             if items:
                 verified = True

@@ -4,15 +4,20 @@ Gracefully reports unconfigured state when API keys are absent without fabricati
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import threading
+import time
 import urllib.parse
 import urllib.request
-from typing import List, Optional
+from collections import deque
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from backend.app.media.license_verifier import LicenseVerifier
-from backend.app.media.net import fetch_json
+from backend.app.media.net import ProviderError, fetch_json
 from backend.app.media.models import MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -86,29 +91,108 @@ class PexelsProvider(BaseMediaProvider):
         return await asyncio.to_thread(self._sync_fetch, query, limit)
 
 
-class PixabayProvider(BaseMediaProvider):
-    """Commercial-safe Pixabay photos provider (active when PIXABAY_API_KEY is configured)."""
+PIXABAY_RATE_LIMIT = 100            # requests per 60 s (Pixabay API documentation)
+PIXABAY_LOCAL_BUDGET = 90           # stay below the limit
+PIXABAY_CACHE_SECONDS = 24 * 3600   # Pixabay's API terms require caching responses for 24 hours
+_pixabay_calls: deque = deque()
+_pixabay_lock = threading.Lock()
+_pixabay_cooldown_until = [0.0]
 
-    def __init__(self, api_key: Optional[str] = None, timeout_sec: float = 6.0, license_verifier: LicenseVerifier = None):
+
+def _pixabay_cache_dir() -> Path:
+    from backend.app.core.paths import PROJECT_ROOT
+    return Path(PROJECT_ROOT) / "backend" / "data" / "cache" / "pixabay"
+
+
+class PixabayProvider(BaseMediaProvider):
+    """Commercial-safe Pixabay photos/videos provider (active when PIXABAY_API_KEY is configured).
+
+    Stage 3.30: 24 h response cache (the key is never part of the cache key or file), local rate guard below
+    100 requests/60 s, explicit error categories (invalid_key, rate_limited, timeout, connection, empty), and
+    video search. Results go through the same license verification and, for scenes, the same relevance scoring
+    as every other provider: a poor match is rejected, never picked at random.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, timeout_sec: float = 6.0, license_verifier: LicenseVerifier = None,
+                 cache_dir: Optional[Path] = None, clock=time.time):
         super().__init__(provider_name="Pixabay", timeout_sec=timeout_sec)
         self.api_key = api_key if api_key is not None else os.getenv("PIXABAY_API_KEY", "")
         self.verifier = license_verifier or LicenseVerifier()
         self.last_status = "configured" if self.api_key else "unconfigured"
+        self.last_error_category: Optional[str] = None
+        self.cache_dir = cache_dir
+        self.clock = clock
 
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
+
+    # ---- transport ------------------------------------------------------------------------------------
+    def _cache_path(self, kind: str, params: Dict[str, Any]) -> Path:
+        key = hashlib.sha256(json.dumps([kind, sorted(params.items())], sort_keys=True).encode()).hexdigest()[:32]
+        return (self.cache_dir or _pixabay_cache_dir()) / f"{kind}_{key}.json"
+
+    def _rate_ok(self) -> bool:
+        now = self.clock()
+        with _pixabay_lock:
+            if now < _pixabay_cooldown_until[0]:
+                return False
+            while _pixabay_calls and now - _pixabay_calls[0] > 60:
+                _pixabay_calls.popleft()
+            if len(_pixabay_calls) >= PIXABAY_LOCAL_BUDGET:
+                return False
+            _pixabay_calls.append(now)
+            return True
+
+    def _request(self, kind: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Cached GET of /api/ (kind=images) or /api/videos/. Returns None on failure (category recorded)."""
+        cache = self._cache_path(kind, params)
+        try:
+            if cache.exists() and self.clock() - cache.stat().st_mtime < PIXABAY_CACHE_SECONDS:
+                self.last_status, self.last_error_category = "ok (cached)", None
+                return json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        if not self._rate_ok():
+            self.last_status, self.last_error_category = "rate_limited (local guard)", "rate_limited"
+            return None
+        base = "https://pixabay.com/api/videos/" if kind == "videos" else "https://pixabay.com/api/"
+        url = base + "?" + urllib.parse.urlencode({"key": self.api_key, **params})
+        try:
+            data = fetch_json(url, provider=self.provider_name, retries=1, timeout=self.timeout_sec)
+        except ProviderError as err:
+            if err.status in (400, 401, 403):
+                cat = "invalid_key"            # Pixabay answers 400 "Invalid or missing API key"
+            elif err.status == 429:
+                cat = "rate_limited"
+                with _pixabay_lock:
+                    _pixabay_cooldown_until[0] = self.clock() + 60
+            elif err.kind in ("timeout", "connection"):
+                cat = err.kind
+            else:
+                cat = "error"
+            self.last_status, self.last_error_category = f"error: {cat}", cat
+            logger.warning("Pixabay %s query failed: %s", kind, cat)   # never the URL (it carries the key)
+            return None
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass
+        self.last_status, self.last_error_category = "ok", None
+        return data
 
     def _sync_fetch(self, query: str, limit: int) -> List[MediaAsset]:
         if not self.api_key:
             self.last_status = "unconfigured"
             return []
-        url = f"https://pixabay.com/api/?{urllib.parse.urlencode({'key': self.api_key, 'q': query, 'per_page': min(10, max(3, limit)), 'safesearch': 'true'})}"
-        req = urllib.request.Request(url, headers={"User-Agent": "CrazzyDocsStudio/1.0"})
         assets: List[MediaAsset] = []
         try:
-            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
-                              headers=dict(req.header_items()))
-            self.last_status = "ok"
+            data = self._request("images", {"q": query, "per_page": min(10, max(3, limit)), "safesearch": "true",
+                                            "image_type": "photo"})
+            if data is None:
+                return []
+            if not data.get("hits"):
+                self.last_status, self.last_error_category = "empty", "empty"
             for hit in data.get("hits", []):
                 dl = hit.get("largeImageURL") or hit.get("webformatURL") or ""
                 if not dl:
@@ -144,9 +228,44 @@ class PixabayProvider(BaseMediaProvider):
                     search_query=query,
                 ))
         except Exception as e:
-            self.last_status = f"error: {e}"
-            logger.warning("Pixabay query '%s' failed: %s", query, e)
+            self.last_status = f"error: {type(e).__name__}"
+            logger.warning("Pixabay query '%s' failed: %s", query, type(e).__name__)
         return assets
+
+    def search_videos(self, query: str, limit: int = 5) -> List[MediaAsset]:
+        """Pixabay video clips (MP4) with provenance and license metadata. Available to the asset pipeline; the
+        current Pop Info renderer composes stills, so clips are only used where a scene asks for footage."""
+        if not self.api_key:
+            self.last_status = "unconfigured"
+            return []
+        data = self._request("videos", {"q": query, "per_page": min(10, max(3, limit)), "safesearch": "true"})
+        if data is None:
+            return []
+        if not data.get("hits"):
+            self.last_status, self.last_error_category = "empty", "empty"
+        out: List[MediaAsset] = []
+        for hit in data.get("hits", []):
+            vids = hit.get("videos") or {}
+            best = vids.get("medium") or vids.get("small") or vids.get("large") or {}
+            dl = best.get("url")
+            if not dl:
+                continue
+            creator = hit.get("user") or "Pixabay Contributor"
+            title = hit.get("tags") or query.title()
+            landing = hit.get("pageURL") or dl
+            status, lic_type, _, reason = self.verifier.verify_asset_license(
+                raw_license="Pixabay License", source_url=landing, repository=self.provider_name, creator=creator)
+            out.append(MediaAsset(
+                asset_id=f"pixabay_video_{hit.get('id', hash(dl))}", title=str(title), creator=str(creator),
+                source_repository=self.provider_name, source_url=landing, download_url=dl,
+                thumbnail_url=best.get("thumbnail"), license_type=lic_type,
+                license_url="https://pixabay.com/service/license-summary/",
+                attribution_text=f"\"{title}\" by {creator} via Pixabay (Pixabay Content License)",
+                width=int(best.get("width") or 0), height=int(best.get("height") or 0), mime_type="video/mp4",
+                asset_type="video", usage_restrictions="No standalone sale; commercial YouTube adaptation permitted",
+                attribution_requirements="Creator credit included in manifest", verification_status=status,
+                rejection_reason=reason, search_query=query))
+        return out
 
     async def search_media(self, query: str, limit: int = 6) -> List[MediaAsset]:
         return await asyncio.to_thread(self._sync_fetch, query, limit)

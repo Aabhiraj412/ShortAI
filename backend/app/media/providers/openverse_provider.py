@@ -11,7 +11,7 @@ import urllib.request
 from typing import List
 
 from backend.app.media.license_verifier import LicenseVerifier
-from backend.app.media.net import fetch_json
+from backend.app.media.net import cached_fetch_json, fetch_json
 from backend.app.media.models import LicenseStatus, LicenseType, MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -27,13 +27,15 @@ class OpenverseProvider(BaseMediaProvider):
         super().__init__(provider_name="Openverse", timeout_sec=timeout_sec)
         self.verifier = license_verifier or LicenseVerifier()
 
-    def _sync_fetch(self, query: str, limit: int) -> List[MediaAsset]:
+    def _sync_fetch(self, query: str, limit: int, page: int = 1) -> List[MediaAsset]:
         params = {
             "q": query,
             "license": "cc0,pdm,by",
             "page_size": min(20, max(1, limit)),
             "mature": "false"
         }
+        if page > 1:
+            params["page"] = int(page)        # Stage 3.30: pagination
         url = f"{OPENVERSE_API_URL}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(
             url,
@@ -44,8 +46,8 @@ class OpenverseProvider(BaseMediaProvider):
 
         assets: List[MediaAsset] = []
         try:
-            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
-                              headers=dict(req.header_items()))
+            data = cached_fetch_json(req.full_url, provider=self.provider_name, retries=1,
+                                     headers=dict(req.header_items()))
 
             results = data.get("results", [])
             for item in results:
@@ -94,6 +96,7 @@ class OpenverseProvider(BaseMediaProvider):
                 )
                 assets.append(asset)
         except Exception as e:
+            # 504 / timeout: no assets from Openverse this time; the other providers fill the scene
             logger.warning("Openverse search query '%s' failed or timed out: %s", query, e)
 
         return assets

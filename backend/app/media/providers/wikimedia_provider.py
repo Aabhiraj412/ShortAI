@@ -12,7 +12,7 @@ import urllib.request
 from typing import List
 
 from backend.app.media.license_verifier import LicenseVerifier
-from backend.app.media.net import fetch_json
+from backend.app.media.net import cached_fetch_json, fetch_json
 from backend.app.media.models import LicenseStatus, LicenseType, MediaAsset
 from backend.app.media.providers.base_provider import BaseMediaProvider
 
@@ -134,7 +134,7 @@ class WikimediaProvider(BaseMediaProvider):
             },
         )
         try:
-            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+            data = cached_fetch_json(req.full_url, provider=self.provider_name, retries=1,
                               headers=dict(req.header_items()))
             pages = data.get("query", {}).get("pages", {})
             return self._parse_commons_pages(pages, query=topic_title or normalized[0])
@@ -163,7 +163,7 @@ class WikimediaProvider(BaseMediaProvider):
         )
 
         try:
-            data = fetch_json(req.full_url, provider=self.provider_name, retries=1,
+            data = cached_fetch_json(req.full_url, provider=self.provider_name, retries=1,
                               headers=dict(req.header_items()))
 
             pages = data.get("query", {}).get("pages", {})

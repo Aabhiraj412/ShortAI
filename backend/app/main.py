@@ -14,7 +14,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, File, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body, Depends, Request, File, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -1852,13 +1852,20 @@ async def api_list_publishing_queue(limit: int = 100, _: None = Depends(require_
     except Exception as exc:
         logging.getLogger(__name__).debug("thumbnail state unavailable: %s", exc)
     oauth = await asyncio.to_thread(svc.oauth.get_auth_status_cached)
-    quota_used = svc.engine.db.get_quota_used_today()
+    # Stage 3.30: general-bucket LOCAL ESTIMATE for the current Pacific day (uploads have their own bucket);
+    # full per-bucket view: GET /api/youtube/quota
+    try:
+        _g = svc.engine.quota.usage()["general"]
+        quota_used, quota_limit = _g["used_estimate"], _g["daily_limit"]
+    except Exception:
+        quota_used, quota_limit = None, None
     return {
         "items": items,
         "count": len(items),
         "youtube_oauth": oauth,
         "quota_used_today": quota_used,
-        "quota_daily_limit": svc.engine.max_daily_quota,
+        "quota_daily_limit": quota_limit,
+        "quota_source": "local estimate, general bucket, Pacific day",
         "timezone": "Asia/Kolkata",
     }
 
@@ -2012,10 +2019,76 @@ class RecoveryPolicyRequest(ConfirmedActionRequest):
     settings: Dict[str, Any] = Field(default_factory=dict)
 
 
+@app.get("/api/youtube/quota")
+async def api_youtube_quota(_: None = Depends(require_local_control)):
+    """Per-bucket YouTube Data API usage (Stage 3.30): local estimate from sent requests, never Google-reported."""
+    from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
+    def _build():
+        q = youtube_publishing_engine.quota
+        out = q.summary()
+        out["recent_requests"] = q.recent(25)
+        return out
+    return await asyncio.to_thread(_build)
+
+
+@app.get("/api/youtube/analytics/status")
+async def api_youtube_analytics_status(_: None = Depends(require_local_control)):
+    """Analytics authorization state and latest stored metrics (Stage 3.30). Never returns tokens."""
+    from backend.app.services.youtube_analytics import AnalyticsCollector
+    def _build():
+        col = AnalyticsCollector()
+        st = col.status()
+        st.pop("granted_scopes", None)
+        return {**st, "videos": col.store.latest(25)}
+    return await asyncio.to_thread(_build)
+
+
+@app.post("/api/youtube/analytics/authorize")
+async def api_youtube_analytics_authorize(payload: dict = Body(default={}), _: None = Depends(require_local_control)):
+    """Operator-started incremental consent (existing scopes + yt-analytics.readonly). Opens Google's consent page."""
+    if payload.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="Analytics authorization requires confirm=true.")
+    from backend.app.services.youtube_analytics import authorize_analytics
+    from backend.app.services.youtube_publishing_engine import invalidate_auth_status_cache
+    res = await asyncio.to_thread(authorize_analytics)
+    invalidate_auth_status_cache()
+    res.pop("granted_scopes", None)
+    return res
+
+
+@app.post("/api/youtube/analytics/collect")
+async def api_youtube_analytics_collect(_: None = Depends(require_local_control)):
+    from backend.app.services.youtube_analytics import AnalyticsCollector
+    return await asyncio.to_thread(lambda: AnalyticsCollector().collect())
+
+
+@app.get("/api/junk-cleaner/status")
+async def api_junk_cleaner_status(_: None = Depends(require_local_control)):
+    """Junk Cleaner state from persisted run records (Stage 3.30)."""
+    from backend.app.services import junk_cleaner
+    return await asyncio.to_thread(junk_cleaner.status)
+
+
+@app.post("/api/junk-cleaner/dry-run")
+async def api_junk_cleaner_dry_run(_: None = Depends(require_local_control)):
+    """Runs an audit that reports what the policy would allow; never moves or deletes files."""
+    from backend.app.services.junk_cleaner import JunkCleaner
+    rec = await asyncio.to_thread(lambda: JunkCleaner().run(trigger="dashboard_manual", live=False))
+    return {k: v for k, v in rec.items() if k != "eligible_files"} | {"eligible_files_sample": rec.get("eligible_files", [])[:50]}
+
+
 @app.get("/api/providers/health")
 async def api_provider_health(_: None = Depends(require_local_control)):
-    """Provider inventory and health; never returns credential values (Stage 3.29)."""
+    """Provider inventory and health; never returns credential values and never calls a provider (Stage 3.29/3.30)."""
     from backend.app.services import provider_audit
+    return await asyncio.to_thread(provider_audit.summary)
+
+
+@app.post("/api/providers/probe")
+async def api_provider_probe(_: None = Depends(require_local_control)):
+    """On-demand, throttled (10 min per provider), read-only health checks. The YouTube Data API is not probed."""
+    from backend.app.services import provider_audit
+    await asyncio.to_thread(provider_audit.probe)
     return await asyncio.to_thread(provider_audit.summary)
 
 

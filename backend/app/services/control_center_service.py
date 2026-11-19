@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -989,6 +989,24 @@ def request_production_stop(reason: str = "Graceful stop requested by operator")
     return res
 
 
+def _stop_request_predates_job(ctrl: dict[str, Any], job_id: str) -> bool:
+    """True when the stop request was made before this job's current attempt started."""
+    try:
+        requested = datetime.fromisoformat(str(ctrl.get("updated_at_ist")))
+    except (TypeError, ValueError):
+        return False
+    try:
+        with SessionLocal() as session:
+            row = session.get(JobModel, job_id)
+            started = (row.actual_start_at or row.created_at) if row else None
+    except Exception:
+        return False
+    if started is None:
+        return False
+    started_utc = started.replace(tzinfo=timezone.utc) if started.tzinfo is None else started
+    return requested < started_utc
+
+
 def wait_or_check_production_control(
     job_id: str | None = None,
     poll_interval: float = 0.5,
@@ -1000,6 +1018,14 @@ def wait_or_check_production_control(
     while True:
         ctrl = get_production_control_state()
         state = ctrl.get("state", "IDLE")
+        if state == "STOP_REQUESTED" and job_id and _stop_request_predates_job(ctrl, job_id):
+            # Stage 3.30: a graceful stop applies to the production running when it was requested. A request
+            # left over from before this job started (2026-11-18 11:58 -> stopped cycle_1_20261120_0000 two days
+            # later) is cleared instead of halting an unrelated job.
+            set_production_control_state("IDLE", reason=f"Stale stop request from {ctrl.get('updated_at_ist')} "
+                                                       f"cleared: it predates {job_id}")
+            record_change("production_control", "STOP_REQUESTED", "IDLE (stale request cleared)")
+            continue
         if state == "STOP_REQUESTED":
             return "STOP"
         if state != "PAUSED":

@@ -156,3 +156,32 @@ def fetch_json(url: str, *, provider: str, **kw: Any) -> Any:
         return json.loads(body.decode("utf-8"))
     except ValueError as exc:
         raise ProviderError(provider, "bad_response", f"invalid JSON: {exc}") from exc
+
+
+SEARCH_CACHE_SECONDS = 6 * 3600
+
+
+def cached_fetch_json(url: str, *, provider: str, ttl: float = SEARCH_CACHE_SECONDS,
+                      cache_dir: Optional[Path] = None, **kw: Any) -> Any:
+    """fetch_json with an on-disk response cache (Stage 3.30) for KEYLESS public search APIs (Openverse, Wikimedia):
+    repeated scene searches within `ttl` reuse the response instead of calling the provider again."""
+    import hashlib
+    import os
+    if cache_dir is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        return fetch_json(url, provider=provider, **kw)   # tests stub the transport; never share cached responses
+    if cache_dir is None:
+        from backend.app.core.paths import PROJECT_ROOT
+        cache_dir = Path(PROJECT_ROOT) / "backend" / "data" / "cache" / "provider_search"
+    path = Path(cache_dir) / f"{provider.lower().replace(' ', '_')}_{hashlib.sha256(url.encode()).hexdigest()[:32]}.json"
+    try:
+        if path.exists() and time.time() - path.stat().st_mtime < ttl:
+            return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    data = fetch_json(url, provider=provider, **kw)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+    return data

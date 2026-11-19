@@ -39,7 +39,10 @@ MIN_NEXT_CYCLE_GAP = timedelta(minutes=45)
 RETRYABLE_CLASSIFICATIONS = frozenset({rp.TRANSIENT, rp.RENDER_FAILURE})
 # Under the unlimited-until-deadline policy the operator may also retry deterministic and permanent
 # failures: the request itself is the acknowledgement that the cause was changed or fixed.
-UNLIMITED_RETRYABLE = frozenset({rp.TRANSIENT, rp.RENDER_FAILURE, rp.DETERMINISTIC, rp.PERMANENT})
+UNLIMITED_RETRYABLE = frozenset({rp.TRANSIENT, rp.RENDER_FAILURE, rp.DETERMINISTIC, rp.PERMANENT,
+                                 # Stage 3.30: post-render failures are retryable when the preserved video can be
+                                 # reused under the current rules (checked below); the video is never re-rendered.
+                                 rp.POST_RENDER_FAILURE})
 
 
 def _settings():
@@ -107,6 +110,11 @@ def evaluate(job_id: str, now_ist: Optional[datetime] = None) -> dict[str, Any]:
                        f"(allowed: {', '.join(sorted(allowed))}).")
     if cp.get("queue_handoff") or cp.get("queue_ledger_id") or job.youtube_video_id:
         reasons.append("A video was already produced, queued or uploaded for this job.")
+    if classification == rp.POST_RENDER_FAILURE:
+        reuse = rp.post_render_reusable(job)
+        info["post_render_reuse"] = reuse
+        if not reuse["reusable"]:
+            reasons.append(f"Post-render failure: {reuse['reason']}; a retry would have to re-render, which is not allowed.")
     allowance = int(_settings().operator_retry_allowance) if unlimited else 1
     if int(cs.get("operator_retries", 0)) >= allowance:
         reasons.append(f"This job already used its {allowance} operator retries; automatic retries continue "
@@ -164,6 +172,8 @@ def request_retry(job_id: str, confirm: bool, now_ist: Optional[datetime] = None
         cs["next_retry_at_utc"] = now_utc.isoformat() + "Z"
         cs["retry_terminal"] = False
         cs["change_acknowledged"] = True      # the operator asserts the cause was changed or fixed
+        if cs.get("error_classification") == rp.POST_RENDER_FAILURE:
+            cs["reuse_rendered_video"] = True   # Stage 3.30: the retry reuses the preserved video, never re-renders
         new_max = int(job.retry_count or 0) + 1
         expected_status = job.status          # FAILED, or RETRY_SCHEDULED waiting for a change
         # Conditional: only the request that still sees the evaluated status wins.

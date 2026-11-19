@@ -391,11 +391,32 @@
       </div>
     </div>
 
+    <div class="card" id="quotaCard">
+      <div class="card-head"><div><h2 class="card-title">YouTube API Quota</h2>
+        <p class="card-desc" id="quotaDesc">Per-bucket usage. These are local estimates of requests CrazzyDocs sent, not Google's own count (see Cloud Console &gt; Quotas).</p></div></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Bucket</th><th>Used (estimate)</th><th>Daily limit</th><th>Requests</th><th>Status</th></tr></thead>
+      <tbody id="quotaBody"><tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr></tbody></table></div>
+      <div class="meta" style="margin-top:8px;font-size:12px;" id="quotaMeta"></div>
+      <div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Top consumers today (method · purpose)</th><th>Requests</th><th>Units</th></tr></thead>
+      <tbody id="quotaTop"></tbody></table></div>
+    </div>
+
+    <div class="card" id="junkCard">
+      <div class="card-head"><div><h2 class="card-title">Junk Cleaner</h2>
+        <p class="card-desc" id="junkDesc">Audits generated assets against the retention policy. Health reflects recorded runs, not the switch.</p></div>
+        <button class="btn sm" onclick="runJunkDryRun(this)">Run dry-run now</button></div>
+      <div class="meta" style="font-size:12px;" id="junkMeta">Loading…</div>
+      <div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Category</th><th>Scanned</th><th>Eligible</th><th>Removed</th><th>Main skip reason</th></tr></thead>
+      <tbody id="junkBody"></tbody></table></div>
+    </div>
+
     <div class="card" id="provCard">
       <div class="card-head"><div><h2 class="card-title">API Providers</h2>
-        <p class="card-desc">Every integration, whether its credential is set (values never shown) and its recent health.</p></div></div>
-      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Provider</th><th>Status</th><th>Credential</th><th>Used by production</th><th>Recent health</th></tr></thead>
-      <tbody id="provBody"><tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr></tbody></table></div>
+        <p class="card-desc">Credential state (values never shown), last real success / failure and whether production can use it. Refreshing never calls a provider; "Run health check" sends one cheap read-only request per provider (at most every 10 min; YouTube Data API excluded to save quota).</p></div>
+        <button class="btn sm" onclick="runProviderProbe(this)">Run health check</button></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Provider</th><th>Status</th><th>Credential</th><th>Last success</th><th>Last failure</th><th>Production</th><th>Fallback</th></tr></thead>
+      <tbody id="provBody"><tr><td colspan="7" style="color:var(--muted)">Loading…</td></tr></tbody></table></div>
+      <div class="meta" style="margin-top:10px;font-size:12px;" id="anaMeta"></div>
     </div>
 
     <div class="card" id="ceCard">
@@ -1007,7 +1028,7 @@ async function refreshOverviewAndHealth() {
     const readiness = pubState.readiness || {};
     const checks = readiness.checks || {};
     const oauthOk = Boolean(ytStatus.connected || checks.oauth_connected);
-    const quota = ytStatus.quota || health.youtube_quota || {};
+    const quota = window.__ytQuotaGeneral || {};
     const cpuPct = resources.cpu ? resources.cpu.used_percent : "--";
     const ramPct = resources.memory ? resources.memory.used_percent : "--";
     const diskFreeGb = resources.disk && resources.disk.free_bytes ? (resources.disk.free_bytes / (1024 ** 3)).toFixed(1) : "--";
@@ -1032,13 +1053,13 @@ async function refreshOverviewAndHealth() {
     document.getElementById("pillOAuth").textContent = `OAuth: ${oauthOk ? "CONNECTED" : "DISCONNECTED"}`;
     document.getElementById("pillOAuth").className = "pill " + (oauthOk ? "ok" : "err");
 
-    document.getElementById("pillQuota").textContent = `Quota: ${quota.used ?? 0}/${quota.limit ?? 10000}`;
+    document.getElementById("pillQuota").textContent = quota.limit ? `Quota (est.): ${quota.used}/${quota.limit}` : "Quota: --";
     const setOv = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     setOv("ovMode", mode);
     setOv("ovPolicy", pol === "automatic_private_scheduled" ? "Publishing: private upload + YouTube schedule" : "Publishing: hold in queue (manual)");
     setOv("ovScheduler", schedOn ? "Running" : schedState);
     setOv("ovYouTube", oauthOk ? "Connected" : "Disconnected");
-    setOv("ovYouTubeSub", `Quota ${quota.used ?? 0}/${quota.limit ?? 10000}`);
+    setOv("ovYouTubeSub", quota.limit ? `General quota ${quota.used}/${quota.limit} (estimate)` : "Quota: --");
     document.getElementById("pillRefresh").textContent = `Sync: ${new Date().toLocaleTimeString()}`;
 
     document.getElementById("kpiStage").textContent = overview.pipeline_stage || worker.stage || "IDLE";
@@ -1287,9 +1308,14 @@ const schedState = { view: null, cycles: [], dirty: false, editIndex: -1 };
 function escHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-function fmtDuration(min) {
+// Stage 3.30: a minutes formatter and a seconds formatter used to share one name; the seconds version (declared
+// later) replaced the minutes one, so a 240-MINUTE recovery window was shown as "4 min". Units are now in the names.
+function plural(n, unit) { return `${n} ${unit}${n === 1 ? "" : "s"}`; }
+function fmtMinutes(min) {
+  min = Math.round(Number(min));
+  if (!Number.isFinite(min) || min < 0) return "--";
   const h = Math.floor(min / 60), m = min % 60;
-  return h && m ? `${h} h ${m} min` : (h ? `${h} hours` : `${m} min`);
+  return h && m ? `${plural(h, "hour")} ${plural(m, "minute")}` : (h ? plural(h, "hour") : plural(m, "minute"));
 }
 function hhmmMinutes(v) { const [h, m] = String(v || "").split(":").map(Number); return h * 60 + m; }
 function targetLabel(start, target) {
@@ -1325,7 +1351,7 @@ function renderScheduleTable() {
       <tr style="${c.enabled ? "" : "opacity:0.55"}">
         <td><strong>${escHtml(c.name)}</strong><br><span style="color:var(--muted);font-size:11px;">${escHtml(c.cycle_id)}</span></td>
         <td>${escHtml(c.start_time)}</td>
-        <td>${fmtDuration(Number(c.recovery_duration_minutes))}</td>
+        <td>${fmtMinutes(c.recovery_duration_minutes)}</td>
         <td>${targetLabel(c.start_time, c.target_publish_time)}</td>
         <td>${daysLabel(c.active_weekdays)}</td>
         <td><span class="chip">${escHtml(rowStatus(c))}</span></td>
@@ -1347,7 +1373,7 @@ function renderOverviewCycles(view) {
     <tr style="${c.enabled ? "" : "opacity:0.55"}">
       <td><strong>${escHtml(c.name)}</strong></td>
       <td>${escHtml(c.start_time)}</td>
-      <td>${fmtDuration(Number(c.recovery_duration_minutes))}</td>
+      <td>${fmtMinutes(c.recovery_duration_minutes)}</td>
       <td>${targetLabel(c.start_time, c.target_publish_time)}</td>
       <td><span class="chip ${c.status === "Producing" ? "running" : (c.status === "Completed" ? "completed" : (c.status === "Failed" ? "failed" : ""))}">${escHtml(c.status)}</span></td>
     </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">No active schedule.</td></tr>`;
@@ -1530,11 +1556,15 @@ async function refreshMonitor() {
   } catch (err) { /* overview keeps last values */ }
 }
 
-function fmtDuration(sec) {
+function fmtSeconds(sec) {
   if (sec === null || sec === undefined) return "--";
+  sec = Math.round(Number(sec));
+  if (!Number.isFinite(sec)) return "--";
   if (sec <= 0) return "passed";
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-  return h ? `${h} h ${m} min` : (m ? `${m} min` : `${sec} s`);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return m ? `${plural(h, "hour")} ${plural(m, "minute")}` : plural(h, "hour");
+  if (m) return s ? `${m} min ${s} s` : plural(m, "minute");
+  return `${s} s`;
 }
 
 function renderRetryState(policy, j) {
@@ -1544,9 +1574,9 @@ function renderRetryState(policy, j) {
   if (!rt) { ["monAttempt", "monNextRetry", "monDeadline", "monLastFailure", "monAutoRetry"].forEach(id => set(id, "--")); return; }
   set("monAttempt", `${rt.current_attempt ?? "--"} of ${rt.max_attempts_label} · ${rt.total_attempts} total (${j.job_id})`);
   set("monNextRetry", rt.next_retry_at_ist
-    ? `${shortIst(rt.next_retry_at_ist)}${rt.current_backoff_seconds != null ? " · backoff " + fmtDuration(rt.current_backoff_seconds) : ""}`
-    : (rt.current_backoff_seconds != null ? `-- (last backoff ${fmtDuration(rt.current_backoff_seconds)})` : "--"));
-  set("monDeadline", rt.recovery_deadline_ist ? `${shortIst(rt.recovery_deadline_ist)} · ${fmtDuration(rt.remaining_seconds)} left` : "--");
+    ? `${shortIst(rt.next_retry_at_ist)}${rt.current_backoff_seconds != null ? " · backoff " + fmtSeconds(rt.current_backoff_seconds) : ""}`
+    : (rt.current_backoff_seconds != null ? `-- (last backoff ${fmtSeconds(rt.current_backoff_seconds)})` : "--"));
+  set("monDeadline", rt.recovery_deadline_ist ? `${shortIst(rt.recovery_deadline_ist)} · ${fmtSeconds(rt.remaining_seconds)} left` : "--");
   set("monLastFailure", rt.last_failure
     ? `${rt.classification || "?"} at ${shortIst(rt.last_failure_at_ist)}: ${rt.last_failure.slice(0, 160)}` : "None");
   set("monAutoRetry", rt.auto_retry_status + (rt.operator_action_needed ? " · operator action needed" : ""));
@@ -1948,19 +1978,112 @@ async function refreshAll() {
 
 // Deployment diagnostics: warn whenever a running process executes code that no
 // longer matches the source on disk (scheduler daemon or this dashboard).
+async function refreshQuota() {
+  const body = document.getElementById("quotaBody"); if (!body) return;
+  try {
+    const d = await apiJson("/api/youtube/quota");
+    const g = d.buckets.general || {};
+    window.__ytQuotaGeneral = { used: g.used_estimate, limit: g.daily_limit };
+    const pill = document.getElementById("pillQuota");
+    if (pill) { pill.textContent = `Quota (est.): ${g.used_estimate}/${g.daily_limit}`;
+                pill.title = "General bucket, local estimate for Pacific day " + d.pacific_day + "; resets " + d.next_reset_ist; }
+    body.innerHTML = Object.entries(d.buckets).map(([k, b]) => {
+      const st = b.blocked ? `<span style="color:#fca5a5">BLOCKED by Google (${b.blocked.reason}) until ${b.blocked.blocked_until_ist}${b.blocked.operation ? "; deferred: " + b.blocked.operation : ""}</span>`
+                           : (b.remaining_estimate <= 0 ? `<span style="color:#fcd34d">estimate at limit</span>` : `<span style="color:#86efac">available</span>`);
+      return `<tr><td title="${k}">${b.label}</td><td>${b.used_estimate} ${b.unit}</td><td>${b.daily_limit} ${b.unit}</td><td>${b.requests}</td><td>${st}</td></tr>`;
+    }).join("");
+    const last = d.last_request_utc ? new Date(d.last_request_utc).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST" : "none recorded yet";
+    document.getElementById("quotaMeta").innerHTML =
+      `Quota day (Pacific): <strong>${d.pacific_day}</strong> · Next reset: <strong>${d.next_reset_ist}</strong> (${d.next_reset_pt}) · Last request: ${last}<br>`
+      + `Google-reported usage: <em>not available here</em> — ${d.google_reported.reason}<br>Costs: ${d.cost_source}`;
+    document.getElementById("quotaTop").innerHTML = (d.top_consumers || []).map(t =>
+      `<tr><td>${t.method} · ${t.purpose || "?"}</td><td>${t.requests}</td><td>${t.units} ${t.bucket === "general" || t.bucket === "videos.batchGetStats" ? "units" : "calls"}</td></tr>`).join("")
+      || `<tr><td colspan="3" style="color:var(--muted)">No YouTube requests recorded in this Pacific day.</td></tr>`;
+  } catch (err) { body.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">Quota telemetry unavailable (shown as unknown, not zero).</td></tr>`; }
+}
+
+function fmtBytes(b) { b = Number(b || 0); return b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixed(1) + " MB"; }
+async function refreshJunk() {
+  const meta = document.getElementById("junkMeta"); if (!meta) return;
+  try {
+    const d = await apiJson("/api/junk-cleaner/status");
+    const r = d.last_run;
+    const hcol = d.health === "HEALTHY" ? "#86efac" : (d.health === "NO_RUNS_RECORDED" || d.health === "STALE" ? "#fcd34d" : "#fca5a5");
+    const pol = d.policy || {};
+    meta.innerHTML = `Health: <strong style="color:${hcol}">${d.health.replace(/_/g, " ")}</strong> · Mode: <strong>${d.mode === "live" ? "LIVE" : "DRY-RUN"}</strong>`
+      + ` (policy v${pol.policy_version ?? "?"}, automatic deletion ${pol.automatic_deletion ? "allowed" : "not allowed"}) · ${d.schedule}<br>`
+      + (r ? `Last run: ${new Date(r.finished_at_utc).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST (${r.trigger}, ${r.mode}) — ${r.outcome}: scanned ${r.scanned} files (${fmtBytes(r.scanned_bytes)}), `
+           + `eligible ${r.eligible} (${fmtBytes(r.eligible_bytes)}), removed ${r.deleted} (${fmtBytes(r.bytes_reclaimed)}), skipped ${r.skipped}${(r.errors || []).length ? ", errors " + r.errors.length : ""}`
+         : "No run recorded yet.")
+      + `<br>Cumulative reclaimed: ${fmtBytes(d.cumulative_bytes_reclaimed)} (${d.cumulative_note})`;
+    const cats = (r && r.categories) || {};
+    document.getElementById("junkBody").innerHTML = Object.entries(cats).sort((a, b) => b[1].scanned_bytes - a[1].scanned_bytes).map(([k, c]) => {
+      const top = Object.entries(c.skip_reasons || {}).sort((a, b) => b[1] - a[1])[0];
+      return `<tr><td title="${k}">${c.label}</td><td>${c.scanned} · ${fmtBytes(c.scanned_bytes)}</td><td>${c.eligible} · ${fmtBytes(c.eligible_bytes)}</td>`
+        + `<td>${c.deleted} · ${fmtBytes(c.bytes_reclaimed)}</td><td>${top ? top[0] + " (" + top[1] + ")" : "--"}</td></tr>`;
+    }).join("");
+  } catch (err) { meta.textContent = "Junk Cleaner status unavailable."; }
+}
+async function runJunkDryRun(btn) {
+  btn.disabled = true; btn.textContent = "Running…";
+  try { const r = await apiJson("/api/junk-cleaner/dry-run", { method: "POST" }); showToast(`Dry-run ${r.outcome}: ${r.eligible} files (${fmtBytes(r.eligible_bytes)}) eligible; nothing removed.`); }
+  catch (err) { showToast("Dry-run failed: " + err.message, true); }
+  btn.disabled = false; btn.textContent = "Run dry-run now"; refreshJunk();
+}
+
 async function refreshProviders() {
   const body = document.getElementById("provBody"); if (!body) return;
   try {
     const d = await apiJson("/api/providers/health");
     const col = { CONFIGURED_HEALTHY: "#86efac", NO_KEY_NEEDED: "#86efac", NOT_REQUIRED_LOCAL: "var(--muted)",
-                  KEY_MISSING: "#fcd34d", NOT_IMPLEMENTED: "var(--muted)", CONFIGURED_INVALID: "#fca5a5", UNAVAILABLE: "#fca5a5" };
+                  KEY_MISSING: "#fcd34d", NOT_IMPLEMENTED: "var(--muted)", CONFIGURED_INVALID: "#fca5a5", UNAVAILABLE: "#fca5a5",
+                  INTERMITTENT: "#fcd34d", AUTHORIZATION_REQUIRED: "#fcd34d", UNVERIFIED: "var(--muted)" };
+    const ist = s => s ? new Date(s).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " IST" : "--";
     body.innerHTML = d.providers.map(p => {
-      const h = p.recent_health ? `${p.recent_health.ok} ok / ${p.recent_health.failed} failed` : "--";
-      const cred = p.configured === null || p.configured === undefined ? "none needed" : (p.configured ? "set" : "missing");
-      return `<tr><td title="${p.purpose}">${p.name}</td><td style="color:${col[p.status] || ""}">${p.status.replace(/_/g, " ")}</td>`
-        + `<td>${p.env ? p.env + ": " : ""}${cred}</td><td>${p.production ? "yes" : "no"}</td><td>${h}</td></tr>`;
+      const pr = p.probe || {}, h = p.recent_health;
+      const usage = h ? ` <span style="color:var(--muted)">(${h.ok} ok / ${h.failed} failed in renders)</span>` : "";
+      const fail = pr.last_failure_utc ? `${ist(pr.last_failure_utc)} · ${pr.last_failure_category || "error"}` : (p.error_category ? p.error_category : "--");
+      const prod = p.production ? (p.usable_by_production ? "usable" : `<span style="color:#fca5a5">not usable</span>`) : "not used";
+      return `<tr><td title="${p.purpose} · limits: ${p.limits}">${p.name}</td><td style="color:${col[p.status] || ""}">${p.status.replace(/_/g, " ")}${p.rate_limited ? " · rate-limited" : ""}</td>`
+        + `<td>${p.env ? p.env + ": " : ""}${p.credential}</td><td>${ist(pr.last_success_utc)}${usage}</td><td>${fail}</td>`
+        + `<td>${prod}</td><td>${p.fallback}</td></tr>`;
     }).join("");
-  } catch (err) { body.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">Provider health unavailable.</td></tr>`; }
+  } catch (err) { body.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">Provider health unavailable.</td></tr>`; }
+  refreshAnalytics();
+}
+async function runProviderProbe(btn) {
+  btn.disabled = true; btn.textContent = "Checking…";
+  try { await apiJson("/api/providers/probe", { method: "POST" }); showToast("Provider health check finished."); }
+  catch (err) { showToast("Health check failed: " + err.message, true); }
+  btn.disabled = false; btn.textContent = "Run health check"; refreshProviders();
+}
+async function refreshAnalytics() {
+  const el = document.getElementById("anaMeta"); if (!el) return;
+  try {
+    const a = await apiJson("/api/youtube/analytics/status");
+    if (!a.scope_granted) {
+      el.innerHTML = `<strong>YouTube Analytics:</strong> implemented; <span style="color:#fcd34d">authorization required</span> (read-only scope yt-analytics.readonly on the existing OAuth client; uploads are not affected). `
+        + `<button class="btn sm" onclick="authorizeAnalytics(this)">Authorize analytics</button>`;
+      return;
+    }
+    const v = a.videos || [];
+    const fmt = (r, m) => { const st = (r.metric_status || {})[m]; const val = (r.metrics || {})[m];
+      return st === "available" || st === "available_zero" ? val : `<span style="color:var(--muted)">${(st || "n/a").replace(/_/g, " ")}</span>`; };
+    el.innerHTML = `<strong>YouTube Analytics:</strong> authorized · ${v.length} videos with metrics (daily collection 07:15 IST).`
+      + (v.length ? `<div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Video</th><th>Views</th><th>Engaged</th><th>Avg view %</th><th>Likes</th><th>Collected</th></tr></thead><tbody>`
+        + v.slice(0, 10).map(r => `<tr><td title="${r.video_id}">${(r.topic || r.video_id).slice(0, 40)}</td><td>${fmt(r, "views")}</td><td>${fmt(r, "engagedViews")}</td><td>${fmt(r, "averageViewPercentage")}</td><td>${fmt(r, "likes")}</td><td>${r.collected_date}</td></tr>`).join("")
+        + `</tbody></table></div>` : "");
+  } catch (err) { el.textContent = "YouTube Analytics status unavailable."; }
+}
+async function authorizeAnalytics(btn) {
+  const ok = await askConfirm("Authorize YouTube Analytics",
+    "Google's consent page opens in your browser for the existing CrazzyDocs OAuth client. It adds read-only analytics access (yt-analytics.readonly) and keeps the current upload permissions. Continue?");
+  if (!ok) return;
+  btn.disabled = true; btn.textContent = "Waiting for consent…";
+  try { const r = await apiJson("/api/youtube/analytics/authorize", { method: "POST", body: JSON.stringify({ confirm: true }) });
+        showToast(r.success ? "Analytics authorized; upload scopes preserved." : ("Authorization not completed: " + (r.error || "unknown")), !r.success); }
+  catch (err) { showToast("Authorization failed: " + err.message, true); }
+  refreshAnalytics();
 }
 
 async function refreshDeployment() {
@@ -2010,6 +2133,10 @@ refreshAll();
 refreshDeployment();
 refreshProviders();
 setInterval(refreshProviders, 300000);
+refreshQuota();
+setInterval(refreshQuota, 60000);
+refreshJunk();
+setInterval(refreshJunk, 600000);
 setInterval(() => {
   refreshOverviewAndHealth();
   refreshPipeline();

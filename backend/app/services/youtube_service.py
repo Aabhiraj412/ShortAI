@@ -516,7 +516,17 @@ class YouTubePublisherService:
         try:
             from googleapiclient.http import MediaFileUpload
             media = MediaFileUpload(thumbnail_path, mimetype="image/png")
-            service.thumbnails().set(videoId=video_id, media_body=media).execute()
+            req = service.thumbnails().set(videoId=video_id, media_body=media)
+            try:   # Stage 3.30: every YouTube request is recorded in the quota ledger
+                from backend.app.core.paths import DATABASE_PATH
+                from backend.app.services.youtube_quota import QuotaLedger
+                ledger = QuotaLedger(str(DATABASE_PATH))
+            except Exception:
+                ledger = None
+            if ledger:
+                ledger.execute(req, "thumbnails.set", purpose="thumbnail_upload_legacy_worker", video_id=video_id)
+            else:
+                req.execute()
             return True, None
         except Exception as e:
             return False, str(e)

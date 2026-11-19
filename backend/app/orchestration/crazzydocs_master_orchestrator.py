@@ -986,6 +986,12 @@ class CrazzyDocsMasterOrchestrator:
                 except Exception:
                     _reuse_video = False
 
+            # Stage 3.30: a retry of a post-render failure reuses the preserved video; it is never re-rendered.
+            _post_render_retry = bool(((existing_cp or {}).get("cycle_state") or {}).get("reuse_rendered_video"))
+            if _post_render_retry and not _reuse_video:
+                raise RuntimeError(
+                    "Preserved video cannot be reused under the current rules; not re-rendered "
+                    f"(post-render retry of {job_id}).")
             if _reuse_video:
                 logger.info("[PRODUCTION WORKSPACE IDEMPOTENCY] Reusing canonical deliverable: %s", final_video_path)
                 production_observability.complete_stage(job_id, "video_rendering", "Reused verified canonical video deliverable")
@@ -1882,8 +1888,11 @@ class CrazzyDocsMasterOrchestrator:
         future publication time, always as private with YouTube publishAt.
         """
         logger.info("[PUBLISHING QUEUE] Checking enqueued publications...")
-        quota_used = self.publishing_engine.db.get_quota_used_today()
-        logger.info("Daily YouTube quota consumed: %d units", quota_used)
+        try:   # Stage 3.30: general-bucket local estimate for the current Pacific day
+            quota_used = self.publishing_engine.quota.usage()["general"]["used_estimate"]
+        except Exception:
+            quota_used = None
+        logger.info("YouTube general quota (local estimate, Pacific day): %s units", quota_used)
 
         if not execute_upload:
             logger.info("Publishing is user-controlled. Background upload withheld.")
