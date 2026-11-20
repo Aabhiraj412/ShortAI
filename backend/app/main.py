@@ -2019,6 +2019,40 @@ class RecoveryPolicyRequest(ConfirmedActionRequest):
     settings: Dict[str, Any] = Field(default_factory=dict)
 
 
+@app.get("/api/ops/intelligence")
+async def api_ops_intelligence(days: int = 7, _: None = Depends(require_local_control)):
+    """Stage 3.32A Operational Intelligence: every section for the window (1-30 days). Read-only, cached 60 s."""
+    from backend.app.services.operational_intelligence import MAX_DAYS, get_service
+    if not 1 <= days <= MAX_DAYS:
+        raise HTTPException(status_code=400, detail=f"days must be between 1 and {MAX_DAYS}")
+    return await asyncio.to_thread(get_service().overview, days)
+
+
+@app.get("/api/ops/intelligence/{section}")
+async def api_ops_intelligence_section(section: str, days: int = 7, _: None = Depends(require_local_control)):
+    """One Operational Intelligence section (production_health, failure_intelligence, renderer_reliability,
+    topic_intelligence, api_intelligence, recovery_analytics, reliability_trends). Read-only."""
+    from backend.app.services.operational_intelligence import MAX_DAYS, OperationalIntelligence, get_service
+    if section not in OperationalIntelligence.SECTIONS:
+        raise HTTPException(status_code=404, detail=f"unknown section; one of {', '.join(OperationalIntelligence.SECTIONS)}")
+    if not 1 <= days <= MAX_DAYS:
+        raise HTTPException(status_code=400, detail=f"days must be between 1 and {MAX_DAYS}")
+    return await asyncio.to_thread(get_service().section, section, days)
+
+
+@app.get("/api/ops/daily-summary")
+async def api_ops_daily_summary(date: Optional[str] = None, _: None = Depends(require_local_control)):
+    """Consolidated daily operational summary for an IST date (default today). Recommendations only; no actions."""
+    from datetime import datetime as _dt
+    from backend.app.services.operational_intelligence import get_service
+    if date is not None:
+        try:
+            _dt.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    return await asyncio.to_thread(get_service().daily_summary, date)
+
+
 @app.get("/api/youtube/quota")
 async def api_youtube_quota(_: None = Depends(require_local_control)):
     """Per-bucket YouTube Data API usage (Stage 3.30): local estimate from sent requests, never Google-reported."""

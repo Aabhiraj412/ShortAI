@@ -135,6 +135,15 @@
   .kpi-val { font-size: 18px; font-weight: 800; margin-top: 4px; word-break: break-word; }
   .kpi-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
+  .ops-bar { height: 8px; border-radius: 4px; background: rgba(148,163,184,0.18); overflow: hidden; min-width: 60px; }
+  .ops-bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .ops-cols { display: flex; align-items: flex-end; gap: 3px; height: 70px; padding-top: 4px; }
+  .ops-cols > div { flex: 1; min-width: 6px; background: var(--accent); border-radius: 2px 2px 0 0; position: relative; }
+  .ops-cols > div.bad { background: #fca5a5; }
+  .ops-cols > div.none { background: rgba(148,163,184,0.25); }
+  .ops-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--border); color: var(--muted); }
+  .ops-health-HEALTHY { color: #86efac; } .ops-health-DEGRADED { color: #fcd34d; }
+  .ops-health-CRITICAL { color: #fca5a5; } .ops-health-UNKNOWN { color: var(--muted); }
   .grid-2 {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
@@ -345,6 +354,7 @@
     <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview', this)">Overview</button>
     <button class="tab-btn" data-tab="schedule" onclick="switchTab('schedule', this)">Production Schedule</button>
     <button class="tab-btn" data-tab="queue" onclick="switchTab('queue', this)">Publishing Queue</button>
+    <button class="tab-btn" data-tab="ops" onclick="switchTab('ops', this)">Operations</button>
     <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
     <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
     <button class="tab-btn" data-tab="prodconfig" onclick="switchTab('prodconfig', this)">Production &amp; Storage Config</button>
@@ -836,6 +846,48 @@
     </div>
   </section>
 
+  <!-- TAB: OPERATIONAL INTELLIGENCE (Stage 3.32A, read-only) -->
+  <section id="tab-ops" class="tab-panel">
+    <div class="card" style="padding:12px 16px;">
+      <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Operational Intelligence</h2>
+        <p class="card-desc">Read-only analysis of existing production records. Nothing on this page changes production. Values marked <span class="ops-tag">estimate</span> are local estimates; <span class="ops-tag">unavailable</span> means no data, never zero.</p></div>
+        <div><label for="opsDays" style="font-size:12px;color:var(--muted);">Window</label>
+          <select id="opsDays" onchange="refreshOps(true)"><option value="1">24 hours</option><option value="7" selected>7 days</option><option value="30">30 days</option></select>
+          <button class="btn sm" onclick="refreshOps(true)">Refresh</button></div></div>
+      <div class="meta" style="font-size:12px;" id="opsMeta">Open this tab to load.</div>
+    </div>
+    <div class="overview-grid">
+      <div class="kpi-card"><div class="kpi-label">System health (today)</div><div class="kpi-val" id="opsHealth">--</div><div class="kpi-sub" id="opsHealthSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Production success</div><div class="kpi-val" id="opsSuccess">--</div><div class="kpi-sub" id="opsSuccessSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Running / queued</div><div class="kpi-val" id="opsActive">--</div><div class="kpi-sub" id="opsActiveSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Production time</div><div class="kpi-val" id="opsDuration">--</div><div class="kpi-sub" id="opsDurationSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Recovery success</div><div class="kpi-val" id="opsRecovery">--</div><div class="kpi-sub" id="opsRecoverySub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Renderer</div><div class="kpi-val" id="opsRender">--</div><div class="kpi-sub" id="opsRenderSub">--</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Daily success rate</h2><p class="card-desc">Completed share of finished cycles per IST day (red = below 50%).</p></div></div>
+        <div class="ops-cols" id="opsDailyChart"></div><div class="meta" style="font-size:11px;margin-top:4px;" id="opsDailyLegend"></div>
+        <h3 style="font-size:13px;margin:14px 0 4px;">By scheduled hour (IST)</h3>
+        <div class="ops-cols" id="opsHourlyChart" style="height:50px;"></div><div class="meta" style="font-size:11px;">00:00 → 23:00</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Daily operational summary</h2><p class="card-desc" id="opsSummaryDesc">Today (IST). Recommendations are for operator review only.</p></div></div>
+        <div id="opsSummary" style="font-size:13px;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Recent failure patterns</h2><p class="card-desc">Grouped by root cause and normalized message. Class comes from the retry policy.</p></div></div>
+      <div class="meta" style="font-size:12px;margin-bottom:8px;" id="opsFailMeta"></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Count</th><th>Root cause</th><th>Class</th><th>Pattern</th><th>Last seen</th><th>Jobs</th></tr></thead>
+      <tbody id="opsFailBody"><tr><td colspan="6" style="color:var(--muted)">--</td></tr></tbody></table></div></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Renderer reliability</h2><p class="card-desc">Rendering stage outcomes and render-related errors.</p></div></div>
+        <div id="opsRenderBody" style="font-size:13px;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Recovery statistics</h2><p class="card-desc">Retries, re-arms and recovery outcomes.</p></div></div>
+        <div id="opsRecoveryBody" style="font-size:13px;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Topic discovery performance</h2><p class="card-desc">From the Stage 3.31 candidate ledger (shadow mode). Classifier v2 is not used for selection.</p></div></div>
+      <div id="opsTopicBody" style="font-size:13px;">--</div></div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">API usage and quota</h2><p class="card-desc">YouTube usage is CrazzyDocs' own count of requests sent (estimate), not Google-reported.</p></div></div>
+      <div id="opsApiBody" style="font-size:13px;">--</div></div>
+  </section>
+
   <!-- TAB 6: PROCESS MONITOR & LOGS -->
   <section id="tab-processes" class="tab-panel">
     <div class="card">
@@ -1012,6 +1064,7 @@ function switchTab(tabId, btn) {
   if (btn) btn.classList.add("active");
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
   if (tabId === "queue") { refreshPublishing(); }
+  if (tabId === "ops") { refreshOps(); }
 }
 
 async function refreshOverviewAndHealth() {
@@ -2129,6 +2182,135 @@ async function requestControlledRestart() {
   }
 }
 
+// ---- Stage 3.32A Operational Intelligence (read-only) -------------------------------------------------
+function opsVal(v, suffix = "") { return v === null || v === undefined ? `<span class="ops-tag">unavailable</span>` : `${v}${suffix}`; }
+function opsBar(pct) { const w = Math.max(0, Math.min(100, Number(pct || 0))); return `<div class="ops-bar" title="${w}%"><span style="width:${w}%"></span></div>`; }
+function opsKV(rows) {
+  return `<table style="width:100%;font-size:12px;"><tbody>` + rows.map(([k, v]) => `<tr><td style="color:var(--muted);width:55%">${escHtml(k)}</td><td>${v}</td></tr>`).join("") + `</tbody></table>`;
+}
+function opsCols(el, entries, labelFn) {
+  if (!el) return;
+  if (!entries.length) { el.innerHTML = `<span class="ops-tag">unavailable</span>`; return; }
+  el.innerHTML = entries.map(([k, v]) => {
+    const pct = v.success_pct;
+    const cls = pct === null || pct === undefined ? "none" : (pct < 50 ? "bad" : "");
+    const h = pct === null || pct === undefined ? 8 : Math.max(4, pct);
+    return `<div class="${cls}" style="height:${h}%" title="${escHtml(labelFn(k))}: ${pct ?? "n/a"}% (${v.completed}/${v.completed + v.not_completed})"></div>`;
+  }).join("");
+}
+let __opsLoadedAt = 0;
+async function refreshOps(force = false) {
+  const panel = document.getElementById("tab-ops");
+  if (!panel || (!panel.classList.contains("active") && !force)) return;
+  if (!force && Date.now() - __opsLoadedAt < 20000) return;
+  const days = Number((document.getElementById("opsDays") || {}).value || 7);
+  const meta = document.getElementById("opsMeta");
+  try {
+    const d = await apiJson(`/api/ops/intelligence?days=${days}`);
+    __opsLoadedAt = Date.now();
+    const ph = d.production_health || {}, pm = ph.metrics || {};
+    const fi = (d.failure_intelligence || {}).metrics || {};
+    const rr = d.renderer_reliability || {}, rm = rr.metrics || {};
+    const ti = d.topic_intelligence || {}, tm = ti.metrics || {};
+    const ai = d.api_intelligence || {}, am = ai.metrics || {};
+    const rc = (d.recovery_analytics || {}).metrics || {};
+    const tr = (d.reliability_trends || {}).metrics || {};
+    const ds = d.daily_summary || {};
+    meta.innerHTML = `Window: <strong>${escHtml(d.window.label)}</strong> · generated ${new Date(d.generated_at_utc).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST`
+      + (d.database_available ? "" : ` · <span style="color:#fca5a5">database unavailable: ${escHtml(d.database_error || "")}</span>`)
+      + (Object.keys(d.truncated || {}).length ? ` · truncated: ${escHtml(JSON.stringify(d.truncated))}` : "");
+    const h = document.getElementById("opsHealth");
+    h.textContent = ds.health || "UNKNOWN"; h.className = "kpi-val ops-health-" + (ds.health || "UNKNOWN");
+    document.getElementById("opsHealthSub").textContent = `${(ds.anomalies || []).length} anomalies today`;
+    document.getElementById("opsSuccess").innerHTML = opsVal(pm.completion_pct, "%");
+    document.getElementById("opsSuccessSub").textContent = `${pm.completed ?? "?"} of ${pm.finished ?? "?"} finished · ${pm.recovery_window_expired ?? "?"} expired · ${pm.failed ?? "?"} failed`;
+    document.getElementById("opsActive").textContent = `${pm.running ?? "?"} / ${pm.queued ?? "?"}`;
+    document.getElementById("opsActiveSub").textContent = `${pm.total_cycles ?? "?"} cycles in window`;
+    document.getElementById("opsDuration").innerHTML = opsVal(pm.avg_production_minutes, " min");
+    document.getElementById("opsDurationSub").textContent = `median ${pm.median_production_minutes ?? "n/a"} min · ${pm.long_running_completions ?? 0} long-running excluded`;
+    document.getElementById("opsRecovery").innerHTML = opsVal(rc.recovery_success_pct, "%");
+    document.getElementById("opsRecoverySub").textContent = `${rc.recovered ?? "?"} of ${rc.jobs_needing_recovery ?? "?"} recovered · expiry ${rc.recovery_window_expiration_pct ?? "n/a"}%`;
+    document.getElementById("opsRender").innerHTML = opsVal(rm.render_success_pct, "%");
+    document.getElementById("opsRenderSub").textContent = `${rm.renders_completed ?? "?"} ok · ${rm.renders_failed ?? "?"} failed · avg ${rm.avg_render_seconds ?? "n/a"} s`;
+    const daily = Object.entries(tr.daily_success || {});
+    opsCols(document.getElementById("opsDailyChart"), daily, k => k);
+    document.getElementById("opsDailyLegend").textContent = daily.length ? `${daily[0][0]} → ${daily[daily.length - 1][0]}` : "";
+    const hours = []; for (let i = 0; i < 24; i++) { const k = String(i).padStart(2, "0") + ":00"; hours.push([k, (tr.hourly_success_ist || {})[k] || { success_pct: null, completed: 0, not_completed: 0 }]); }
+    opsCols(document.getElementById("opsHourlyChart"), hours, k => k + " IST");
+    // summary
+    const sev = { high: "#fca5a5", medium: "#fcd34d", low: "var(--muted)" };
+    document.getElementById("opsSummaryDesc").textContent = `${ds.date || "today"} (IST). Recommendations are for operator review only; nothing is executed.`;
+    document.getElementById("opsSummary").innerHTML =
+      `<div style="margin-bottom:6px;">Health: <strong class="ops-health-${ds.health}">${escHtml(ds.health || "UNKNOWN")}</strong> · `
+      + `${(ds.production || {}).completed ?? "?"} completed / ${(ds.production || {}).total_cycles ?? "?"} cycles · success ${opsVal((ds.production || {}).completion_pct, "%")}</div>`
+      + `<strong style="font-size:12px;">Anomalies</strong><ul style="margin:4px 0 8px 18px;padding:0;">`
+      + ((ds.anomalies || []).map(a => `<li style="color:${sev[a.severity] || "inherit"}">${escHtml(a.text)}</li>`).join("") || `<li style="color:var(--muted)">None detected.</li>`)
+      + `</ul><strong style="font-size:12px;">For operator review</strong><ul style="margin:4px 0 0 18px;padding:0;">`
+      + (ds.recommendations || []).map(r => `<li>${escHtml(r)}</li>`).join("") + `</ul>`;
+    // failures
+    document.getElementById("opsFailMeta").innerHTML = `${fi.total_failures ?? 0} failures · by class: ${escHtml(Object.entries(fi.by_class || {}).map(([k, v]) => k + " " + v).join(", ") || "none")}`
+      + ` · most failure-prone stage: <strong>${escHtml(fi.most_failure_prone_stage || "n/a")}</strong>`;
+    document.getElementById("opsFailBody").innerHTML = (fi.patterns || []).slice(0, 12).map(p =>
+      `<tr><td>${p.count}</td><td>${escHtml(p.cause)}</td><td>${escHtml((p.classes && p.classes.length ? p.classes : [p.class]).join(" / "))}</td><td title="${escHtml(p.template)}">${escHtml(p.template.slice(0, 110))}</td>`
+      + `<td>${p.last_seen ? new Date(p.last_seen.replace(" ", "T") + (/[zZ]|[+-]\d\d:\d\d$/.test(p.last_seen) ? "" : "Z")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "--"}</td>`
+      + `<td style="font-size:11px;">${escHtml((p.jobs || []).join(", "))}</td></tr>`).join("")
+      || `<tr><td colspan="6" style="color:var(--muted)">No failures in this window.</td></tr>`;
+    // renderer
+    document.getElementById("opsRenderBody").innerHTML = opsKV([
+      ["Render success", `${opsVal(rm.render_success_pct, "%")} ${rm.render_success_pct != null ? opsBar(rm.render_success_pct) : ""}`],
+      ["Average render time", opsVal(rm.avg_render_seconds, " s")],
+      ["Produced by renderer", escHtml(Object.entries(rm.produced_by_renderer || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || "none")],
+      ["FFmpeg errors", rm.ffmpeg_errors ?? 0], ["Lemo-Opuscar errors", rm.renderer_errors ?? 0],
+      ["Renderer compliance blocks", rm.renderer_compliance_blocks ?? 0], ["Render timeouts", rm.render_timeouts ?? 0],
+      ["File-lock errors", rm.file_lock_errors ?? 0], ["Media acquisition errors (job-level)", rm.media_acquisition_errors ?? 0],
+      ["Failed asset acquisitions / unique images", `${opsVal(rm.media_acquisitions_failed)} / ${opsVal(rm.media_unique_images)}`],
+    ]);
+    // recovery
+    document.getElementById("opsRecoveryBody").innerHTML = opsKV([
+      ["Cycles needing recovery", rc.jobs_needing_recovery ?? 0], ["Recovered", rc.recovered ?? 0],
+      ["Recovery success", `${opsVal(rc.recovery_success_pct, "%")} ${rc.recovery_success_pct != null ? opsBar(rc.recovery_success_pct) : ""}`],
+      ["Failed after recovery", rc.failed_after_recovery ?? 0],
+      ["Recovery-window expiry rate", opsVal(rc.recovery_window_expiration_pct, "%")],
+      ["Time to recover (median / within 60 min)", `${opsVal(rc.median_time_to_recover_minutes, " min")} / ${rc.recovered_within_60_min ?? 0}`],
+      ["Total retries · re-arms · operator retries", `${rc.total_retries ?? 0} · ${rc.rearm_events ?? 0} · ${rc.operator_retries ?? 0}`],
+    ]);
+    // topics
+    if (ti.status === "unavailable") {
+      document.getElementById("opsTopicBody").innerHTML = `<span class="ops-tag">unavailable</span> ${escHtml((ti.unavailable || {}).all || "")}`;
+    } else {
+      const prov = Object.entries(tm.provider_contribution || {});
+      document.getElementById("opsTopicBody").innerHTML = opsKV([
+        ["Discovery runs", tm.discovery_runs ?? 0], ["Candidates per run / eligible per run", `${opsVal(tm.avg_candidates_per_run)} / ${opsVal(tm.avg_eligible_per_run)}`],
+        ["Acceptance rate (decisions)", opsVal(tm.acceptance_pct, "%")],
+        ["Rejection reasons", escHtml(Object.entries(tm.rejection_reasons || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none")],
+        ["Classifier v1 vs v2 (shadow)", escHtml(Object.entries(tm.classifier_v1_vs_v2 || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "n/a") + ` · differs ${tm.classifier_disagreement_pct ?? "n/a"}%`],
+        ["Topic-exhaustion failures / low-pool runs", `${tm.topic_exhaustion_failures ?? 0} / ${tm.low_pool_runs ?? 0}`],
+        ["Selected categories", escHtml(Object.entries(tm.selected_category_distribution || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none")],
+      ]) + (prov.length ? `<div style="overflow-x:auto;margin-top:8px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Provider</th><th>Queries</th><th>Items</th><th>Candidates</th><th>Accepted</th><th>Rejected</th><th>Duplicates</th><th>Errors</th><th>Unique</th></tr></thead><tbody>`
+        + prov.map(([f, s]) => `<tr><td>${escHtml(f)}</td><td>${s.queries ?? 0}</td><td>${s.articles ?? 0}</td><td>${s.candidates_created ?? 0}</td><td>${s.accepted ?? 0}</td><td>${s.rejected ?? 0}</td><td>${s.duplicates ?? 0}</td><td>${s.errors ?? 0}</td><td>${s.unique_accepted ?? 0}</td></tr>`).join("")
+        + `</tbody></table></div>` : "");
+    }
+    // API
+    const quota = Object.entries(am.youtube_quota_today_pacific || {});
+    const un = ai.unavailable || {};
+    document.getElementById("opsApiBody").innerHTML =
+      `<div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>YouTube bucket (today, Pacific ${escHtml(am.youtube_quota_day || "")})</th><th>Used <span class="ops-tag">estimate</span></th><th>Default limit</th><th>Requests</th><th></th></tr></thead><tbody>`
+      + quota.map(([k, q]) => `<tr><td title="${escHtml(k)}">${escHtml(q.label || k)}${q.google_block_active ? ' <span style="color:#fca5a5">blocked by Google</span>' : ""}</td><td>${q.used_estimate} ${escHtml(q.unit || "")}</td><td>${q.daily_limit_default}</td><td>${q.requests}</td><td style="width:22%">${opsBar(q.used_pct_estimate)}</td></tr>`).join("")
+      + `</tbody></table></div>`
+      + opsKV([
+        ["YouTube requests in window", am.youtube_requests ?? 0],
+        ["YouTube errors", escHtml(Object.entries(am.youtube_errors || {}).map(([k, v]) => `${k} ×${v}`).join(", ") || "none")],
+        ["Scripts by source", escHtml(Object.entries(am.scripts_by_source || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none")],
+        ["Gemini call count", `<span class="ops-tag">unavailable</span> ${escHtml(un.gemini_call_count || "")}`],
+        ["Google-reported quota", `<span class="ops-tag">unavailable</span> ${escHtml(un.google_reported_quota || "")}`],
+        ["Research providers (queries / errors)", escHtml(Object.entries(am.research_provider_requests || {}).map(([k, v]) => `${k} ${v.queries}/${v.errors}`).join(", ")) || `<span class="ops-tag">unavailable</span>`],
+        ["GNews requests (UTC day)", am.gnews_requests_by_utc_day ? escHtml(JSON.stringify(am.gnews_requests_by_utc_day)) : `<span class="ops-tag">unavailable</span>`],
+      ]);
+  } catch (err) {
+    if (meta) meta.innerHTML = `<span style="color:#fca5a5">Operational intelligence unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
 refreshAll();
 refreshDeployment();
 refreshProviders();
@@ -2147,6 +2329,7 @@ setInterval(refreshCreativeEngine, 60000);
 refreshCreativeEngine();
 refreshYouTubeConnection();
 setInterval(() => { refreshSchedule(); refreshMonitor(); }, 15000);
+setInterval(() => refreshOps(), 120000);   // only loads while the Operations tab is open
 </script>
 </body>
 </html>
