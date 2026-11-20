@@ -29,6 +29,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -144,7 +145,45 @@ CREATE TABLE IF NOT EXISTS autonomy_executions (
 );
 CREATE INDEX IF NOT EXISTS idx_autonomy_exec_type_started ON autonomy_executions (action_type, started_at_utc);
 CREATE INDEX IF NOT EXISTS idx_autonomy_exec_started ON autonomy_executions (started_at_utc);
+CREATE TABLE IF NOT EXISTS autonomy_execution_leases (
+    resource_key TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    owner_token TEXT NOT NULL,
+    owner_pid INTEGER NOT NULL,
+    acquired_at_utc TEXT NOT NULL,
+    heartbeat_at_utc TEXT NOT NULL
+);
 """
+# Stage 3.32G execution safety
+LEASE_HEARTBEAT_SECONDS = 15        # the owner refreshes its lease while the handler thread is alive
+LEASE_STALE_SECONDS = 120           # a lease is stale after this long without a heartbeat...
+#                                     ...but it is only reclaimed when its owner process is no longer running.
+BREAKER_THRESHOLD = 3               # consecutive failed attempts of one action type open its circuit breaker
+BREAKER_COOLDOWN = timedelta(minutes=60)
+FAILED_OUTCOMES = ("FAILED", "TIMED_OUT", "VERIFY_FAILED", "INTERRUPTED")
+
+
+def _default_pid_alive(pid: int) -> bool:
+    """True when a process with this id is running (Windows: OpenProcess; elsewhere: signal 0). Fail safe: True."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            import ctypes
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return bool(ok) and code.value == 259                              # STILL_ACTIVE
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
 SCHEMA_VERSION = 1
 
 
@@ -255,7 +294,9 @@ class ControlPlane:
                  autonomy_dir: Optional[str] = None, sentinel_path: Optional[str] = None,
                  startup_config_path: Optional[str] = None, environ: Optional[Dict[str, str]] = None,
                  handlers: Optional[Dict[str, Any]] = None, intelligence: Optional[Callable[[], Any]] = None,
-                 clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
+                 clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                 pid_alive: Optional[Callable[[int], bool]] = None,
+                 retry_backoff: Optional[Callable[[int], float]] = None):
         if db_path is None:
             from backend.app.core.paths import DATABASE_PATH
             db_path = str(DATABASE_PATH)
@@ -280,6 +321,8 @@ class ControlPlane:
         self.intelligence = intelligence
         self._schema_ready = False
         self._schema_lock = threading.Lock()
+        self.pid_alive = pid_alive or _default_pid_alive
+        self.retry_backoff = retry_backoff or (lambda attempt: min(2.0 * attempt, 10.0))
         # Kill switch C is latched once, at process start (fail closed: missing or invalid -> active).
         self.startup_kill_switch = self._evaluate_startup(os.environ if environ is None else environ)
 
@@ -800,6 +843,7 @@ class ControlPlane:
 
     def _maintenance(self, conn: sqlite3.Connection) -> None:
         """Expire overdue requests and reconcile executions interrupted by a process stop (never re-executed)."""
+        self._reclaim_leases(conn)
         now = self._now()
         now_s = self._ts(now)
         for row in conn.execute("SELECT id, action_type, status FROM autonomy_approval_requests WHERE status IN ('PENDING','APPROVED') "
@@ -824,6 +868,82 @@ class ControlPlane:
                 if cur.rowcount == 1:
                     self._audit(conn, "EXECUTION_FAILED", "control-plane", request_id=row["id"], action_type=row["action_type"],
                                 previous_state=EXECUTING, new_state=FAILED, reason=result["error"])
+
+    # -- Stage 3.32G: leases, heartbeat, ownership, circuit breaker -----------------------------------------------
+    def _heartbeat_loop(self, key: str, token: str, stop: threading.Event) -> None:
+        while not stop.wait(LEASE_HEARTBEAT_SECONDS):
+            try:
+                with self._tx() as conn:
+                    conn.execute("UPDATE autonomy_execution_leases SET heartbeat_at_utc=? WHERE resource_key=? AND "
+                                 "owner_token=?", (self._ts(self._now()), key, token))
+            except Exception:
+                pass
+
+    def _release_lease_when_done(self, key: str, token: str, futures: List[concurrent.futures.Future],
+                                 stop: threading.Event) -> None:
+        """Release only when every handler thread has REALLY ended. After a timeout the thread may still be running:
+        the lease (and its heartbeat) then stays until that thread finishes, so nothing can run the action again."""
+        def release(_f=None):
+            if any(not f.done() for f in futures):
+                return
+            stop.set()
+            try:
+                with self._tx() as conn:
+                    n = conn.execute("DELETE FROM autonomy_execution_leases WHERE resource_key=? AND owner_token=?",
+                                     (key, token)).rowcount
+                    if n:
+                        self._audit(conn, "LEASE_RELEASED", "control-plane",
+                                    details={"resource": key[:80], "claim": token[:8]})
+            except Exception:
+                pass
+        pending = [f for f in futures if not f.done()]
+        if not pending:
+            release()
+        for f in pending:
+            f.add_done_callback(release)
+
+    def _breaker(self, conn: sqlite3.Connection, action_type: str) -> Dict[str, Any]:
+        rows = conn.execute("SELECT outcome, finished_at_utc FROM autonomy_executions WHERE action_type=? AND "
+                            "outcome NOT IN ('RUNNING','BLOCKED') ORDER BY id DESC LIMIT ?",
+                            (action_type, BREAKER_THRESHOLD)).fetchall()
+        if len(rows) < BREAKER_THRESHOLD or any(r["outcome"] not in FAILED_OUTCOMES for r in rows):
+            return {"open": False}
+        last = rows[0]["finished_at_utc"] or ""
+        try:
+            until = datetime.strptime(last, TS_FMT).replace(tzinfo=timezone.utc) + BREAKER_COOLDOWN
+        except ValueError:
+            until = self._now() + BREAKER_COOLDOWN
+        return {"open": until > self._now(), "until_utc": self._ts(until), "last_outcomes": [r["outcome"] for r in rows]}
+
+    def _reclaim_leases(self, conn: sqlite3.Connection) -> None:
+        """A lease whose heartbeat is stale is reclaimed ONLY when its owner process is no longer running. A stale
+        heartbeat alone never lets a second worker run the action (the owner may be slow or blocked)."""
+        stale = self._ts(self._now() - timedelta(seconds=LEASE_STALE_SECONDS))
+        for lease in conn.execute("SELECT * FROM autonomy_execution_leases WHERE heartbeat_at_utc <= ?", (stale,)).fetchall():
+            if lease["owner_pid"] == os.getpid() or self.pid_alive(int(lease["owner_pid"])):
+                continue
+            n = conn.execute("DELETE FROM autonomy_execution_leases WHERE resource_key=? AND owner_token=?",
+                             (lease["resource_key"], lease["owner_token"])).rowcount
+            if n:
+                self._audit(conn, "LEASE_RECLAIMED", "control-plane", request_id=lease["request_id"],
+                            action_type=lease["action_type"],
+                            reason=f"owner process {lease['owner_pid']} is no longer running; the action was not re-executed")
+
+    def safety_state(self) -> Dict[str, Any]:
+        with self._read() as conn:
+            leases = [dict(r) for r in conn.execute("SELECT request_id, action_type, owner_pid, acquired_at_utc, "
+                                                    "heartbeat_at_utc FROM autonomy_execution_leases LIMIT 50")]
+            breakers = {}
+            for (at,) in conn.execute("SELECT DISTINCT action_type FROM autonomy_executions LIMIT 100").fetchall():
+                b = self._breaker(conn, at)
+                if b["open"]:
+                    breakers[at] = b
+        stale = self._ts(self._now() - timedelta(seconds=LEASE_STALE_SECONDS))
+        for lease in leases:
+            lease["heartbeat_stale"] = lease["heartbeat_at_utc"] <= stale
+        return {"leases": leases, "open_circuit_breakers": breakers, "lease_stale_seconds": LEASE_STALE_SECONDS,
+                "breaker_threshold": BREAKER_THRESHOLD,
+                "breaker_cooldown_minutes": int(BREAKER_COOLDOWN.total_seconds() // 60)}
 
     def run_maintenance(self) -> None:
         with self._tx() as conn:
@@ -855,6 +975,10 @@ class ControlPlane:
             return "PAYLOAD_MISMATCH", {}
         if not self._signature_valid(row):
             return "approval signature invalid or missing (approval was not made through the control plane)", {}
+        breaker = self._breaker(conn, spec.action_type)
+        if breaker["open"]:
+            return (f"circuit breaker open: the last {BREAKER_THRESHOLD} attempts of {spec.action_type} failed; "
+                    f"execution resumes after {breaker['until_utc']}"), {}
         limit = spec.daily_limit
         if row["approval_mode"] == "STANDING":
             grant = cfg["standing_approvals"].get(row["action_type"])
@@ -893,12 +1017,26 @@ class ControlPlane:
                             previous_state=row["status"], new_state=row["status"], reason=refusal)
             else:
                 now = self._ts(self._now())
-                cur = conn.execute("UPDATE autonomy_approval_requests SET status=?, execution_status='RUNNING', claim_token=?, "
-                                   "claimed_at_utc=?, updated_at_utc=? WHERE id=? AND status=? AND expires_at_utc>?",
-                                   (EXECUTING, token, now, now, request_id, APPROVED, now))
-                if cur.rowcount != 1:
+                lease = conn.execute("SELECT * FROM autonomy_execution_leases WHERE resource_key=?",
+                                     (row["dedupe_key"],)).fetchone()
+                cur = None
+                if lease is not None:
+                    refusal = (f"a previous execution of this action ({lease['request_id']}) may still be running "
+                               f"(lease owned by process {lease['owner_pid']}); it is never executed twice")
+                    self._audit(conn, "EXECUTION_BLOCKED", actor, request_id=request_id, action_type=row["action_type"],
+                                previous_state=row["status"], new_state=row["status"], reason=refusal)
+                else:
+                    cur = conn.execute("UPDATE autonomy_approval_requests SET status=?, execution_status='RUNNING', claim_token=?, "
+                                       "claimed_at_utc=?, updated_at_utc=? WHERE id=? AND status=? AND expires_at_utc>?",
+                                       (EXECUTING, token, now, now, request_id, APPROVED, now))
+                if cur is None:
+                    pass
+                elif cur.rowcount != 1:
                     refusal = "request was claimed by another execution"
                 else:
+                    conn.execute("INSERT INTO autonomy_execution_leases (resource_key, request_id, action_type, owner_token, "
+                                 "owner_pid, acquired_at_utc, heartbeat_at_utc) VALUES (?,?,?,?,?,?,?)",
+                                 (row["dedupe_key"], request_id, row["action_type"], token, os.getpid(), now, now))
                     self._audit(conn, "EXECUTION_STARTED", actor, request_id=request_id, action_type=row["action_type"],
                                 previous_state=APPROVED, new_state=EXECUTING, details={"claim": token[:8]})
         if refusal:
@@ -906,11 +1044,23 @@ class ControlPlane:
         return self._run_claimed(dict(row), ctx["spec"], token, actor)
 
     def _run_claimed(self, row: Dict[str, Any], spec: registry.ActionSpec, token: str, actor: str) -> Dict[str, Any]:
-        rid = row["id"]
         handler = self.handlers[spec.action_type]
         payload = json.loads(row["payload_json"])
+        futures: List[concurrent.futures.Future] = []
+        stop = threading.Event()
+        threading.Thread(target=self._heartbeat_loop, args=(row["dedupe_key"], token, stop),
+                         name="autonomy-lease-heartbeat", daemon=True).start()
+        try:
+            return self._attempts(row, spec, token, actor, handler, payload, futures)
+        finally:
+            self._release_lease_when_done(row["dedupe_key"], token, futures, stop)
+
+    def _attempts(self, row, spec, token, actor, handler, payload, futures) -> Dict[str, Any]:
+        rid = row["id"]
         outcome, final_result, error, verification = "FAILED", None, None, None
         for attempt in range(1, spec.retry_limit + 2):
+            if attempt > 1:
+                time.sleep(max(0.0, float(self.retry_backoff(attempt - 1))))   # bounded backoff between retries
             ks = self.kill_switches()
             if ks["any_active"]:
                 error = f"kill switch activated during execution ({', '.join(ks['active'])}); remaining attempts cancelled"
@@ -928,6 +1078,7 @@ class ControlPlane:
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="autonomy-action")
             try:
                 fut = pool.submit(handler.run, ctx, payload)
+                futures.append(fut)
                 result = fut.result(timeout=spec.timeout_seconds)
                 ok, verification = handler.verify(ctx, payload, result)
                 if ok:
@@ -971,6 +1122,8 @@ class ControlPlane:
     def _release_claim(self, row: Dict[str, Any], token: str, actor: str, reason: str) -> Dict[str, Any]:
         with self._tx() as conn:
             now = self._ts(self._now())
+            conn.execute("DELETE FROM autonomy_execution_leases WHERE resource_key=? AND owner_token=?",
+                         (row["dedupe_key"], token))
             conn.execute("UPDATE autonomy_executions SET outcome='BLOCKED', finished_at_utc=?, error=? WHERE request_id=? "
                          "AND claim_token=? AND outcome='RUNNING'", (now, reason, row["id"], token))
             cur = conn.execute("UPDATE autonomy_approval_requests SET status=?, execution_status='NOT_STARTED', claim_token=NULL, "

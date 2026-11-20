@@ -376,6 +376,7 @@
     <button class="tab-btn" data-tab="community" onclick="switchTab('community', this)">Community Posts</button>
     <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
     <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
+    <button class="tab-btn" data-tab="autopilot" onclick="switchTab('autopilot', this)">Autopilot</button>
     <button class="tab-btn" data-tab="autonomy" onclick="switchTab('autonomy', this)">Autonomy Control</button>
     <button class="tab-btn" data-tab="prodconfig" onclick="switchTab('prodconfig', this)">Production &amp; Storage Config</button>
     <button class="tab-btn" data-tab="processes" onclick="switchTab('processes', this)">Processes &amp; Logs</button>
@@ -1092,6 +1093,38 @@
     </div>
   </section>
 
+  <!-- STAGE 3.32G: CONTROLLED AUTOPILOT (read-mostly view over 3.32A-F; execution stays in Autonomy Control) -->
+  <section id="tab-autopilot" class="tab-panel">
+    <div class="card" style="padding:12px 16px;">
+      <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Autopilot</h2>
+        <p class="card-desc">One view of the controlled autonomy lifecycle: <strong>observe</strong> (Operational Intelligence) &rarr; <strong>recommend</strong> (Recommendations, Self-Healing) &rarr; <strong>approval request</strong> &rarr; <strong>approved execution</strong> (Autonomy Control). Everything shown is read from the stored backend state. Nothing here executes an action; approvals and execution stay in Autonomy Control with every gate.</p></div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <label for="apOperator" style="font-size:12px;color:var(--muted);">Operator</label>
+          <input id="apOperator" maxlength="64" placeholder="your name" style="width:130px;" />
+          <button class="btn sm" onclick="refreshAutopilot(true)">Refresh</button></div></div>
+      <div class="meta" style="font-size:12px;" id="apMeta">Open this tab to load.</div>
+    </div>
+    <div class="overview-grid">
+      <div class="kpi-card"><div class="kpi-label">Autonomy mode</div><div class="kpi-val" id="apMode">--</div><div class="kpi-sub" id="apModeSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Execution</div><div class="kpi-val" id="apExec">--</div><div class="kpi-sub" id="apExecSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Kill switches</div><div class="kpi-val" id="apKill">--</div><div class="kpi-sub" id="apKillSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Pending approvals</div><div class="kpi-val" id="apPending" style="color:#fcd34d;">--</div><div class="kpi-sub" id="apPendingSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Executions</div><div class="kpi-val" id="apExecCount">--</div><div class="kpi-sub" id="apExecCountSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Safety</div><div class="kpi-val" id="apSafety">--</div><div class="kpi-sub" id="apSafetySub">--</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Categories</h2><p class="card-desc">Effective level = min(global, category), and why each category cannot execute.</p></div></div><div id="apCats" style="font-size:12px;overflow-x:auto;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Connected components</h2><p class="card-desc">Self-Healing, Community drafts and publishing readiness, as each reports itself.</p></div></div><div id="apComponents" style="font-size:12px;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Recommendations &rarr; approval requests</h2><p class="card-desc">An open recommendation can become an approval request only for its fixed, rule-mapped follow-up actions. AI wording never chooses an action or writes a payload. Proposing needs RECOMMEND for that category and creates a <em>pending</em> request; it never executes.</p></div></div><div id="apRecs" style="font-size:12px;">--</div></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Pending and approved requests</h2><p class="card-desc">Approve, reject or execute them in Autonomy Control.</p></div></div><div id="apRequests" style="font-size:12px;overflow-x:auto;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Executions and recovery</h2><p class="card-desc">Attempts with their verified outcome, leases and circuit breakers. Interrupted executions are reconciled, never re-run.</p></div></div><div id="apExecs" style="font-size:12px;overflow-x:auto;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Recent decisions</h2><p class="card-desc">From the hash-chained, append-only autonomy audit trail. Refused and blocked actions are highlighted.</p></div></div><div id="apDecisions" style="font-size:12px;overflow-x:auto;">--</div></div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Action permission policy</h2><p class="card-desc"><strong>Autonomous-eligible</strong>: low risk, may run under a time-limited standing approval when its category is at APPROVED_EXECUTION. <strong>Approval required</strong>: every request needs an explicit approval. <strong>Permanently gated</strong>: never executable by autonomy.</p></div></div><div id="apPolicy" style="font-size:12px;overflow-x:auto;">--</div></div>
+  </section>
+
   <!-- STAGE 3.32B: AUTONOMY CONTROL PLANE -->
   <section id="tab-autonomy" class="tab-panel">
     <div class="card" style="padding:12px 16px;">
@@ -1325,6 +1358,7 @@ function switchTab(tabId, btn) {
   if (tabId === "ops") { refreshOps(); }
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
+  if (tabId === "autopilot") { refreshAutopilot(true); }
   if (tabId === "recs") { refreshRecommendations(true); }
   if (tabId === "heal") { refreshSelfHealing(true); }
   if (tabId === "community") { refreshCommunity(true); }
@@ -3791,6 +3825,94 @@ async function cmSaveSchedule() {
 }
 
 setInterval(() => refreshCommunity(), 120000);   // only loads while the Community Posts tab is open
+
+// -- Stage 3.32G Autopilot: read-only view of persisted state; the only write is "Propose" (a pending request). --
+const AP_TIER = { AUTONOMOUS_ELIGIBLE: "#86efac", APPROVAL_REQUIRED: "#fcd34d", PERMANENTLY_GATED: "#fca5a5" };
+const AP_BAD = new Set(["REJECTED", "CANCELLED", "EXECUTION_BLOCKED", "PROPOSAL_REFUSED", "BRIDGE_REFUSED", "PROHIBITED_ACTION_BLOCKED", "EXECUTION_FAILED"]);
+
+async function apWrite(url, body) {
+  const op = ((document.getElementById("apOperator") || {}).value || "").trim();
+  const ao = document.getElementById("autoOperator");
+  if (op && ao) ao.value = op;                         // the same identity as Autonomy Control
+  return autoWrite(url, "POST", body);
+}
+
+function apTable(head, rows) {
+  return `<table class="ops-table"><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+async function refreshAutopilot(force = false) {
+  const panel = document.getElementById("tab-autopilot");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  const opEl = document.getElementById("apOperator");
+  if (opEl && !opEl.value) { try { opEl.value = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} }
+  const meta = document.getElementById("apMeta");
+  try {
+    const a = await apiJson("/api/autopilot");
+    const ks = a.kill_switches || {}, s = a.safety || {}, ec = a.execution_counts || {};
+    document.getElementById("apMode").innerHTML = a.mode === "OFF" ? `<span class="auto-off">OFF</span>` : `<span class="auto-on">${escHtml(a.mode)}</span>`;
+    document.getElementById("apModeSub").textContent = `global level ${a.global_level}${a.configuration_error ? " · configuration error: " + a.configuration_error : ""}`;
+    document.getElementById("apExec").innerHTML = a.execution_possible ? `<span class="auto-on">POSSIBLE</span>` : `<span class="auto-off">BLOCKED</span>`;
+    document.getElementById("apExecSub").textContent = a.execution_possible ? "some category may execute approved actions" : "no category can execute";
+    document.getElementById("apKill").innerHTML = ks.any_active ? `<span class="auto-kill">ACTIVE</span>` : `<span class="auto-on">none</span>`;
+    document.getElementById("apKillSub").textContent = (ks.active || []).join(", ") || "--";
+    document.getElementById("apPending").textContent = (a.pending_approvals || []).length;
+    document.getElementById("apPendingSub").textContent = `${(a.approved_awaiting_execution || []).length} approved, awaiting execution`;
+    document.getElementById("apExecCount").textContent = (a.executions || []).length;
+    document.getElementById("apExecCountSub").textContent = Object.entries(ec).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(" · ") || "none";
+    const brk = Object.keys(s.open_circuit_breakers || {});
+    const leasesN = (s.leases || []).length;
+    document.getElementById("apSafety").innerHTML = brk.length || leasesN ? `<span style="color:#fcd34d">${brk.length} breaker(s) · ${leasesN} lease(s)</span>` : `<span class="auto-on">clear</span>`;
+    document.getElementById("apSafetySub").textContent = `audit chain ${(a.audit_chain || {}).ok === false ? "BROKEN" : "verified"}`;
+    meta.textContent = "Autopilot never executes from this page. Levels, standing approvals and kill switches are managed in Autonomy Control.";
+    const cats = a.categories || {};
+    document.getElementById("apCats").innerHTML = apTable(["Category", "Level", "Effective", "Observe", "Recommend", "Execute", "Why blocked"],
+      Object.entries(cats).map(([k, c]) => `<tr><td>${escHtml(k)}</td><td>${escHtml(c.level)}</td><td>${escHtml(c.effective)}</td><td>${c.can_observe ? "yes" : "no"}</td><td>${c.can_recommend ? "yes" : "no"}</td><td>${c.can_execute ? `<span class="auto-on">yes</span>` : "no"}</td><td>${escHtml((c.blocked_reasons || []).join("; "))}</td></tr>`));
+    const sh = a.self_healing || {}, cm = a.community || {}, pb = a.publishing || {};
+    document.getElementById("apComponents").innerHTML = opsKV([
+      ["Self-Healing", escHtml(sh.available ? `${(sh.state || {}).mode || "?"} · ${(sh.state || {}).reason || ""}` : `unavailable (${sh.error || "?"})`)],
+      ["Community drafts", escHtml(cm.available ? `automation ${cm.enabled ? "ON" : "OFF"} · ${cm.state} · next ${cm.next_run_utc ? cmBrowser(cm.next_run_utc) : "none"} (${cm.timezone})` : `unavailable (${cm.error || "?"})`)],
+      ["Community publishing", escHtml(pb.available ? `capability ${pb.capability || "never checked"} · API publishing ${pb.enabled ? "ON" : "OFF"} · ready ${pb.api_publishing_ready ? "yes" : "no"} · ${pb.awaiting} approved awaiting · ${pb.attention} need attention` : `unavailable (${pb.error || "?"})`)],
+      ["Recommendations", escHtml(`${(((a.recommendations || {}).open) || []).length} open`)],
+    ]);
+    const recs = (a.recommendations || {}).open || [];
+    document.getElementById("apRecs").innerHTML = recs.length ? recs.map(r => `<div style="border-bottom:1px solid var(--border);padding:6px 0;"><strong>${escHtml(r.title || "")}</strong> <span class="ops-tag">${escHtml(r.severity || "")}</span> <span style="color:var(--muted)">${escHtml(r.rule_id || "")} · ${escHtml(r.status || "")}</span>`
+      + `<div class="btn-row" style="margin-top:4px;">${(r.follow_ups || []).map(f => `<button class="btn sm" data-id="${escHtml(r.id)}" data-action="${escHtml(f.action_type)}" onclick="apPropose(this.dataset.id, this.dataset.action)">Propose ${escHtml(f.action_type)} <span style="color:${AP_TIER[f.tier] || "inherit"}">(${escHtml(f.risk)})</span></button>`).join("") || `<span style="color:var(--muted)">no follow-up action is mapped; handle it by hand</span>`}</div></div>`).join("")
+      : `<div style="color:var(--muted)">No open recommendations.</div>`;
+    const reqs = [...(a.pending_approvals || []), ...(a.approved_awaiting_execution || [])];
+    document.getElementById("apRequests").innerHTML = reqs.length ? apTable(["Request", "Action", "Risk", "Status", "Proposed by", "Expires"],
+      reqs.map(r => `<tr><td>${escHtml(r.id)}</td><td>${escHtml(r.action_type)}</td><td>${escHtml(r.risk)}</td><td>${escHtml(r.status)}</td><td>${escHtml(r.proposed_by)}</td><td>${autoTime(r.expires_at_utc)}</td></tr>`))
+      : `<div style="color:var(--muted)">No pending or approved requests.</div>`;
+    const ex = a.executions || [];
+    const leases = (s.leases || []).map(l => `<div style="color:#fcd34d;">lease: ${escHtml(l.action_type)} (${escHtml(l.request_id)}) owned by process ${escHtml(l.owner_pid)} · heartbeat ${autoTime(l.heartbeat_at_utc)}${l.heartbeat_stale ? " · STALE (reclaimed only if the owner process has ended)" : ""}</div>`).join("");
+    const breakers = Object.entries(s.open_circuit_breakers || {}).map(([k, b]) => `<div style="color:#fca5a5;">circuit breaker open: ${escHtml(k)} until ${autoTime(b.until_utc)}</div>`).join("");
+    document.getElementById("apExecs").innerHTML = leases + breakers + (ex.length ? apTable(["Started", "Action", "Attempt", "Outcome", "Error"],
+      ex.map(x => `<tr><td>${autoTime(x.started_at_utc)}</td><td>${escHtml(x.action_type)}</td><td>${escHtml(x.attempt)}</td><td>${escHtml(x.outcome)}</td><td>${escHtml((x.error || "").slice(0, 120))}</td></tr>`))
+      : `<div style="color:var(--muted)">No executions yet.</div>`);
+    const ev = a.recent_decisions || [];
+    document.getElementById("apDecisions").innerHTML = ev.length ? apTable(["When", "Event", "Actor", "Action", "Reason"],
+      ev.map(e => `<tr${AP_BAD.has(e.event_type) ? ` style="color:#fca5a5"` : ""}><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.event_type)}</td><td>${escHtml(e.actor)}</td><td>${escHtml(e.action_type || "")}</td><td>${escHtml((e.reason || "").slice(0, 160))}</td></tr>`))
+      : `<div style="color:var(--muted)">No decisions recorded.</div>`;
+    const pol = (a.policy || {}).entries || [];
+    document.getElementById("apPolicy").innerHTML = apTable(["Action", "Tier", "Category", "Risk", "Approval", "Timeout / retries", "Postcondition"],
+      pol.map(e => `<tr><td>${escHtml(e.action_type)}</td><td style="color:${AP_TIER[e.tier] || "inherit"}">${escHtml(e.tier)}</td><td>${escHtml(e.category)}</td><td>${escHtml(e.risk)}</td><td>${escHtml(e.required_approval)}</td><td>${e.prohibited ? "--" : escHtml(`${e.timeout_seconds}s / ${e.retry_limit}`)}</td><td style="max-width:320px;overflow-wrap:anywhere;">${escHtml((e.postconditions || "").slice(0, 160))}</td></tr>`))
+      + `<div style="margin-top:6px;">${((a.policy || {}).separately_gated_outside_autonomy || []).map(g => `<div><strong>${escHtml(g.id)}</strong>: ${escHtml(g.gate)}</div>`).join("")}</div>`;
+  } catch (err) {
+    if (meta) meta.innerHTML = `<span class="auto-kill">Autopilot unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
+async function apPropose(recId, actionType) {
+  if (!(await askConfirm("Create an approval request?", `Action: ${actionType}\nFrom recommendation: ${recId}\n\nThis creates a PENDING request only. Nothing runs until it is approved and executed in Autonomy Control, with every gate (levels, kill switches, limits, verification).`))) return;
+  try {
+    const r = await apWrite(`/api/autopilot/recommendations/${encodeURIComponent(recId)}/propose`, { action_type: actionType });
+    showToast(r.duplicate ? "An identical request is already open" : "Approval request created (pending)");
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilot(true);
+}
+
+setInterval(() => refreshAutopilot(), 120000);   // only loads while the Autopilot tab is open
+
 </script>
 </body>
 </html>

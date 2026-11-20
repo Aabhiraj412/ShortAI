@@ -657,5 +657,6 @@ def test_production_tables_untouched(tmp_path):
     assert snap() == before
     new_tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} - {"persistent_jobs", "studio_settings", "sqlite_sequence"}
     assert new_tables == {"autonomy_config", "autonomy_approval_requests", "autonomy_audit_events", "autonomy_executions",
-                          "autonomy_recommendations", "autonomy_recommendation_runs"}
+                          "autonomy_recommendations", "autonomy_recommendation_runs",
+                          "autonomy_execution_leases"}
     conn.close()

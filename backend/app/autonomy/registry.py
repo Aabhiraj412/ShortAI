@@ -272,6 +272,11 @@ PROHIBITED: Tuple[ActionSpec, ...] = (
                 "media/productions/<job>/assets; asset_registry"),
     _prohibited("autonomy.code.execute", "Run shell commands, arbitrary Python, or commands built from recommendation "
                 "or AI-generated text.", "subprocess with shell; eval / exec; command construction from free text"),
+    # Stage 3.32G: made explicit (they were never reachable; now they are named, permanently gated entries).
+    _prohibited("external.communication.send", "Send e-mail, chat, social, webhook or any other message outside this "
+                "computer.", "notification_service e-mail; SMTP; any outbound message"),
+    _prohibited("external.financial.action", "Spend money, purchase, subscribe, change billing or take any other "
+                "financial or irreversible external action.", "payments; billing; paid API activation"),
 )
 
 REGISTRY: Dict[str, ActionSpec] = {s.action_type: s for s in PERMITTED + PROHIBITED}
@@ -298,6 +303,31 @@ def lookup(action_type: Any) -> ActionSpec:
     if not isinstance(action_type, str) or action_type not in REGISTRY:
         raise UnknownActionError(f"unknown action type: {str(action_type)[:80]!r}")
     return REGISTRY[action_type]
+
+
+# -- Stage 3.32G centralized action policy -------------------------------------------------------------------------
+TIER_AUTONOMOUS_ELIGIBLE = "AUTONOMOUS_ELIGIBLE"      # may run under a time-limited standing approval (low risk)
+TIER_APPROVAL_REQUIRED = "APPROVAL_REQUIRED"          # every request needs its own explicit human approval
+TIER_PERMANENTLY_GATED = "PERMANENTLY_GATED"          # never executable by autonomy, at any level
+IDEMPOTENCY = ("one open request per dedupe key (UNIQUE index); one atomic claim per approved request; an execution "
+               "lease per dedupe key held until the handler thread really ends; a COMPLETED request never runs again")
+
+
+def policy_tier(spec: ActionSpec) -> str:
+    if spec.prohibited:
+        return TIER_PERMANENTLY_GATED
+    if spec.approval == APPROVAL_STANDING_ALLOWED and spec.risk in (RISK_READ_ONLY, RISK_LOW):
+        return TIER_AUTONOMOUS_ELIGIBLE
+    return TIER_APPROVAL_REQUIRED
+
+
+def policy_entry(spec: ActionSpec) -> Dict[str, Any]:
+    """The full permission policy of one action: identifier, category, risk, permission, pre/postconditions,
+    timeout, retries, idempotency, audit and rollback."""
+    return {**spec.public(), "tier": policy_tier(spec), "postconditions": spec.verification,
+            "idempotency": "n/a (never executable)" if spec.prohibited else IDEMPOTENCY,
+            "audit": "hash-chained, append-only autonomy_audit_events (proposal, approval, claim, attempts, verification, "
+                     "outcome)" if not spec.prohibited else "attempts are refused and audited as PROHIBITED_ACTION"}
 
 
 def require_permitted(action_type: Any) -> ActionSpec:

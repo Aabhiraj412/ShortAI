@@ -1,12 +1,12 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-20, about 18:30 IST. Stage 3.32E is deployed (dashboard and daemon on `89ea49b`). The timezone-aware Community schedule is implemented and uncommitted.
+**As of:** 2026-11-20, late evening IST. Stages 3.32E and 3.32F are deployed (dashboard). Stage 3.32G (Controlled Autopilot) is implemented, committed, pushed and deployed to the dashboard in the commit that contains this file. Autonomy stays OFF.
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
-**Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, at `97b7990` (the validator wording fix, committed but **not pushed**) plus the uncommitted timezone-aware schedule work.
+**Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, in step with `main`.
 
-**Latest commit on `main` / `origin/main`:** `89ea49b`.
+**Latest commit on `main` / `origin/main`:** the Stage 3.32G commit (on top of `16b8628`, 3.32F). Run `git log -1` for the hash.
 
 ## 1. Architecture
 
@@ -35,6 +35,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3.32A | `services/operational_intelligence.py` | Read-only analytics (production health, failures, renderer, topics, API, recovery). Feeds everything below. |
 | 3.32B | `autonomy/control_plane.py`, `registry.py`, `handlers.py` | The **only** path to any autonomous action: closed action registry (8 permitted, 26 prohibited); levels OFF / OBSERVE / RECOMMEND / APPROVED_EXECUTION (global × category); signed, hash-bound approvals; 3 kill switches; hash-chained append-only audit. |
 | 3.32C | `autonomy/recommendations/` | Rule-based recommendations (28 rules), advice only. |
+| 3.32G | `autonomy/autopilot.py`, `control_plane.py`, `registry.py` | **Controlled Autopilot.** Centralized action policy with three tiers: autonomous-eligible (5), approval required (3), permanently gated (28, now including explicit external communication and financial actions). Deterministic recommendation → approval-request bridge. Execution leases with owner process and heartbeat: a timed-out thread keeps its lease until it ends, and a lease is only reclaimed when its owner process has ended. Circuit breaker, retry backoff. Read-only Autopilot tab and API. Details: `docs/STAGE_3_32G_AUTOPILOT.md`. |
 | 3.32D | `autonomy/self_healing/` | Detect, classify (6 classes), diagnose and plan, then propose allow-listed actions (diagnostics, provider availability check, staged re-download). Every action is approved, executed through the control plane and verified twice. Never retries or re-renders jobs. |
 
 **Kill switches:**
@@ -103,8 +104,8 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 1. **Deploy `710b8c5` to the dashboard**: the exact next task (section 7).
 2. **Fix the FFmpeg padding defect** (bug 1). This is the largest source of lost cycles.
 3. **3.32E**: Community posts in DRAFT mode. `89ea49b` is deployed with automation OFF. The timezone-aware schedule (US presets, DST) is implemented and tested, awaiting commit authorization; deploying it needs a dashboard **and** a daemon restart. Then the operator picks a timezone and time and enables automation. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7 and `docs/STAGE_3_32E_SCHEDULING.md`.
-3a. **3.32F**: YouTube Community publishing. **Implemented in the development worktree (uncommitted).** The read-only capability audit found `PILOT_ACCESS_REQUIRED` for project `crazzydocs-youtube` (`posts.list`: 404 Method not found); in addition, the token lacks a `posts.insert` scope. API publishing stays OFF and fail-closed; the manual handoff works. See `docs/STAGE_3_32F_PUBLISHING.md`.
-4. **3.32G**: controlled autopilot rollout. Phased activation (OBSERVE, then RECOMMEND, then standing diagnostics only) with weekly reports and kill-switch drills. **Each gate needs user approval.**
+3a. **3.32F**: YouTube Community publishing. **Committed (`16b8628`) and deployed.** The read-only capability audit found `PILOT_ACCESS_REQUIRED` for project `crazzydocs-youtube` (`posts.list`: 404 Method not found); in addition, the token lacks a `posts.insert` scope. API publishing stays OFF and fail-closed; the manual handoff works. See `docs/STAGE_3_32F_PUBLISHING.md`.
+4. **3.32G**: Controlled Autopilot. **Implemented and deployed (dashboard); autonomy remains OFF.** The next step is the **phased activation** (a separate user decision for each gate): OBSERVE, then RECOMMEND (proposals only), then APPROVED_EXECUTION for the diagnostics and reporting categories with standing approvals for autonomous-eligible actions only. Add a kill-switch drill and a weekly Autopilot report.
 5. **3.32F activation**: **BLOCKED** on Google approving the project for the posts API pilot (or general availability, planned for 2027) and on a `youtube.force-ssl` re-consent; see `docs/STAGE_3_32F_PUBLISHING.md` §9.
 
 ## 6. Critical safety constraints
@@ -138,11 +139,18 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-**Review the Stage 3.32F work** (development worktree, uncommitted, on top of `5655487`), then commit, push and deploy it. Each step needs the user's authorization.
+**Recommended next milestone: Stage 3.32H, the phased Autopilot activation.** Each gate needs explicit user approval.
 
-- **Deployment:** a dashboard restart only. The daemon does not run the publishing code, although its tick picks up the operator-attribution change at its next restart.
-- **After deployment:**
-  - API publishing stays OFF;
-  - the user can use the manual handoff for approved drafts;
-  - re-running the capability check from the dashboard records the live result in production.
-- **Automation is ON** (20:00 IST daily). Approval and posting stay manual.
+1. **OBSERVE** for one or two days (record observations; nothing is proposed).
+2. **RECOMMEND** for the recommendations, diagnostics and reporting categories. Proposals queue; they are approved by hand in Autonomy Control.
+3. **APPROVED_EXECUTION**:
+   - requires `backend/data/autonomy_startup.json` and a dashboard restart;
+   - for `diagnostics` and `reporting` only;
+   - with time-limited standing approvals for autonomous-eligible actions (daily caps);
+   - include a kill-switch drill.
+4. **A weekly Autopilot report** (executions, blocks, breakers, leases) for review.
+
+Outside autonomy, still open:
+- the FFmpeg padding defect (the largest source of lost cycles);
+- the monitor's dashboard health check times out at 2 s, while the endpoint takes about 2 s;
+- Community API publishing waits for Google pilot access and a `youtube.force-ssl` re-consent.

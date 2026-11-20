@@ -655,7 +655,7 @@ def test_production_records_untouched_and_no_production_calls(tmp_path, monkeypa
     assert snapshot() == before
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert tables - {"persistent_jobs", "studio_settings", "sqlite_sequence"} == {
-        "autonomy_config", "autonomy_approval_requests", "autonomy_audit_events", "autonomy_executions"}
+        "autonomy_config", "autonomy_approval_requests", "autonomy_audit_events", "autonomy_executions", "autonomy_execution_leases"}
     conn.close()
     import ast
     pkg = Path(cpm.__file__).parent
@@ -670,7 +670,12 @@ def test_production_records_untouched_and_no_production_calls(tmp_path, monkeypa
                    "backend.app.autonomy.control_plane", "backend.app.core.paths", "backend.app.services.operational_intelligence",
                    # Stage 3.32D: handlers.py registers the self-healing handlers (same contract, same gates); that
                    # package has its own source-safety test in test_self_healing_332d.py.
-                   "backend.app.autonomy.self_healing.handlers"}
+                   "backend.app.autonomy.self_healing.handlers",
+                   # Stage 3.32G: autopilot.py imports these lazily ONLY to read their status for the overview (and
+                   # the recommendation engine to read one recommendation for the bridge). Each has its own
+                   # source-safety tests (3.32C, 3.32D, 3.32E, 3.32F); none of them is executed from autonomy.
+                   "backend.app.autonomy.recommendations.engine", "backend.app.autonomy.self_healing.engine",
+                   "backend.app.community.service", "backend.app.community.publishing"}
     assert {m for m in imported if m.startswith(("backend", "app"))} <= allowed_app
     assert not imported & {"subprocess", "requests", "urllib.request", "socket", "shutil", "httpx"}
     # registry.py only *names* the guarded production functions (as data); the executable modules never mention them.

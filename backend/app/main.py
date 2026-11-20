@@ -2445,6 +2445,40 @@ async def api_self_healing_execute(recovery_id: str, req: _AutonomyBody, _: None
     return await _autonomy_call(lambda: _self_healing().execute(recovery_id, req.operator))
 
 
+# -- Stage 3.32G Controlled Autopilot -------------------------------------------------------------------------------
+# One read-only view over 3.32A-F and a deterministic recommendation -> approval-request bridge. It never executes:
+# execution stays ControlPlane.execute (Autonomy Control), with every gate.
+
+def _autopilot():
+    from backend.app.autonomy.autopilot import get_autopilot
+    return get_autopilot()
+
+
+class AutopilotProposeRequest(_AutonomyBody):
+    action_type: str = Field(min_length=3, max_length=80)
+
+
+@app.get("/api/autopilot")
+async def api_autopilot(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _autopilot().overview())
+
+
+@app.get("/api/autopilot/policy")
+async def api_autopilot_policy(_: None = Depends(require_local_control)):
+    from backend.app.autonomy.autopilot import action_policy
+    return await _autonomy_call(action_policy)
+
+
+@app.post("/api/autopilot/recommendations/{rec_id}/propose")
+async def api_autopilot_propose(rec_id: str, req: AutopilotProposeRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    """Creates ONE approval request for a mapped follow-up action of an open recommendation (needs RECOMMEND level
+    for the action's category). Approval and execution stay in Autonomy Control."""
+    if not re.fullmatch(r"rec_[0-9a-f]{16}", rec_id or ""):
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    return await _autonomy_call(lambda: _autopilot().propose_from_recommendation(rec_id, req.action_type, req.operator))
+
+
 # -- Stage 3.32E Community post drafts ---------------------------------------------------------------------------
 # Local drafts only: no route here (or anywhere in backend.app.community) can publish. Reads are loopback-only;
 # every write is loopback + same-origin + JSON + per-process CSRF token (require_autonomy_write) with a validated

@@ -219,3 +219,36 @@ No console errors except connection refusals while the preview server restarted,
 **Live read-only capability audit:** `PILOT_ACCESS_REQUIRED`, plus the missing insert scope. See `STAGE_3_32F_PUBLISHING.md` §1.
 
 **Dashboard preview** (scratch copy, port 8766): no Operator field; readiness card with the real audit result; only "Run capability check" and "Manual handoff" buttons, with no Publish button; the handoff panel shows the image, text, download, the Open YouTube link and the steps.
+
+## 9. Stage 3.32G: Controlled Autopilot (2026-11-20, late evening)
+
+**New suite `backend/tests/test_autopilot_332g.py`: 31 cases, all pass.**
+
+| Area | Tests |
+|---|---|
+| All modes | `test_all_autonomy_modes` (OFF, OBSERVE, RECOMMEND, APPROVED_EXECUTION) |
+| Startup safety default | `test_startup_default_blocks_everything` |
+| Permission policy and tiers | `test_centralized_action_policy` |
+| Prohibited actions | `test_prohibited_actions_cannot_be_proposed` (5, including the new external communication and financial entries) |
+| Approval lifecycle and expiry | `test_approval_lifecycle_and_expiry` |
+| Duplicates | `test_duplicate_proposals_and_executions` |
+| Concurrency | `test_concurrent_execution_runs_once` (5 threads, 1 run, never 2 at once) |
+| Timeout safety | `test_timed_out_handler_keeps_its_lease_until_it_really_ends` |
+| Heartbeat and ownership | `test_stale_heartbeat_with_live_owner_is_never_taken_over`, `test_lease_of_a_dead_owner_is_reclaimed_and_audited`, `test_fresh_lease_of_a_dead_owner_is_not_reclaimed_early` |
+| Interrupted execution | `test_interrupted_execution_is_reconciled_not_rerun` |
+| Circuit breaker | `test_circuit_breaker_opens_after_repeated_failures` |
+| Retry limit and backoff | `test_retry_limit_and_backoff` |
+| Kill switches | `test_kill_switch_blocks_execution` (sentinel and dashboard) |
+| Unsafe AI recommendations | `test_bridge_creates_pending_requests_from_mapped_actions_only`, `test_unsafe_or_unmapped_follow_ups_are_refused` (6), `test_bridge_respects_levels_status_and_identity` |
+| Audit completeness | `test_audit_trail_is_complete_and_chained` |
+| Dashboard and backend consistency | `test_overview_reflects_persisted_state`, `test_dashboard_autopilot_tab_never_executes` |
+| API security | `test_autopilot_api` |
+
+**Updated existing tests:**
+- The 3.32B and 3.32C table-set assertions now include `autonomy_execution_leases`.
+- The 3.32B import allow-list now includes the four modules that `autopilot.py` reads for status.
+
+**Full regression suite:** `5 failed, 1414 passed, 173 skipped in 1542.47s` (1419 tests = 1388 + 31).
+- One failure was new: the 3.32B import allow-list, a test-only expectation. After updating it, the 3.32B and 3.32G suites pass (78 cases).
+- **Effective result: 1415 passed, 4 failed.** All 4 are the known baseline (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, `test_youtube_branding` × 2); the timing-sensitive dashboard test passed in this run.
+- **No regressions.**
