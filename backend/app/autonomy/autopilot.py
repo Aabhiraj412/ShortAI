@@ -151,9 +151,14 @@ class Autopilot:
         events = self.cp.audit_events(60)
         rejected = [e for e in events if e.get("event_type") in ("REJECTED", "CANCELLED", "EXECUTION_BLOCKED",
                                                                   "PROPOSAL_REFUSED", "BRIDGE_REFUSED", "PROHIBITED_ACTION_BLOCKED")]
-        mode = "OFF" if global_level == "OFF" or ks["any_active"] else global_level
+        # Kill switches block EXECUTION only; observation and proposals continue at their level. Reporting OFF
+        # whenever any switch is active (the startup switch always is until autonomy_startup.json exists) hid an
+        # active OBSERVE/RECOMMEND phase, so the mode is the global level and execution is reported separately.
+        mode = global_level
+        mode_note = (f"execution blocked by kill switch: {', '.join(ks['active'])}" if ks["any_active"] and global_level != "OFF"
+                     else ("autonomy is off" if global_level == "OFF" else ""))
         out = {
-            "mode": mode, "global_level": global_level, "configuration_error": cfg_err,
+            "mode": mode, "mode_note": mode_note, "global_level": global_level, "configuration_error": cfg_err,
             "execution_possible": any(c["can_execute"] for c in categories.values()),
             "kill_switches": ks, "categories": categories, "standing_approvals": perms.get("standing_approvals", {}),
             "pending_approvals": pending, "approved_awaiting_execution": approved,

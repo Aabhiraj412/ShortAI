@@ -111,7 +111,8 @@ def test_startup_default_blocks_everything(tmp_path):
     out = cp.execute(req["id"], f"operator:{OP}")
     assert out["executed"] is False and "startup" in out["reason"]
     ov = AP.Autopilot(cp, recommendations=FakeRecs([]), self_healing=Fake(), community=Fake(), publishing=Fake()).overview()
-    assert ov["mode"] == "OFF" and ov["execution_possible"] is False and ov["kill_switches"]["any_active"]
+    assert ov["mode"] == "APPROVED_EXECUTION" and ov["execution_possible"] is False and ov["kill_switches"]["any_active"]
+    assert "startup_config" in ov["mode_note"]
 
 
 # == permission policy ==============================================================================================

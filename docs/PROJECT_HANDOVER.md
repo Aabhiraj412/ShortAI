@@ -1,6 +1,6 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-21 IST. Stages 3.32H (production reliability), 3.32I (phased Autopilot activation) and 3.32J (operational reporting) are implemented in the commit that contains this file. The Autopilot phase is recorded in the database and shown on the dashboard (Autopilot → *Autopilot activation*); OBSERVE is the highest phase that may be active without further authorization.
+**As of:** 2026-11-21, 01:30 IST. Stages 3.32H (production reliability), 3.32I (phased Autopilot activation) and 3.32J (operational reporting) are deployed: dashboard, scheduler daemon and health monitor. **Autopilot phase: OBSERVE since 2026-11-21 01:23:16 IST** (`autonomy_activation_history`, operator `milestone-3.32HIJ`), activated after every readiness check passed. The startup kill switch is still active, so nothing can execute. There are no standing approvals and no `autonomy_startup.json`. Recommended observation: at least 48 h and 48 cycles (until 2026-11-23 01:23 IST or later). RECOMMEND needs the user's explicit authorization.
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
@@ -145,7 +145,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 **Autopilot activation gates (each needs explicit user authorization):**
 
-1. **OBSERVE**: enabled at the 3.32H/I/J deployment if readiness passed (see the dashboard). Observe for at least 48 h and 48 observation cycles.
+1. **OBSERVE**: **active since 2026-11-21 01:23:16 IST.** Observe for at least 48 h and 48 observation cycles.
 2. **RECOMMEND**: when the dashboard shows readiness passing, the operator advances with the phrase `AUTHORIZE RECOMMEND`. Proposals queue; nothing executes.
 3. **RESTRICTED_EXECUTION**: after 7 days in RECOMMEND and 5 or more human-reviewed proposals:
    - the operator creates `backend/data/autonomy_startup.json`;

@@ -3861,7 +3861,7 @@ async function refreshAutopilot(force = false) {
     const a = await apiJson("/api/autopilot");
     const ks = a.kill_switches || {}, s = a.safety || {}, ec = a.execution_counts || {};
     document.getElementById("apMode").innerHTML = a.mode === "OFF" ? `<span class="auto-off">OFF</span>` : `<span class="auto-on">${escHtml(a.mode)}</span>`;
-    document.getElementById("apModeSub").textContent = `global level ${a.global_level}${a.configuration_error ? " · configuration error: " + a.configuration_error : ""}`;
+    document.getElementById("apModeSub").textContent = `${a.mode_note || "global level " + a.global_level}${a.configuration_error ? " · configuration error: " + a.configuration_error : ""}`;
     document.getElementById("apExec").innerHTML = a.execution_possible ? `<span class="auto-on">POSSIBLE</span>` : `<span class="auto-off">BLOCKED</span>`;
     document.getElementById("apExecSub").textContent = a.execution_possible ? "some category may execute approved actions" : "no category can execute";
     document.getElementById("apKill").innerHTML = ks.any_active ? `<span class="auto-kill">ACTIVE</span>` : `<span class="auto-on">none</span>`;
