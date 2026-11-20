@@ -29,6 +29,7 @@ WIN_PATH_RX = re.compile(r"[A-Za-z]:\\[^'\"\n<>|*?]{3,400}")
 FILTER_RX = re.compile(r"\b(scale|pad)=(\d{1,5}):(\d{1,5})")
 MEDIA_EXT = {".mp4", ".mov", ".webm", ".mkv", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".wav", ".mp3", ".m4a"}
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+FILE_DIAGNOSTICS = ("collect_log_context", "inspect_media_metadata", "inspect_file_locks", "validate_ffmpeg_filter")
 
 
 def _store(ctx) -> SelfHealingStore:
@@ -118,6 +119,10 @@ class SelfHealingDiagnosticHandler:
         if name not in registry.SELF_HEALING_DIAGNOSTICS:
             raise PermanentActionError("diagnostic is not allow-listed")
         inc = _incident(ctx, payload)
+        if name in FILE_DIAGNOSTICS:
+            # These open job files. Opening a file on Windows can make the job's own rename / delete fail with
+            # WinError 32, so they only run while no worker or scheduler recovery is using the job (re-read live).
+            _require_job_idle(ctx, inc)
         svc = get_services()
         roots = svc.roots()
         with _Locked(ctx, inc, self.action_type, payload):

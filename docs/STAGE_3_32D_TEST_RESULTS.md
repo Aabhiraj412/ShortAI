@@ -45,18 +45,43 @@
 
 **Change to an existing test:** `test_autonomy_control_plane_332b.py::test_production_records_untouched_and_no_production_calls`. Its import allow-list now includes `backend.app.autonomy.self_healing.handlers`, because `handlers.py` registers the self-healing handlers. The safety of that package is covered by the 3.32D source-safety test.
 
+## 1b. Final security audit suite (`backend/tests/test_self_healing_332d_security.py`)
+
+**99 cases (50 test functions), all pass.** Covered areas:
+- identity lookalikes (26);
+- request tampering and closed states (7);
+- simultaneous approvals; global × category levels (3); kill switch at execution time; no execution without independent approval;
+- API guards and secret redaction;
+- destination allow-list (10), private addresses (7) and DNS failure; redirect validation;
+- guarded download success, rejections (8) and no-overwrite;
+- provider structure checks (10) and uncached, bounded checks;
+- path containment; a real Windows exclusive-handle lock;
+- busy-job refusal for file diagnostics (3);
+- concurrent scans; lock held through a timeout; interrupted execution;
+- reads create no tables; retention;
+- recommendation / self-healing independence; import side effects; static dangerous-call scan.
+
+The findings these tests guard against are listed in `STAGE_3_32D_FINAL_SECURITY_AUDIT.md`.
+
+**Combined targeted run** (3.32A + 3.32B + 3.32C + 3.32D + security + schedule profiles): **277 passed, 0 failed.**
+
 ## 2. Full regression suite
 
+**Final audit run:** `d2e0928` plus the documented remediation, executed from the worktree with an explicit `PYTHONPATH`:
+
 ```
-5 failed, 1109 passed, 173 skipped, 3 warnings in 766.52s
+5 failed, 1208 passed, 173 skipped, 3 warnings in 1142.40s
 ```
 
 | Run | Passed | Failed | Skipped |
 |---|---|---|---|
 | Baseline 5b2a4ad (Stage 3.32C) | 1056 | 5 | 173 |
-| Stage 3.32D | **1109** (+53, exactly the new cases) | 5 | 173 |
+| Stage 3.32D as committed (d2e0928) | 1109 (+53) | 5 | 173 |
+| **Stage 3.32D + final audit remediation** | **1208** (+99, exactly the new security cases) | 5 | 173 |
 
-**The same 5 tests fail in both runs. No new failures.**
+**The same 5 tests fail in all three runs. There are no new failures and no regression.**
+
+The audit run took 19 minutes, against 13 for the previous one, because it ran while a production render was in progress.
 
 | Test | Cause |
 |---|---|

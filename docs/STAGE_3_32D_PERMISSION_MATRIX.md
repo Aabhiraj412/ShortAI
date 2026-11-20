@@ -17,8 +17,17 @@
 | Action type | Risk | Approval | Timeout | Retries | Daily limit | Network | Writes |
 |---|---|---|---|---|---|---|---|
 | `selfheal.diagnostic.run` | LOW | standing or explicit | 60 s | 1 | 96 | none | reports only, in `data/autonomy/self_healing/reports` |
-| `selfheal.provider.retry_readonly` | MEDIUM | **explicit for every request** | 45 s | 0 | 12 | one read-only search (key-less providers: Openverse, Wikimedia Commons, NASA, Internet Archive) | none |
-| `selfheal.asset.reacquire_staged` | MEDIUM | **explicit for every request** | 90 s | 0 | 12 | one HTTPS download (≤ 25 MB), allow-listed hosts only | the staging folder only |
+| `selfheal.provider.retry_readonly` | MEDIUM | **explicit for every request** | 45 s | 0 | 12 | exactly one uncached GET to the provider's public search endpoint (15 s, 2 MB; Openverse, Wikimedia Commons, NASA, Internet Archive; no keys) | none (no cache) |
+| `selfheal.asset.reacquire_staged` | MEDIUM | **explicit for every request** | 90 s | 0 | 12 | one guarded HTTPS download: allow-listed public hosts on every redirect hop (≤ 3), 25 MB, 60 s | the staging folder only (exclusive create, never overwrites) |
+
+Both network actions use `guarded_open`:
+- HTTPS on port 443 only, with no credentials in the URL;
+- exact host allow-list;
+- every resolved address must be public;
+- every redirect hop is re-validated;
+- no environment proxy; verified TLS.
+
+The four file-reading diagnostics (`collect_log_context`, `inspect_media_metadata`, `inspect_file_locks`, `validate_ffmpeg_filter`) re-check the live job state at execution time. They refuse while a worker or the scheduler is using the job.
 
 **Allowed diagnostics** (closed list): `collect_log_context`, `inspect_media_metadata`, `check_disk_space`, `inspect_file_locks`, `validate_ffmpeg_filter`, `generate_diagnostic_report`.
 

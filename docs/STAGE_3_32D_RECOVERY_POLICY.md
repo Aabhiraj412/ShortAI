@@ -42,13 +42,19 @@
 - **Resource locks.** Acquired all-or-nothing per execution: `job:<id>` (or `incident:<id>`), plus `provider:<name>` or `asset:<url hash>`. Released on finish; expire after (timeout × (retries + 1) + 60 s).
 - **Engine `execute` re-checks preconditions.** If they fail, the recovery becomes `UNSAFE` and its request is cancelled. Handlers re-read the live job state, so a request executed from Autonomy Control is protected too.
 
+## Timeouts, interruption and retention (final audit)
+
+- **A timeout is not proof that an operation stopped.** Python cannot stop the worker thread. The recovery is recorded FAILED with "the operation may still have been running". Its resource lock stays held until the thread ends (or the lock expires), so no second execution can overlap it. Network operations also have their own socket timeouts and a 60 s download deadline.
+- **A process stop during execution** is reconciled by the control plane to FAILED (INTERRUPTED) and never re-run. The partial file is removed, by the action itself or by quarantine retention.
+- **Quarantine retention:** staged files are kept 7 days and reports 30 days. Notification keys are kept 30 days. Finished recoveries are capped at 20,000.
+
 ## Verification policy
 
 | Action | Handler verification | Engine independent check |
 |---|---|---|
 | Diagnostic | Result names the diagnostic and incident with status ok; a report file exists in the reports folder with a matching SHA-256 | Same, re-read from disk |
-| Provider retry | Provider answered and the response parsed to a record list | Stored result consistent |
-| Staged reacquisition | File inside the staging folder, SHA-256 matches on re-read, decodes with positive dimensions (Pillow / ffprobe) | File still present and unchanged |
+| Provider retry | One uncached HTTP 200 with the provider's documented JSON structure (errors, cached or malformed answers fail) | Stored result consistent |
+| Staged reacquisition | Download guards passed (allow-listed public hosts on every hop, 25 MB / 60 s, media type, signature, Pillow decode); file inside the staging folder; SHA-256 matches on re-read; positive dimensions | File still present and unchanged |
 
 Outcomes:
 - **Verification FAILED:** the recovery is FAILED and compensation removes the staged file or report.

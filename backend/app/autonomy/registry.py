@@ -188,14 +188,15 @@ PERMITTED: Tuple[ActionSpec, ...] = (
     # Potentially reversible recovery actions: existing services only, explicit approval for every request.
     ActionSpec(
         action_type="selfheal.provider.retry_readonly", category="self_healing",
-        description="Repeat one read-only media-provider search through the existing provider client to confirm the "
-                    "provider has recovered. Nothing is downloaded, written or changed.",
+        description="Availability check: ONE uncached read-only request to the provider's public search endpoint (the "
+                    "endpoint the production client uses) to confirm it has recovered. Nothing is downloaded, written "
+                    "or cached.",
         risk=RISK_MEDIUM, required_permission="autonomy.self_healing.execute", approval=APPROVAL_EXPLICIT_EACH,
         preconditions=COMMON_PRECONDITIONS + ("incident_exists", "resource_lock_acquired", "provider_allow_listed",
                                               "query_from_incident_evidence"),
         timeout_seconds=45, retry_limit=0,
-        verification="The provider answered and its response parsed into a list of media records; the record count "
-                     "is stored. A provider error is a failed verification, never a success.",
+        verification="HTTP 200 with JSON in the provider's documented result structure (record count stored). Errors, "
+                     "redirects off the provider host, cached or malformed responses are failed verifications.",
         rollback="None needed: a read-only search.",
         payload_fields={"incident_id": Field(str, required=True, pattern=r"^inc_[0-9a-f]{12}$", max_len=16),
                         "provider": Field(str, required=True, choices=SELF_HEALING_PROVIDERS),
@@ -203,8 +204,9 @@ PERMITTED: Tuple[ActionSpec, ...] = (
         request_ttl_hours=12, daily_limit=12),
     ActionSpec(
         action_type="selfheal.asset.reacquire_staged", category="self_healing",
-        description="Re-download one failed media asset through the existing AssetDownloader into a quarantined "
-                    "staging folder (data/autonomy/self_healing/staging). It is never placed into a production job.",
+        description="Re-download one failed media asset into a quarantined staging folder "
+                    "(data/autonomy/self_healing/staging) with a guarded downloader: HTTPS, allow-listed public hosts on "
+                    "every redirect hop, 25 MB / 60 s caps, signature + decode validation. Never placed into a job.",
         risk=RISK_MEDIUM, required_permission="autonomy.self_healing.execute", approval=APPROVAL_EXPLICIT_EACH,
         preconditions=COMMON_PRECONDITIONS + ("incident_exists", "resource_lock_acquired", "url_https_allow_listed_host",
                                               "url_recorded_in_incident_evidence", "job_not_running_or_recovering"),

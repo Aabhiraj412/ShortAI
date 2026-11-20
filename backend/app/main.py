@@ -2396,7 +2396,7 @@ async def api_self_healing_incidents(status: str = "open", limit: int = 100, _: 
         raise HTTPException(status_code=400, detail="status must be open, all or a self-healing status")
     if not 1 <= limit <= 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
-    return await _autonomy_call(lambda: {"incidents": _self_healing().store.list_incidents(status=status, limit=limit)})
+    return await _autonomy_call(lambda: {"incidents": _self_healing().list_incidents(status=status, limit=limit)})
 
 
 @app.get("/api/self-healing/incidents/{incident_id}")
@@ -2409,12 +2409,7 @@ async def api_self_healing_history(limit: int = 100, _: None = Depends(require_l
     if not 1 <= limit <= 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
 
-    def _hist():
-        eng = _self_healing()
-        eng.sync()
-        return {"recoveries": eng.store.list_recoveries("history", limit), "stats": eng.store.stats(),
-                "learning": eng.store.learning(100)}
-    return await _autonomy_call(_hist)
+    return await _autonomy_call(lambda: _self_healing().history(limit))
 
 
 @app.post("/api/self-healing/scan")

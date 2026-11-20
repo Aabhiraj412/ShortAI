@@ -37,7 +37,9 @@ VERIFIED, VERIFY_FAILED, UNVERIFIED = "VERIFIED", "FAILED", "UNVERIFIED"
 
 MAX_INCIDENTS = 5000
 MAX_OUTCOMES = 10000
+MAX_RECOVERIES = 20000
 RETENTION_DAYS = 90
+NOTIFICATION_RETENTION_DAYS = 30
 TS_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 SCHEMA = """
@@ -240,6 +242,8 @@ class SelfHealingStore:
                         failure_class: str, certainty: str, classification: Dict[str, Any], severity: str,
                         now: datetime) -> Dict[str, Any]:
         """Create the incident or, for a known (job, signature), count a new occurrence. Returns {incident, created}."""
+        from backend.app.autonomy.control_plane import redact
+        message, template, error_type = redact(message or ""), redact(template or ""), redact(error_type or "")
         row = conn.execute("SELECT * FROM selfheal_incidents WHERE dedupe_key=?", (dedupe_key,)).fetchone()
         now_s = _ts(now)
         if row is None:
@@ -364,10 +368,10 @@ class SelfHealingStore:
         with self.read() as c:
             return self.get_recovery(recovery_id, c)
 
-    def recoveries_for(self, incident_id: str) -> List[Dict[str, Any]]:
+    def recoveries_for(self, incident_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         with self.read() as conn:
             return [self._recovery(r) for r in conn.execute(
-                "SELECT * FROM selfheal_recoveries WHERE incident_id=? ORDER BY created_at_utc", (incident_id,))]
+                "SELECT * FROM selfheal_recoveries WHERE incident_id=? ORDER BY created_at_utc LIMIT ?", (incident_id, limit))]
 
     def list_recoveries(self, status: str = "all", limit: int = 100) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
@@ -382,11 +386,26 @@ class SelfHealingStore:
                 rows = conn.execute("SELECT * FROM selfheal_recoveries ORDER BY created_at_utc DESC LIMIT ?", (limit,)).fetchall()
             return [self._recovery(r) for r in rows]
 
-    def open_recoveries_with_requests(self) -> List[Dict[str, Any]]:
+    def open_recoveries_with_requests(self, limit: int = 500) -> List[Dict[str, Any]]:
         with self.read() as conn:
             return [self._recovery(r) for r in conn.execute(
                 f"SELECT * FROM selfheal_recoveries WHERE request_id IS NOT NULL AND status IN "
-                f"({','.join('?' * len(OPEN_RECOVERY))})", OPEN_RECOVERY)]
+                f"({','.join('?' * len(OPEN_RECOVERY))}) ORDER BY created_at_utc LIMIT ?", (*OPEN_RECOVERY, limit))]
+
+    def tables_exist(self) -> bool:
+        """True once self-healing has run here. Checked read-only, so reads never create tables."""
+        try:
+            conn = sqlite3.connect(Path(self.db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)
+        except sqlite3.Error:
+            return False
+        try:
+            have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'selfheal_%'")}
+        except sqlite3.Error:
+            return False
+        finally:
+            conn.close()
+        return {"selfheal_incidents", "selfheal_recoveries", "selfheal_outcomes", "selfheal_resource_locks",
+                "selfheal_notifications", "selfheal_scan_runs"} <= have
 
     def recent_completed(self, conn: sqlite3.Connection, signature: str, action_type: str, payload_hash: str,
                          since: str) -> Optional[Dict[str, Any]]:
@@ -552,4 +571,15 @@ class SelfHealingStore:
                                  (m - MAX_OUTCOMES,)).rowcount
             conn.execute("DELETE FROM selfheal_scan_runs WHERE started_at_utc < ?", (cutoff,))
             conn.execute("DELETE FROM selfheal_resource_locks WHERE expires_at_utc <= ?", (_ts(now),))
-        return {"incidents_expired": a, "incidents_over_cap": b, "outcomes_over_cap": c}
+            # Finished recoveries whose incident was pruned, then a hard cap on finished recoveries.
+            d = conn.execute(f"DELETE FROM selfheal_recoveries WHERE status IN ({','.join('?' * len(FINAL_RECOVERY))}) "
+                             "AND incident_id NOT IN (SELECT id FROM selfheal_incidents)", FINAL_RECOVERY).rowcount
+            r = conn.execute("SELECT COUNT(*) FROM selfheal_recoveries").fetchone()[0]
+            if r > MAX_RECOVERIES:
+                d += conn.execute(f"DELETE FROM selfheal_recoveries WHERE id IN (SELECT id FROM selfheal_recoveries WHERE "
+                                  f"status IN ({','.join('?' * len(FINAL_RECOVERY))}) ORDER BY updated_at_utc LIMIT ?)",
+                                  (*FINAL_RECOVERY, r - MAX_RECOVERIES)).rowcount
+            e = conn.execute("DELETE FROM selfheal_notifications WHERE last_sent_utc < ?",
+                             (_ts(now - timedelta(days=NOTIFICATION_RETENTION_DAYS)),)).rowcount
+        return {"incidents_expired": a, "incidents_over_cap": b, "outcomes_over_cap": c, "recoveries_pruned": d,
+                "notification_keys_pruned": e}

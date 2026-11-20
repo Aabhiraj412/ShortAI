@@ -58,14 +58,18 @@ Recurrence is counted from the same signature in the 7-day history, as of the fa
 
 **A failure is never TRANSIENT merely because it happened in production.** The existing retry policy defaults unknown errors to TRANSIENT; Stage 3.32D reports them as UNKNOWN.
 
-## 3. Signature
+## 3. Stored text
+
+Error messages, templates and error types are passed through the control plane's `redact` before they are stored or returned. Secret-looking keys and values, such as `?key=AIza…`, become `[redacted]` (final audit F4).
+
+## 4. Signature
 
 `sig_` + SHA-256 of (3.32A cause, normalized template), where normalization removes the retry-policy prefix, a leading exception type, paths, addresses, ids, numbers and quoted strings. So the following all produce one signature:
 - `[TRANSIENT] RuntimeError: X`
 - `RuntimeError: X`
 - `X`
 
-## 4. Live examples (dry run on a scratch copy of the 2026-11-20 backup)
+## 5. Live examples (dry run on a scratch copy of the 2026-11-20 backup)
 
 | Error | Retry policy said | 3.32D | Certainty |
 |---|---|---|---|

@@ -34,7 +34,11 @@ classification ──► DiagnosticEngine ──► RecoveryPlanner ──► Se
 - **3.32A:** failure occurrences, normalization (`error_template`, `pattern_key`) and root-cause groups.
 - **3.32B control plane:** gating, approval signing, claim/timeout/retry/verify execution, the audit chain and the dashboard-inbox notifications.
 - **Existing retry policy:** its classification is reported for comparison only and never changed.
-- **Existing services:** `AssetDownloader`, the media provider clients and the ffprobe path helper.
+- **Existing building blocks:**
+  - the providers' public search endpoint constants, the production TLS context, the downloader's `detect_magic_type` signature check and the ffprobe path helper;
+  - not the provider clients themselves: they cache responses and turn errors into empty lists;
+  - not `AssetDownloader`: it follows redirects to any host;
+  - see `STAGE_3_32D_FINAL_SECURITY_AUDIT.md`, findings F1 and F2.
 
 **There is no new scheduler and no background loop.** A scan runs only when an operator presses *Scan now* (or a future, separately approved caller asks). Job retries, re-renders and restarts stay with the existing scheduler and the operator.
 
@@ -49,7 +53,7 @@ classification ──► DiagnosticEngine ──► RecoveryPlanner ──► Se
 | `diagnostics.py` | Evidence collection, correlation, root-cause status |
 | `planner.py` | Recovery planner, resource keys, URL/provider/query validation |
 | `store.py` | `selfheal_*` tables, locks, notification limits, learning, bounded history |
-| `services.py` | Adapters (files, ffprobe, providers, downloader); replaceable in tests |
+| `services.py` | Adapters (files, ffprobe, guarded HTTPS provider check and staged download); replaceable in tests |
 | `handlers.py` | Handlers for the three permitted action types |
 | `engine.py` | Orchestration, operator actions, sync, independent verification, notifications, optional Gemini wording |
 
@@ -227,7 +231,7 @@ Gemini is off unless `CRAZZYDOCS_SELFHEAL_EXPLAINER=gemini` is set. When enabled
 
 ## 14. Database changes
 
-Six new tables, created on first use by the engine (not by the recommendation engine):
+Six new tables. They are created only by the first scan at OBSERVE or above. Read endpoints, the dashboard tab and the recommendation engine never create them (all three check read-only first). The tables:
 - `selfheal_incidents`
 - `selfheal_recoveries`, with a partial unique index on open (incident, action, payload)
 - `selfheal_outcomes`
@@ -237,8 +241,12 @@ Six new tables, created on first use by the engine (not by the recommendation en
 
 History is bounded:
 - terminal incidents older than 90 days are pruned;
-- at most 5,000 incidents and 10,000 outcomes are kept;
+- at most 5,000 incidents, 10,000 outcomes and 20,000 finished recoveries are kept, and orphaned recoveries are removed;
+- notification keys are kept for 30 days;
+- staged downloads are removed after 7 days and reports after 30 days;
 - locks expire.
+
+Stored error text is redacted.
 
 No production table is altered.
 
@@ -252,6 +260,15 @@ Dry run on a scratch copy of the 2026-11-20 backup, not the live database:
 | Incremental rescan | 0.12–0.35 s | 0 new incidents |
 
 There is no polling loop, no heavy model and no paid service. The default scan makes 0 network requests.
+
+**Re-measured in the final audit**, on the same scratch copy while a production render was running:
+- cold scan 3.6–4.9 s, dominated by SQLite commits on a busy disk;
+- rescan 0.6–1.0 s;
+- peak traced memory 5.8 MB.
+
+## 17. Final security audit
+
+See `STAGE_3_32D_FINAL_SECURITY_AUDIT.md`. It records 2 high, 2 medium and 4 low or informational findings, all fixed, with 99 adversarial test cases added.
 
 ## 16. Activation (requires explicit approval; not done)
 

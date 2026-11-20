@@ -51,6 +51,8 @@ MAX_NOTIFICATIONS_PER_DAY = 24
 NOTIFY_COOLDOWN_HOURS = 6
 EXPLAINER_ENV = "CRAZZYDOCS_SELFHEAL_EXPLAINER"
 MAX_EXPLANATIONS_PER_SCAN = 2
+ARTIFACT_STAGING_DAYS = 7
+ARTIFACT_REPORT_DAYS = 30
 TS_FMT = S.TS_FMT
 CP_TO_STATUS = {CP_PENDING: S.AWAITING_APPROVAL, CP_APPROVED: S.APPROVED, CP_EXECUTING: S.EXECUTING}
 
@@ -223,6 +225,7 @@ class SelfHealingEngine:
         run["finished_at"] = _ts(self._now())
         try:
             run["pruned"] = self.store.prune(now)
+            run["pruned"]["artifacts_removed"] = self.prune_artifacts()
         except Exception as exc:
             run["errors"].append(f"prune: {safe_error(exc)}")
         self.store.record_scan(run)
@@ -339,6 +342,8 @@ class SelfHealingEngine:
         """Mirror each open recovery's approval request; finalize, verify and learn from finished ones."""
         changed = 0
         now = self._now()
+        if not self.store.tables_exist():
+            return 0                                       # never run here: nothing to mirror, nothing created
         try:
             self.cp.run_maintenance()
         except Exception:
@@ -443,7 +448,10 @@ class SelfHealingEngine:
         timed_out = any(e.get("outcome") == "TIMED_OUT" for e in execs)
         reason = body.get("error") or ("verified" if final in (S.RECOVERED, S.DIAGNOSED) else "verification failed")
         if timed_out:
-            reason = f"timed out: {reason}"
+            # A timeout is not proof the operation stopped: its worker thread may still be finishing. Its resource
+            # lock stays held until that thread ends (or the lock expires), so no second execution can overlap it.
+            reason = (f"timed out: {reason}; the operation may still have been running, and its resource lock is held "
+                      "until it ends")
         exec_result = "SUCCEEDED" if req["status"] == CP_COMPLETED else ("TIMED_OUT" if timed_out else "FAILED")
         with self.store.tx() as conn:
             self.store.update_recovery(conn, rec["id"], now, status=final, final_status=final, verification_result=vres,
@@ -519,7 +527,8 @@ class SelfHealingEngine:
 
     # -- operator actions (human identities only; every one passes the control plane) ------------------------
     def _rec_or_404(self, recovery_id: str) -> Dict[str, Any]:
-        if not isinstance(recovery_id, str) or not recovery_id.startswith("rcv_") or len(recovery_id) > 20:
+        if not isinstance(recovery_id, str) or not recovery_id.startswith("rcv_") or len(recovery_id) > 20 \
+                or not self.store.tables_exist():
             raise NotFound("unknown recovery id")
         rec = self.store.get_recovery(recovery_id)
         if rec is None:
@@ -637,12 +646,56 @@ class SelfHealingEngine:
             self._notify("expired:" + j, "recovery_window_expired", "Recovery window expired",
                          f"Job {j} reached the end of its recovery window without completing.", "medium", now, run)
 
+    def prune_artifacts(self) -> int:
+        """Bounded quarantine: staged downloads older than 7 days and reports older than 30 days are removed. Only
+        regular files directly inside this engine's own staging/<request> and reports folders are touched."""
+        import time as _time
+        base = self.cp.autonomy_dir / "self_healing"
+        removed = 0
+        now = _time.time()
+        for sub, days, depth in (("staging", ARTIFACT_STAGING_DAYS, 2), ("reports", ARTIFACT_REPORT_DAYS, 1)):
+            root = base / sub
+            if not root.is_dir():
+                continue
+            dirs = [d for d in root.iterdir() if d.is_dir() and not d.is_symlink()] if depth == 2 else [root]
+            for d in dirs:
+                if not inside(d, [root]):
+                    continue
+                for f in d.iterdir():
+                    if f.is_file() and not f.is_symlink() and now - f.stat().st_mtime > days * 86400:
+                        try:
+                            f.unlink()
+                            removed += 1
+                        except OSError:
+                            pass                           # e.g. locked by antivirus: retried at the next scan
+                if depth == 2:
+                    try:
+                        d.rmdir()                          # only succeeds when empty
+                    except OSError:
+                        pass
+        return removed
+
     # -- reads --------------------------------------------------------------------------------------------------
+    def list_incidents(self, status: str = "open", limit: int = 100) -> List[Dict[str, Any]]:
+        if not self.store.tables_exist():
+            return []
+        return self.store.list_incidents(status=status, limit=limit)
+
+    def history(self, limit: int = 100) -> Dict[str, Any]:
+        if not self.store.tables_exist():
+            return {"recoveries": [], "stats": {}, "learning": []}
+        self.sync()
+        return {"recoveries": self.store.list_recoveries("history", limit), "stats": self.store.stats(),
+                "learning": self.store.learning(100)}
+
     def overview(self, limit: int = 50) -> Dict[str, Any]:
         out: Dict[str, Any] = {"state": self.state(), "database_available": True,
                                "note": "Self-healing diagnoses failures and runs only allow-listed, approved, verified "
                                        "actions. Job retries, re-renders, restarts and configuration stay with the "
                                        "existing scheduler and the operator."}
+        if not self.store.tables_exist():                  # never run here: report empty, create nothing
+            out.update(stats={}, incidents=[], awaiting=[], history=[], learning=[], last_scan=None, initialized=False)
+            return out
         try:
             self.sync()
             out.update(stats=self.store.stats(), incidents=self.store.list_incidents("open", limit),
@@ -654,7 +707,8 @@ class SelfHealingEngine:
         return out
 
     def incident_detail(self, incident_id: str) -> Dict[str, Any]:
-        if not isinstance(incident_id, str) or not incident_id.startswith("inc_") or len(incident_id) > 20:
+        if not isinstance(incident_id, str) or not incident_id.startswith("inc_") or len(incident_id) > 20 \
+                or not self.store.tables_exist():
             raise NotFound("unknown incident id")
         self.sync()
         inc = self.store.get_incident(incident_id)
