@@ -2053,6 +2053,234 @@ async def api_ops_daily_summary(date: Optional[str] = None, _: None = Depends(re
     return await asyncio.to_thread(get_service().daily_summary, date)
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Stage 3.32B Autonomy Control Plane. Reads are localhost-only. Every state-changing endpoint additionally needs
+# (1) same-origin browser context (no cross-site Origin / Sec-Fetch-Site), (2) Content-Type application/json and
+# (3) the per-process CSRF token from GET /api/autonomy/session in the X-CrazzyDocs-CSRF header. There is no
+# generic execution endpoint: only a stored, approved and signed request can be executed, by its id.
+# ---------------------------------------------------------------------------------------------------------------
+import hmac as _hmac
+import secrets as _secrets
+
+AUTONOMY_CSRF_HEADER = "X-CrazzyDocs-CSRF"
+_AUTONOMY_CSRF_TOKEN = _secrets.token_urlsafe(32)
+
+
+def _autonomy():
+    from backend.app.autonomy import control_plane as _acp
+    return _acp.get_control_plane()
+
+
+def require_autonomy_write(request: Request) -> None:
+    require_same_origin(request)
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    if site and site not in ("same-origin", "none"):
+        raise HTTPException(status_code=403, detail="Cross-site requests are not allowed for autonomy controls.")
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HTTPException(status_code=415, detail="Autonomy controls accept application/json only.")
+    token = request.headers.get(AUTONOMY_CSRF_HEADER) or ""
+    if not _hmac.compare_digest(token.encode("utf-8"), _AUTONOMY_CSRF_TOKEN.encode("utf-8")):
+        raise HTTPException(status_code=403, detail="Missing or invalid CSRF token for autonomy controls.")
+
+
+async def _autonomy_call(fn, *args, **kwargs):
+    from backend.app.autonomy.control_plane import ControlPlaneError
+    from backend.app.autonomy.registry import PayloadValidationError, ProhibitedActionError, UnknownActionError
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except ControlPlaneError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc)[:300])
+    except ProhibitedActionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)[:300])
+    except (UnknownActionError, PayloadValidationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Autonomy control plane request failed")
+        raise HTTPException(status_code=503, detail="Autonomy control plane unavailable; autonomous execution stays blocked.")
+
+
+class _AutonomyBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    operator: str = Field(min_length=1, max_length=64)
+
+
+class AutonomyDecisionRequest(_AutonomyBody):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class AutonomyApproveRequest(_AutonomyBody):
+    payload_hash: str = Field(min_length=64, max_length=64)
+    reason: str = Field(default="", max_length=500)
+    confirm: bool = False
+
+
+class AutonomyExecuteRequest(_AutonomyBody):
+    confirm: bool = False
+
+
+class AutonomyLevelRequest(_AutonomyBody):
+    scope: str = Field(min_length=1, max_length=40)
+    level: str = Field(min_length=1, max_length=40)
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+class AutonomyStandingRequest(_AutonomyBody):
+    action_type: str = Field(min_length=1, max_length=100)
+    max_per_day: int
+    valid_hours: int
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+class AutonomyKillSwitchRequest(_AutonomyBody):
+    reason: str = Field(min_length=1, max_length=500)
+    confirm_text: Optional[str] = Field(default=None, max_length=40)
+
+
+def _require_confirm(flag: bool) -> None:
+    if flag is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required (confirm: true).")
+
+
+@app.get("/api/autonomy/session")
+async def api_autonomy_session(_: None = Depends(require_same_origin)):
+    """CSRF token for the dashboard. Cross-site pages cannot read it (CORS) and are refused by Origin checks."""
+    return {"csrf_header": AUTONOMY_CSRF_HEADER, "csrf_token": _AUTONOMY_CSRF_TOKEN}
+
+
+@app.get("/api/autonomy/status")
+async def api_autonomy_status(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _autonomy().status())
+
+
+@app.get("/api/autonomy/permissions")
+async def api_autonomy_permissions(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _autonomy().permissions())
+
+
+@app.get("/api/autonomy/registry")
+async def api_autonomy_registry(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _autonomy().registry_view())
+
+
+@app.get("/api/autonomy/kill-switches")
+async def api_autonomy_kill_switches(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _autonomy().kill_switches())
+
+
+@app.get("/api/autonomy/approvals")
+async def api_autonomy_approvals(status: Optional[str] = None, limit: int = 50, _: None = Depends(require_local_control)):
+    return {"requests": await _autonomy_call(lambda: _autonomy().list_requests(status=status, limit=limit))}
+
+
+@app.get("/api/autonomy/approvals/{request_id}")
+async def api_autonomy_approval(request_id: str, _: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _autonomy().get_request(request_id))
+
+
+@app.get("/api/autonomy/executions")
+async def api_autonomy_executions(limit: int = 50, failures_only: bool = False, _: None = Depends(require_local_control)):
+    return {"executions": await _autonomy_call(lambda: _autonomy().list_executions(limit=limit, failures_only=failures_only))}
+
+
+@app.get("/api/autonomy/audit")
+async def api_autonomy_audit(limit: int = 100, before_seq: Optional[int] = None, request_id: Optional[str] = None,
+                             verify: bool = False, _: None = Depends(require_local_control)):
+    def _build():
+        cp = _autonomy()
+        out = {"events": cp.audit_events(limit=limit, before_seq=before_seq, request_id=request_id)}
+        if verify:
+            out["chain"] = cp.verify_audit_chain()
+        return out
+    return await _autonomy_call(_build)
+
+
+@app.post("/api/autonomy/approvals/{request_id}/approve")
+async def api_autonomy_approve(request_id: str, req: AutonomyApproveRequest, _: None = Depends(require_local_control),
+                               __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _autonomy_call(lambda: _autonomy().approve(request_id, req.operator, req.payload_hash, req.reason))
+
+
+@app.post("/api/autonomy/approvals/{request_id}/reject")
+async def api_autonomy_reject(request_id: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
+                              __: None = Depends(require_autonomy_write)):
+    return await _autonomy_call(lambda: _autonomy().reject(request_id, req.operator, req.reason))
+
+
+@app.post("/api/autonomy/approvals/{request_id}/cancel")
+async def api_autonomy_cancel(request_id: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
+                              __: None = Depends(require_autonomy_write)):
+    return await _autonomy_call(lambda: _autonomy().cancel(request_id, req.operator, req.reason))
+
+
+@app.post("/api/autonomy/approvals/{request_id}/execute")
+async def api_autonomy_execute(request_id: str, req: AutonomyExecuteRequest, _: None = Depends(require_local_control),
+                               __: None = Depends(require_autonomy_write)):
+    """Run ONE stored request that is APPROVED. Every gate (kill switches, level, signature, payload hash, expiry,
+    daily limit) is re-checked by the control plane; the caller cannot supply an action type or payload."""
+    _require_confirm(req.confirm)
+    from backend.app.autonomy.control_plane import validate_operator
+
+    def _run():
+        op = validate_operator(req.operator)
+        return _autonomy().execute(request_id, actor=f"operator:{op}")
+    return await _autonomy_call(_run)
+
+
+@app.put("/api/autonomy/permissions/levels")
+async def api_autonomy_set_level(req: AutonomyLevelRequest, _: None = Depends(require_local_control),
+                                 __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _autonomy_call(lambda: _autonomy().set_level(req.scope, req.level, req.operator, req.reason))
+
+
+@app.post("/api/autonomy/permissions/standing-approvals")
+async def api_autonomy_grant_standing(req: AutonomyStandingRequest, _: None = Depends(require_local_control),
+                                      __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _autonomy_call(lambda: _autonomy().grant_standing_approval(
+        req.action_type, req.operator, req.reason, max_per_day=req.max_per_day, valid_hours=req.valid_hours))
+
+
+@app.post("/api/autonomy/permissions/standing-approvals/{action_type}/revoke")
+async def api_autonomy_revoke_standing(action_type: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
+                                       __: None = Depends(require_autonomy_write)):
+    return await _autonomy_call(lambda: _autonomy().revoke_standing_approval(action_type, req.operator, req.reason))
+
+
+@app.post("/api/autonomy/kill-switch/activate")
+async def api_autonomy_kill_activate(req: AutonomyKillSwitchRequest, _: None = Depends(require_local_control),
+                                     __: None = Depends(require_autonomy_write)):
+    """Stops AUTONOMOUS execution only. Production (scheduler, cycles, workers, publishing) is not affected."""
+    return await _autonomy_call(lambda: _autonomy().set_dashboard_kill_switch(True, req.operator, req.reason))
+
+
+@app.post("/api/autonomy/kill-switch/deactivate")
+async def api_autonomy_kill_deactivate(req: AutonomyKillSwitchRequest, _: None = Depends(require_local_control),
+                                       __: None = Depends(require_autonomy_write)):
+    if (req.confirm_text or "").strip() != "RESUME AUTONOMY":
+        raise HTTPException(status_code=400, detail='Type "RESUME AUTONOMY" to deactivate the dashboard kill switch.')
+    return await _autonomy_call(lambda: _autonomy().set_dashboard_kill_switch(False, req.operator, req.reason))
+
+
+@app.post("/api/autonomy/assessment/run")
+async def api_autonomy_assessment(req: _AutonomyBody, _: None = Depends(require_local_control),
+                                  __: None = Depends(require_autonomy_write)):
+    """Observe / recommend now from the Stage 3.32A daily summary. Proposals go to the approval queue; only
+    standing-approved, permitted actions can execute, through every control-plane gate."""
+    from backend.app.autonomy.control_plane import validate_operator
+    from backend.app.autonomy.engine import run_assessment
+
+    def _run():
+        validate_operator(req.operator)
+        return run_assessment(_autonomy())
+    return await _autonomy_call(_run)
+
+
 @app.get("/api/youtube/quota")
 async def api_youtube_quota(_: None = Depends(require_local_control)):
     """Per-bucket YouTube Data API usage (Stage 3.30): local estimate from sent requests, never Google-reported."""

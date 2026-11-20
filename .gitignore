@@ -156,3 +156,6 @@ media/source/
 backend/data/*.json
 !backend/data/creative_policy_config.json
 tools/
+# Stage 3.32B autonomy runtime state (approval key, reports, drafts, inbox, audit fallback, kill-switch sentinel)
+backend/data/autonomy/
+backend/data/AUTONOMY_DISABLED

@@ -144,6 +144,9 @@
   .ops-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--border); color: var(--muted); }
   .ops-health-HEALTHY { color: #86efac; } .ops-health-DEGRADED { color: #fcd34d; }
   .ops-health-CRITICAL { color: #fca5a5; } .ops-health-UNKNOWN { color: var(--muted); }
+  .auto-on { color: #86efac; } .auto-off { color: var(--muted); } .auto-kill { color: #fca5a5; font-weight: 600; }
+  .auto-pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; max-height: 120px; overflow: auto; margin: 0; color: var(--muted); }
+  #tab-autonomy table td, #tab-autonomy table th { padding: 4px 6px; vertical-align: top; text-align: left; }
   .grid-2 {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
@@ -341,6 +344,7 @@
       <span class="pill" id="pillScheduler" title="Production Scheduler Daemon status">Scheduler: --</span>
       <span class="pill" id="pillOAuth" title="YouTube OAuth connection status">OAuth: --</span>
       <span class="pill" id="pillQuota" title="Daily YouTube Data API quota usage">Quota: --</span>
+      <span class="pill" id="pillAutonomy" title="Stage 3.32B autonomy status. Affects autonomous actions only, never production.">Autonomy: --</span>
       <span class="pill" id="pillNextProd" title="Next scheduled production cycle">Next Prod: --</span>
       <span class="pill" id="pillNextPub" title="Target publish time of the next production cycle">Next Target Publish: --</span>
       <span class="pill" id="pillStartup" title="Dashboard auto-start status (logon task, health wait, browser once per boot)">Startup: --</span>
@@ -357,6 +361,7 @@
     <button class="tab-btn" data-tab="ops" onclick="switchTab('ops', this)">Operations</button>
     <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
     <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
+    <button class="tab-btn" data-tab="autonomy" onclick="switchTab('autonomy', this)">Autonomy Control</button>
     <button class="tab-btn" data-tab="prodconfig" onclick="switchTab('prodconfig', this)">Production &amp; Storage Config</button>
     <button class="tab-btn" data-tab="processes" onclick="switchTab('processes', this)">Processes &amp; Logs</button>
   </nav>
@@ -888,6 +893,60 @@
       <div id="opsApiBody" style="font-size:13px;">--</div></div>
   </section>
 
+  <!-- STAGE 3.32B: AUTONOMY CONTROL PLANE -->
+  <section id="tab-autonomy" class="tab-panel">
+    <div class="card" style="padding:12px 16px;">
+      <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Autonomy Control</h2>
+        <p class="card-desc">Governs what autonomy may observe, recommend and execute. Kill switches stop <strong>autonomous actions only</strong>; the production scheduler, cycles, workers and publishing are never affected. Prohibited actions can never be executed at any level.</p></div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <label for="autoOperator" style="font-size:12px;color:var(--muted);">Operator</label>
+          <input id="autoOperator" maxlength="64" placeholder="your name" style="width:140px;" />
+          <button class="btn sm" onclick="refreshAutonomy(true)">Refresh</button>
+          <button class="btn sm" onclick="autoRunAssessment()">Run assessment</button></div></div>
+      <div class="meta" style="font-size:12px;" id="autoMeta">Open this tab to load.</div>
+    </div>
+    <div class="overview-grid">
+      <div class="kpi-card"><div class="kpi-label">Autonomy</div><div class="kpi-val" id="autoEnabled">--</div><div class="kpi-sub" id="autoEnabledSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Global level</div><div class="kpi-val" id="autoGlobal">--</div><div class="kpi-sub">Effective level = min(global, category)</div></div>
+      <div class="kpi-card"><div class="kpi-label">Kill switches</div><div class="kpi-val" id="autoKill">--</div><div class="kpi-sub" id="autoKillSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Pending approvals</div><div class="kpi-val" id="autoPending">--</div><div class="kpi-sub" id="autoPendingSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Audit events</div><div class="kpi-val" id="autoAuditCount">--</div><div class="kpi-sub" id="autoAuditSub">append-only, hash-chained</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Kill switches</h2><p class="card-desc">Any active switch blocks all autonomous execution (fail closed). Production keeps running.</p></div></div>
+        <div id="autoKillBody" style="font-size:13px;">--</div>
+        <div class="btn-row" style="margin-top:10px;">
+          <button class="btn danger" onclick="autoKill(true)">Activate dashboard kill switch</button>
+          <button class="btn sm" onclick="autoKill(false)">Deactivate…</button></div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Autonomy levels</h2><p class="card-desc">OFF → OBSERVE → RECOMMEND → APPROVED_EXECUTION, per category. Changes are audited.</p></div></div>
+        <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Scope</th><th>Configured</th><th>Effective</th><th>Change</th></tr></thead>
+        <tbody id="autoLevelsBody"><tr><td colspan="4" style="color:var(--muted)">--</td></tr></tbody></table></div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Approval queue</h2><p class="card-desc">Approval is bound to the exact payload hash shown. Any payload change invalidates it. Expired requests cannot execute.</p></div>
+      <div><select id="autoQueueFilter" onchange="refreshAutonomy(true)"><option value="">open</option><option value="ALL">all</option><option value="COMPLETED">completed</option><option value="FAILED">failed</option><option value="REJECTED">rejected</option><option value="EXPIRED">expired</option><option value="CANCELLED">cancelled</option></select></div></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Status</th><th>Action</th><th>Reason / evidence</th><th>Payload</th><th>Risk</th><th>Created / expires (IST)</th><th></th></tr></thead>
+      <tbody id="autoQueueBody"><tr><td colspan="7" style="color:var(--muted)">--</td></tr></tbody></table></div></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Recent autonomous actions</h2><p class="card-desc">Execution attempts, verification and outcome.</p></div></div>
+        <div id="autoActionsBody" style="font-size:12px;">--</div>
+        <h3 style="font-size:13px;margin:14px 0 4px;">Recent failures</h3><div id="autoFailuresBody" style="font-size:12px;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Standing approvals &amp; operator inbox</h2><p class="card-desc">Standing approval is allowed only for low-risk action types, time-limited and capped per day.</p></div></div>
+        <div id="autoStandingBody" style="font-size:12px;">--</div>
+        <div class="btn-row" style="margin-top:8px;flex-wrap:wrap;">
+          <select id="autoStandingType"></select>
+          <input id="autoStandingMax" type="number" min="1" value="5" style="width:70px;" title="max executions per day" />
+          <input id="autoStandingHours" type="number" min="1" max="720" value="24" style="width:70px;" title="valid for hours" />
+          <button class="btn sm" onclick="autoGrantStanding()">Grant</button></div>
+        <h3 style="font-size:13px;margin:14px 0 4px;">Operator inbox</h3><div id="autoInboxBody" style="font-size:12px;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Permission overview</h2><p class="card-desc">Every registered action type. Unknown types are rejected; prohibited types are refused in code.</p></div></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Action</th><th>Category</th><th>Risk</th><th>Approval</th><th>Effective</th><th>Propose</th><th>Execute</th><th>Limits</th></tr></thead>
+      <tbody id="autoPermBody"><tr><td colspan="8" style="color:var(--muted)">--</td></tr></tbody></table></div></div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Audit trail</h2><p class="card-desc" id="autoChainDesc">Most recent 50 events.</p></div></div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>#</th><th>Time (IST)</th><th>Event</th><th>Actor</th><th>Request</th><th>State</th><th>Reason</th></tr></thead>
+      <tbody id="autoAuditBody"><tr><td colspan="7" style="color:var(--muted)">--</td></tr></tbody></table></div></div>
+  </section>
+
   <!-- TAB 6: PROCESS MONITOR & LOGS -->
   <section id="tab-processes" class="tab-panel">
     <div class="card">
@@ -1065,6 +1124,7 @@ function switchTab(tabId, btn) {
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
   if (tabId === "queue") { refreshPublishing(); }
   if (tabId === "ops") { refreshOps(); }
+  if (tabId === "autonomy") { refreshAutonomy(true); }
 }
 
 async function refreshOverviewAndHealth() {
@@ -2311,6 +2371,242 @@ async function refreshOps(force = false) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stage 3.32B Autonomy Control Plane. Reads are cheap GETs; the tab loads only when opened and the header pill
+// refreshes every 60 s. Every state change sends the per-process CSRF token and JSON, and asks for confirmation.
+// Server values are always escaped (escHtml); request ids are passed through data attributes, never inline JS.
+// ---------------------------------------------------------------------------
+const autoState = { csrf: null, header: "X-CrazzyDocs-CSRF", requests: {}, registry: null };
+
+function autoTime(ts) {
+  if (!ts) return "--";
+  const d = new Date(String(ts));
+  if (isNaN(d.getTime())) return escHtml(ts);
+  return escHtml(d.toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }));
+}
+
+function autoOperator() {
+  const el = document.getElementById("autoOperator");
+  const v = ((el && el.value) || "").trim();
+  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
+  return v;
+}
+
+async function autoWrite(url, method, body) {
+  const op = autoOperator();
+  if (!op) throw new Error("Enter your operator name first.");
+  if (!autoState.csrf) {
+    const s = await apiJson("/api/autonomy/session");
+    autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
+  }
+  try {
+    return await apiJson(url, { method, headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
+                                body: JSON.stringify({ operator: op, ...body }) });
+  } catch (err) {
+    if (/CSRF/i.test(err.message || "")) autoState.csrf = null;   // dashboard restarted: fetch a new token next time
+    throw err;
+  }
+}
+
+async function autoDo(label, fn) {
+  try { await fn(); showToast(label); }
+  catch (err) { showToast(`${label} failed: ${err.message || err}`, true); }
+  refreshAutonomy(true); refreshAutonomyPill();
+}
+
+async function refreshAutonomyPill() {
+  const pill = document.getElementById("pillAutonomy");
+  if (!pill) return;
+  try {
+    const s = await apiJson("/api/autonomy/status");
+    const ks = (s.kill_switches && s.kill_switches.active) || [];
+    pill.textContent = ks.length ? `Autonomy: BLOCKED (${ks.length} kill switch${ks.length > 1 ? "es" : ""})`
+      : (s.autonomy_enabled ? `Autonomy: ${s.global_level}` : "Autonomy: OFF");
+    if (s.pending_approvals) pill.textContent += ` · ${s.pending_approvals} pending`;
+  } catch (_) { pill.textContent = "Autonomy: unavailable"; }
+}
+
+function autoTable(rows, cols, empty) {
+  if (!rows || !rows.length) return `<div style="color:var(--muted)">${escHtml(empty || "none")}</div>`;
+  return `<table style="width:100%;font-size:12px;"><thead><tr>${cols.map(c => `<th>${escHtml(c[0])}</th>`).join("")}</tr></thead><tbody>`
+    + rows.map(r => `<tr>${cols.map(c => `<td>${c[1](r)}</td>`).join("")}</tr>`).join("") + "</tbody></table>";
+}
+
+async function refreshAutonomy(force = false) {
+  const panel = document.getElementById("tab-autonomy");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  const meta = document.getElementById("autoMeta");
+  const opEl = document.getElementById("autoOperator");
+  if (opEl && !opEl.value) { try { opEl.value = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} }
+  try {
+    const filter = (document.getElementById("autoQueueFilter") || {}).value || "";
+    const qs = filter === "ALL" ? "?limit=100" : (filter ? `?status=${encodeURIComponent(filter)}&limit=100` : "?limit=100");
+    const [s, p, q, a] = await Promise.all([
+      apiJson("/api/autonomy/status"), apiJson("/api/autonomy/permissions"),
+      apiJson("/api/autonomy/approvals" + qs), apiJson("/api/autonomy/audit?limit=50&verify=true"),
+    ]);
+    if (!autoState.registry) autoState.registry = await apiJson("/api/autonomy/registry");
+    const ks = s.kill_switches || { active: [], switches: {} };
+    meta.innerHTML = `Updated ${autoTime(s.generated_at_utc)} · database ${s.database_available ? "available" : `<span class="auto-kill">unavailable (fail closed)</span>`}`
+      + (s.error ? ` · <span class="auto-kill">${escHtml(s.error)}</span>` : "") + ` · ${escHtml(s.production_note || "")}`;
+    document.getElementById("autoEnabled").innerHTML = s.autonomy_enabled ? `<span class="auto-on">ENABLED</span>` : `<span class="auto-off">DISABLED</span>`;
+    document.getElementById("autoEnabledSub").textContent = s.execution_permitted ? "approved execution permitted" : "no autonomous execution";
+    document.getElementById("autoGlobal").textContent = s.global_level || "--";
+    document.getElementById("autoKill").innerHTML = ks.active.length ? `<span class="auto-kill">${ks.active.length} ACTIVE</span>` : `<span class="auto-on">none</span>`;
+    document.getElementById("autoKillSub").textContent = ks.active.join(", ") || "execution not blocked by a switch";
+    document.getElementById("autoPending").textContent = s.pending_approvals ?? "--";
+    document.getElementById("autoPendingSub").textContent = `${s.approved_waiting || 0} approved, ${s.executing || 0} executing`;
+    document.getElementById("autoAuditCount").textContent = s.audit_events_total ?? "--";
+    const chain = a.chain || {};
+    document.getElementById("autoAuditSub").innerHTML = chain.ok === false ? `<span class="auto-kill">chain broken at #${escHtml(chain.first_bad_seq)}</span>` : "append-only, hash chain verified";
+    document.getElementById("autoChainDesc").textContent = `Most recent 50 of ${s.audit_events_total ?? "?"} events. Hash chain: ${chain.ok === false ? "BROKEN" : "verified"}.`;
+
+    const names = { dashboard: "A. Dashboard switch", sentinel_file: "B. Sentinel file", startup_config: "C. Startup configuration" };
+    document.getElementById("autoKillBody").innerHTML = Object.entries(ks.switches || {}).map(([k, v]) =>
+      `<div class="control-row" style="padding:4px 0;"><div><strong>${escHtml(names[k] || k)}</strong><div style="color:var(--muted);font-size:12px;">${escHtml(v.detail || "")}</div></div>`
+      + `<div class="${v.active ? "auto-kill" : "auto-on"}">${v.active ? "ACTIVE" : "inactive"}</div></div>`).join("")
+      + `<div style="color:var(--muted);font-size:11px;margin-top:6px;">Sentinel: ${escHtml(ks.sentinel_path || "")}<br>Startup config: ${escHtml(ks.startup_config_path || "")} (read at process start)</div>`;
+
+    const levels = p.levels || ["OFF", "OBSERVE", "RECOMMEND", "APPROVED_EXECUTION"];
+    const scopes = [["global", p.global_level, p.global_level]].concat(Object.keys(p.categories || {}).map(c => [c, (p.category_levels || {})[c] || "OFF", (p.effective_levels || {})[c]]));
+    document.getElementById("autoLevelsBody").innerHTML = scopes.map(([scope, cur, eff]) =>
+      `<tr><td><strong>${escHtml(scope)}</strong>${scope !== "global" ? `<div style="color:var(--muted);font-size:11px;">${escHtml((p.categories || {})[scope] || "")}</div>` : ""}</td>`
+      + `<td>${escHtml(cur)}</td><td>${escHtml(eff)}</td><td><select data-scope="${escHtml(scope)}" class="autoLevelSel">`
+      + levels.map(l => `<option value="${escHtml(l)}"${l === cur ? " selected" : ""}>${escHtml(l)}</option>`).join("")
+      + `</select> <button class="btn sm" data-scope="${escHtml(scope)}" onclick="autoSetLevel(this.dataset.scope)">Apply</button></td></tr>`).join("");
+
+    autoState.requests = {};
+    let rows = q.requests || [];
+    if (!filter) rows = rows.filter(r => ["PENDING", "APPROVED", "EXECUTING"].includes(r.status));
+    rows.forEach(r => { autoState.requests[r.id] = r; });
+    document.getElementById("autoQueueBody").innerHTML = rows.length ? rows.map(r => {
+      const btns = [];
+      if (r.status === "PENDING") btns.push(`<button class="btn sm ok" data-id="${escHtml(r.id)}" onclick="autoApprove(this.dataset.id)">Approve</button>`);
+      if (r.status === "APPROVED") btns.push(`<button class="btn sm primary" data-id="${escHtml(r.id)}" onclick="autoExecute(this.dataset.id)">Execute</button>`);
+      if (["PENDING", "APPROVED"].includes(r.status)) {
+        btns.push(`<button class="btn sm danger" data-id="${escHtml(r.id)}" onclick="autoDecide('reject', this.dataset.id)">Reject</button>`);
+        btns.push(`<button class="btn sm" data-id="${escHtml(r.id)}" onclick="autoDecide('cancel', this.dataset.id)">Cancel</button>`);
+      }
+      const res = r.execution_result ? `<pre class="auto-pre">${escHtml(JSON.stringify(r.execution_result, null, 1))}</pre>` : "";
+      return `<tr><td><strong>${escHtml(r.status)}</strong><div style="color:var(--muted);font-size:11px;">${escHtml(r.approval_mode || "")} ${escHtml(r.approved_by || "")}</div></td>`
+        + `<td><strong>${escHtml(r.action_type)}</strong><div style="color:var(--muted);font-size:11px;">${escHtml(r.description)}</div><div style="font-size:10px;color:var(--muted);">${escHtml(r.id)} · by ${escHtml(r.proposed_by)}</div></td>`
+        + `<td>${escHtml(r.reason)}<pre class="auto-pre">${escHtml(JSON.stringify(r.evidence || {}, null, 1))}</pre></td>`
+        + `<td><pre class="auto-pre">${escHtml(JSON.stringify(r.payload || {}, null, 1))}</pre><div style="font-size:10px;color:var(--muted);">hash ${escHtml(String(r.payload_hash || "").slice(0, 16))}…</div>${res}</td>`
+        + `<td>${escHtml(r.risk)}</td><td>${autoTime(r.created_at_utc)}<br>${autoTime(r.expires_at_utc)}</td><td>${btns.join(" ")}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" style="color:var(--muted)">No requests.</td></tr>`;
+
+    const execCols = [["When", e => autoTime(e.started_at_utc)], ["Action", e => escHtml(e.action_type)], ["Attempt", e => escHtml(e.attempt)],
+                      ["Outcome", e => `<strong>${escHtml(e.outcome)}</strong>`], ["By", e => escHtml(e.executed_by)], ["Error", e => escHtml(e.error || "")]];
+    document.getElementById("autoActionsBody").innerHTML = autoTable(s.recent_actions, execCols, "No autonomous actions yet.");
+    document.getElementById("autoFailuresBody").innerHTML = autoTable(s.recent_failures, execCols, "No failures.");
+    document.getElementById("autoInboxBody").innerHTML = autoTable(s.recent_notifications, [["When", e => autoTime(e.started_at_utc)],
+      ["Severity", e => escHtml((e.result || {}).severity || "")], ["Subject", e => escHtml((e.result || {}).subject || "")]], "Inbox empty.");
+
+    const grants = Object.entries(p.standing_approvals || {});
+    document.getElementById("autoStandingBody").innerHTML = grants.length ? grants.map(([t, g]) =>
+      `<div class="control-row" style="padding:3px 0;"><div><strong>${escHtml(t)}</strong> · max ${escHtml(g.max_per_day)}/day · until ${autoTime(g.expires_at_utc)} · by ${escHtml(g.granted_by)}</div>`
+      + `<button class="btn sm danger" data-type="${escHtml(t)}" onclick="autoRevokeStanding(this.dataset.type)">Revoke</button></div>`).join("")
+      : `<div style="color:var(--muted)">No standing approvals.</div>`;
+    const sel = document.getElementById("autoStandingType");
+    const standable = (autoState.registry.permitted || []).filter(x => x.required_approval === "STANDING_OR_EXPLICIT");
+    if (sel && sel.options.length !== standable.length) sel.innerHTML = standable.map(x => `<option value="${escHtml(x.action_type)}">${escHtml(x.action_type)}</option>`).join("");
+
+    const specs = {};
+    (autoState.registry.permitted || []).concat(autoState.registry.prohibited || []).forEach(x => { specs[x.action_type] = x; });
+    document.getElementById("autoPermBody").innerHTML = (p.actions || []).map(x => {
+      const sp = specs[x.action_type] || {};
+      const prohibited = x.effective_level === "PROHIBITED";
+      return `<tr${prohibited ? ' style="opacity:0.75"' : ""}><td><strong>${escHtml(x.action_type)}</strong><div style="color:var(--muted);font-size:11px;">${escHtml(sp.description || "")}</div></td>`
+        + `<td>${escHtml(x.category)}</td><td>${prohibited ? `<span class="auto-kill">PROHIBITED</span>` : escHtml(x.risk)}</td><td>${escHtml(x.required_approval)}</td>`
+        + `<td>${escHtml(x.effective_level)}</td><td>${x.can_propose ? "yes" : "no"}</td><td>${x.can_execute ? `<span class="auto-on">yes</span>` : "no"}</td>`
+        + `<td>${prohibited ? escHtml(sp.guards || "") : `${escHtml(sp.timeout_seconds)} s, ${escHtml(sp.retry_limit)} retr${sp.retry_limit === 1 ? "y" : "ies"}, ${escHtml(sp.daily_limit)}/day`}</td></tr>`;
+    }).join("");
+
+    document.getElementById("autoAuditBody").innerHTML = (a.events || []).map(e =>
+      `<tr><td>${escHtml(e.seq)}</td><td>${autoTime(e.ts_utc)}</td><td><strong>${escHtml(e.event_type)}</strong></td><td>${escHtml(e.actor)}</td>`
+      + `<td>${escHtml(e.action_type || "")}<div style="font-size:10px;color:var(--muted);">${escHtml(e.request_id || "")}</div></td>`
+      + `<td>${escHtml(e.previous_state || "")}${e.new_state ? " → " + escHtml(e.new_state) : ""}</td><td>${escHtml(e.reason || "")}</td></tr>`).join("")
+      || `<tr><td colspan="7" style="color:var(--muted)">No audit events yet.</td></tr>`;
+  } catch (err) {
+    if (meta) meta.innerHTML = `<span class="auto-kill">Autonomy control plane unavailable: ${escHtml(err.message || String(err))}. Autonomous execution stays blocked.</span>`;
+  }
+}
+
+async function autoApprove(id) {
+  const r = autoState.requests[id];
+  if (!r) return;
+  const ok = await askConfirm("Approve autonomous action?",
+    `${r.action_type}\n\nPayload:\n${JSON.stringify(r.payload, null, 2)}\n\nPayload hash: ${r.payload_hash}\n\nThe approval is bound to exactly this payload and expires ${r.expires_at_utc}. Approving does not execute it.`);
+  if (!ok) return;
+  autoDo("Approved", () => autoWrite(`/api/autonomy/approvals/${encodeURIComponent(id)}/approve`, "POST", { payload_hash: r.payload_hash, confirm: true, reason: "approved in dashboard" }));
+}
+
+async function autoExecute(id) {
+  const r = autoState.requests[id];
+  if (!r) return;
+  const ok = await askConfirm("Execute approved action now?", `${r.action_type}\n\nAll gates are re-checked: kill switches, level, signature, payload hash, expiry and daily limit.`);
+  if (!ok) return;
+  autoDo("Execution finished", async () => {
+    const res = await autoWrite(`/api/autonomy/approvals/${encodeURIComponent(id)}/execute`, "POST", { confirm: true });
+    if (!res.executed) throw new Error(res.reason || res.error || res.status);
+  });
+}
+
+async function autoDecide(kind, id) {
+  const reason = prompt(`Reason to ${kind} this request:`);
+  if (!reason) return;
+  autoDo(kind === "reject" ? "Rejected" : "Cancelled", () => autoWrite(`/api/autonomy/approvals/${encodeURIComponent(id)}/${kind}`, "POST", { reason }));
+}
+
+async function autoSetLevel(scope) {
+  const sel = Array.from(document.querySelectorAll(".autoLevelSel")).find(s => s.dataset.scope === scope);
+  if (!sel) return;
+  const level = sel.value;
+  const reason = prompt(`Reason for setting ${scope} to ${level}:`);
+  if (!reason) return;
+  const ok = await askConfirm("Change autonomy level?", `${scope} → ${level}\n\nThis changes autonomy permissions only. It does not change production.`);
+  if (!ok) return;
+  autoDo("Level updated", () => autoWrite("/api/autonomy/permissions/levels", "PUT", { scope, level, reason, confirm: true }));
+}
+
+async function autoGrantStanding() {
+  const actionType = document.getElementById("autoStandingType").value;
+  const maxPerDay = parseInt(document.getElementById("autoStandingMax").value, 10);
+  const validHours = parseInt(document.getElementById("autoStandingHours").value, 10);
+  const reason = prompt(`Reason for a standing approval of ${actionType}:`);
+  if (!reason) return;
+  const ok = await askConfirm("Grant standing approval?", `${actionType}: up to ${maxPerDay} per day for ${validHours} hours. It applies only when the category level is APPROVED_EXECUTION and no kill switch is active.`);
+  if (!ok) return;
+  autoDo("Standing approval granted", () => autoWrite("/api/autonomy/permissions/standing-approvals", "POST", { action_type: actionType, max_per_day: maxPerDay, valid_hours: validHours, reason, confirm: true }));
+}
+
+async function autoRevokeStanding(actionType) {
+  const reason = prompt(`Reason to revoke the standing approval of ${actionType}:`);
+  if (!reason) return;
+  autoDo("Standing approval revoked", () => autoWrite(`/api/autonomy/permissions/standing-approvals/${encodeURIComponent(actionType)}/revoke`, "POST", { reason }));
+}
+
+async function autoKill(activate) {
+  if (activate) {
+    const reason = prompt("Reason for activating the autonomy kill switch (production is not affected):", "operator stop");
+    if (!reason) return;
+    autoDo("Kill switch activated", () => autoWrite("/api/autonomy/kill-switch/activate", "POST", { reason }));
+  } else {
+    const confirmText = prompt('Type RESUME AUTONOMY to deactivate the dashboard kill switch:');
+    if (!confirmText) return;
+    const reason = prompt("Reason:");
+    if (!reason) return;
+    autoDo("Kill switch deactivated", () => autoWrite("/api/autonomy/kill-switch/deactivate", "POST", { reason, confirm_text: confirmText }));
+  }
+}
+
+async function autoRunAssessment() {
+  autoDo("Assessment finished", async () => {
+    const r = await autoWrite("/api/autonomy/assessment/run", "POST", {});
+    if (!r.ran) throw new Error(r.reason || "not run");
+  });
+}
+
 refreshAll();
 refreshDeployment();
 refreshProviders();
@@ -2330,6 +2626,9 @@ refreshCreativeEngine();
 refreshYouTubeConnection();
 setInterval(() => { refreshSchedule(); refreshMonitor(); }, 15000);
 setInterval(() => refreshOps(), 120000);   // only loads while the Operations tab is open
+refreshAutonomyPill();
+setInterval(refreshAutonomyPill, 60000);   // one small status GET
+setInterval(() => refreshAutonomy(), 60000);   // only loads while the Autonomy Control tab is open
 </script>
 </body>
 </html>
