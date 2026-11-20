@@ -77,7 +77,11 @@ The findings these tests guard against are listed in `STAGE_3_32D_FINAL_SECURITY
 |---|---|---|---|
 | Baseline 5b2a4ad (Stage 3.32C) | 1056 | 5 | 173 |
 | Stage 3.32D as committed (d2e0928) | 1109 (+53) | 5 | 173 |
-| **Stage 3.32D + final audit remediation** | **1208** (+99, exactly the new security cases) | 5 | 173 |
+| Stage 3.32D + final audit remediation | 1208 (+99, exactly the new security cases) | 5 | 173 |
+| Independent re-run of `7a0de45` (2026-11-20, worktree `crazzy-docs-handover-b1a088`) | 1208 | 5 | 173 |
+| **`7a0de45` + re-verification fixes F9 and F10** | **1220** (+11 new security cases, +1 timing test that passed this run) | 4 | 173 |
+
+The re-verification run (`4 failed, 1220 passed, 173 skipped in 804.66s`) failed only the known baseline tests. The fifth, `test_slow_youtube_status_does_not_block_other_dashboard_requests`, is timing-sensitive and passed this time. The security suite is now **110 cases** (F9: 2, F10: 9).
 
 **The same 5 tests fail in all three runs. There are no new failures and no regression.**
 

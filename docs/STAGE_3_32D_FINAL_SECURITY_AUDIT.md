@@ -58,7 +58,7 @@ A new `guarded_open` helper is used by both network actions:
 **Staged re-download**
 - Streams into `download.part`, opened with exclusive create (`xb`), so nothing is ever overwritten.
 - Caps: 25 MB (declared and streamed) and 60 s overall.
-- Media `Content-Type` required; the production `detect_magic_type` signature check plus a Pillow decode must pass.
+- Media `Content-Type` required (`image/*`, `video/*` or `application/octet-stream`; enforced exactly since F9); the production `detect_magic_type` signature check plus a Pillow decode must pass.
 - The file is then renamed to `staged_<sha16>.<ext>`. The rename fails rather than replace an existing file.
 - On any failure the partial file is deleted.
 - The destination is always `data/autonomy/self_healing/staging/<request id>/`, never a job folder.
@@ -166,7 +166,23 @@ At **13:33:42 IST** Windows Update (`MoNotificationUx.exe`, reason "Operating Sy
 - **Exposure:** F1–F5 cannot be reached in this state. They require a scan or an execution, and both are blocked.
 - **Monitor:** the process (`startup_manager.py --monitor`, previously PID 8132) did not restart after the reboot. The `CrazzyDocs-Startup-Manager` task completed (result 0); the Health-Dashboard and Health-Monitoring tasks report result 1. It was not restarted by the audit.
 
-## 9. Confirmation
+## 9. Independent re-verification (after `7a0de45`)
+
+A second pass re-audited the committed code at `7a0de45` (`main` = `origin/main`): `services.py`, `handlers.py`, artifact pruning and `sync` in `engine.py`, and the self-healing routes in `main.py`. F1–F8 are confirmed fixed in code. Two further gaps were found and fixed:
+
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| F9 | Low | **The Content-Type check did not match its description.** The docs said a media `Content-Type` was required, but a response with **no** `Content-Type` was accepted, and the check was a substring match, so `text/html; profile=image` also passed. The signature check and Pillow decode still applied, so no non-media file could be staged. | **Fixed.** The media type is parsed (parameters ignored) and must be `image/*`, `video/*` or `application/octet-stream`; a missing header is refused. 2 new test cases. |
+| F10 | Info | **IPv6 forms that embed a private IPv4 address passed the public-address check.** On Python 3.11, `ipaddress` reports NAT64 (`64:ff9b::7f00:1`) and 6to4 (`2002:7f00:1::`) addresses as global. Reaching this would need an allow-listed CDN hostname to resolve to such an address (DNS compromise) on a NAT64-capable network. | **Fixed.** `_address_public` also rejects private IPv4 embedded through mapped, 6to4 or NAT64 forms. 9 new test cases (5 refused, 4 public allowed). |
+
+**Reviewed and left unchanged (by design):**
+- `GET` history, overview and incident detail call `sync()`. It only mirrors decisions already made in the control plane into `selfheal_*` rows, and returns early when the tables do not exist. It runs no action and creates no schema.
+- File diagnostics check that the job is idle (`_require_job_idle`) before taking the self-healing lock. The scheduler does not observe those locks, so a job could in theory restart in that window. The window is only milliseconds, a failed job restarts only inside its recovery window, and the diagnostics only read with bounded size.
+- R1 (DNS rebinding) is unchanged: a pre-existing 3.32B issue, and every write still needs an allow-listed `Origin`.
+
+**Security suite:** 110 cases (was 99).
+
+## 10. Confirmation
 
 **The audit itself did not modify production.** The only change was the Windows Update restart described in section 8. Beyond that:
 - No process was restarted.

@@ -58,6 +58,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | `5b2a4ad` | 3.32C: Recommendation Engine and the Recommendations tab |
 | `d2e0928` | 3.32D: Self-Healing Operations and the Self-Healing tab |
 | `710b8c5` | 3.32D final security audit fixes, plus 99 security tests |
+| (uncommitted, worktree `crazzy-docs-handover-b1a088`) | 3.32D re-verification: F9 (exact media Content-Type) and F10 (embedded private IPv4 in IPv6), plus 11 tests. Suite: 1220 passed / 4 baseline failures / 173 skipped |
 
 **Test baseline at `710b8c5`:** 1208 passed, 5 failed, 173 skipped. The 5 failures are pre-existing (section 4).
 

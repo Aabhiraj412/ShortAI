@@ -163,15 +163,34 @@ class GuardError(Exception):
     """A request was refused or aborted by a guard (destination, size, time or content)."""
 
 
-def _resolves_public(host: str, resolver: Callable[..., Any]) -> bool:
+_NAT64 = None
+
+
+def _address_public(addr: str) -> bool:
+    """Globally routable, including any IPv4 address embedded in an IPv6 one (mapped, 6to4, NAT64 64:ff9b::/96):
+    Python 3.11 reports e.g. 64:ff9b::7f00:1 and 2002:7f00:1:: as global although they reach 127.0.0.1."""
     import ipaddress
+    global _NAT64
+    ip = ipaddress.ip_address(addr.split("%")[0])
+    if not ip.is_global:
+        return False
+    if ip.version == 6:
+        if _NAT64 is None:
+            _NAT64 = ipaddress.ip_network("64:ff9b::/96")
+        embedded = ip.ipv4_mapped or ip.sixtofour or (ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF) if ip in _NAT64 else None)
+        if embedded is not None and not embedded.is_global:
+            return False
+    return True
+
+
+def _resolves_public(host: str, resolver: Callable[..., Any]) -> bool:
     try:
         infos = resolver(host, 443)
     except OSError:
         return False                                          # cannot resolve: fail closed
     addrs = {i[4][0] for i in infos}
     try:
-        return bool(addrs) and all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addrs)
+        return bool(addrs) and all(_address_public(a) for a in addrs)
     except ValueError:
         return False
 
@@ -310,8 +329,9 @@ def download_to_staging(url: str, staging_dir: Path, *, opener: Any = None,
                 raise GuardError(f"HTTP {status}")
             hdrs = getattr(resp, "headers", None)
             ctype = ((hdrs.get("Content-Type") if hdrs is not None else "") or "").lower()
-            if ctype and not any(t in ctype for t in ("image", "video", "octet-stream")):
-                raise GuardError(f"content type {ctype[:40]} is not media")
+            mtype = ctype.split(";", 1)[0].strip()             # media type only; parameters are ignored
+            if not (mtype.startswith(("image/", "video/")) or mtype == "application/octet-stream"):
+                raise GuardError(f"content type {(mtype or 'missing')[:40]} is not media")
             declared = int((hdrs.get("Content-Length") if hdrs is not None else 0) or 0)
             if declared > DOWNLOAD_MAX_BYTES:
                 raise GuardError("declared size exceeds 25 MB")

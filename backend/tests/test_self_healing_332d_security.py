@@ -275,9 +275,15 @@ def test_destination_allow_list(url, ok):
     assert svc_mod.destination_allowed(url, ALLOWED_ASSET_HOSTS, PUBLIC) is ok
 
 
-@pytest.mark.parametrize("addr", ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "fd00::1", "0.0.0.0"])
+@pytest.mark.parametrize("addr", ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "fd00::1", "0.0.0.0",
+                                  "::ffff:127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::a00:5", "2002:7f00:1::", "2002:c0a8:101::"])
 def test_allowed_host_resolving_to_private_address_is_refused(addr):
     assert svc_mod.destination_allowed("https://upload.wikimedia.org/a.png", ["upload.wikimedia.org"], private(addr)) is False
+
+
+@pytest.mark.parametrize("addr", ["8.8.8.8", "2606:4700::1111", "64:ff9b::808:808", "2002:808:808::"])
+def test_public_addresses_including_embedded_public_ipv4_are_allowed(addr):
+    assert svc_mod._address_public(addr) is True
 
 
 def test_unresolvable_host_fails_closed():
@@ -309,7 +315,7 @@ def test_guarded_download_success_and_isolation(tmp_path):
 
 
 @pytest.mark.parametrize("case", ["oversize", "declared_oversize", "html", "not_media", "corrupt_png", "deadline", "http_404",
-                                  "bad_host"])
+                                  "bad_host", "no_content_type", "content_type_substring"])
 def test_guarded_download_rejections_leave_nothing(tmp_path, case):
     staging = tmp_path / "s"
     body, headers, status, url, clock = png_bytes(), {"Content-Type": "image/png"}, 200, "https://upload.wikimedia.org/a.png", None
@@ -330,6 +336,10 @@ def test_guarded_download_rejections_leave_nothing(tmp_path, case):
         status = 404
     elif case == "bad_host":
         url = "https://example.com/a.png"
+    elif case == "no_content_type":                     # a valid PNG body is still refused without a media type
+        headers = {}
+    elif case == "content_type_substring":              # "image" in a parameter is not an image media type
+        headers["Content-Type"] = "text/html; profile=image"
     op = FakeOpener(status=status, body=body, headers=headers)
     out = svc_mod.download_to_staging(url, staging, opener=op, resolver=PUBLIC, clock=clock)
     assert out["ok"] is False and out["error"]
