@@ -34,7 +34,8 @@ Related documents:
 | `backend/app/community/validation.py` | new: text and image validation |
 | `backend/app/community/service.py` | new: pipeline, schedule, lifecycle, limits, notifications |
 | `backend/app/scheduler/scheduler.py` | `run_community_draft_tick()` and the `community_draft_tick` job (5-minute check, `max_instances=1`, `coalesce`) |
-| `backend/app/main.py` | 16 `/api/community` routes and request models |
+| `backend/app/community/schedule.py` | new: IANA timezones (presets and the full list), DST-aware daily windows (RFC 5545 gap and overlap rules) and the pure scheduling decision shared by the tick and the dashboard |
+| `backend/app/main.py` | 18 `/api/community` routes and request models |
 | `backend/app/templates/dashboard.html` | Community Posts tab (CSS, HTML, JS) |
 | `backend/tests/test_community_posts_332e.py` | new: 75 test cases |
 | `.gitignore` | `backend/data/community/` and `backend/data/COMMUNITY_DRAFTS_DISABLED` |
@@ -95,7 +96,7 @@ CANCELLED: the run was interrupted (process stopped); never resumed
 | 1 | Independent kill switch: dashboard switch, `backend/data/COMMUNITY_DRAFTS_DISABLED`, and the global `backend/data/AUTONOMY_DISABLED` | `service.kill_switches()`; blocks scheduled, manual and regeneration |
 | 2 | Daily limit: 1 scheduled draft per date, 3 manual generations per day (configurable 1–10) | UNIQUE key, `LimitExceeded` (429) |
 | 3 | Duplicate prevention | One active draft per date (DB index), text fingerprint and trigram overlap, image SHA-256 and difference hash |
-| 4 | Bounded retries: 2 scheduled attempts, 10 minutes apart, inside the catch-up window | `_tick` |
+| 4 | Bounded retries: `max_auto_attempts` (default 2, at most 3) scheduled attempts per local date, 10 minutes apart, inside the catch-up window | `schedule.decide`, `_tick` |
 | 5 | Generation timeout: 120 s deadline between stages; Gemini 30 s; run lease 300 s | `GENERATION_TIMEOUT`, `RUN_LEASE_SECONDS` |
 | 6 | Image limits | Source ≤ 25 MB and ≤ 60 MP; output 1080 × 1080, 8 KB–5 MB |
 | 7 | Request limits | Regenerations 10 per day; Gemini 2 calls per day (off by default); notifications 10 per day; bounded API pagination |
@@ -120,18 +121,23 @@ CANCELLED: the run was interrupted (process stopped); never resumed
 
 ## 7. Configuration before activation
 
-Nothing runs until an operator acts. To activate on the live system:
+Nothing runs until an operator acts.
 
-1. **Deploy:**
-   - restart the **dashboard** (for the API and tab);
-   - restart the **scheduler daemon** to load the `community_draft_tick` job. That needs a separate approval, because the daemon runs production.
-2. In **Community Posts → Schedule settings**:
-   - enter an operator name;
-   - choose the time, timezone and formats;
-   - tick **Automatic generation enabled**;
-   - click **Save schedule**.
-3. Optional: try **Generate now** first. Manual generation works without the daemon restart.
-4. Optional: Gemini wording. Set Text to Gemini; it needs the existing `GEMINI_API_KEY`, is limited to 2 calls a day, and falls back to templates.
+**Deployed so far:** `89ea49b` runs on the dashboard (since 16:42 IST on 2026-11-20) and on the scheduler daemon (since 17:34 IST). The timezone-aware schedule described in `STAGE_3_32E_SCHEDULING.md` is newer and is **not deployed**. It needs, each step with approval:
+
+1. Commit and push the change.
+2. Restart the **dashboard** (Community Publishing Schedule panel and API).
+3. Restart the **scheduler daemon**, because its `community_draft_tick` runs the new scheduling decision.
+
+**To activate afterwards:** in Community Posts → Community Publishing Schedule:
+1. Enter an operator name.
+2. Pick a timezone (a US preset or any IANA zone) and the daily draft generation time in that timezone.
+3. Check the preview ("If saved, drafts would be generated at …", in that timezone and in your browser's).
+4. Tick **Automatic draft generation** and click **Save schedule**. The first scheduled draft is the next target time *after* saving.
+
+Optional:
+- Try **Generate now** first.
+- Use Gemini wording: set Text to Gemini. It needs the existing `GEMINI_API_KEY`, is limited to 2 calls a day, and falls back to templates.
 
 ## 8. Known limitations
 
@@ -139,6 +145,8 @@ Nothing runs until an operator acts. To activate on the live system:
 - **The inappropriate-content and sensitive-subject checks** are keyword lists. Sensitive subjects are routed to the operator (NEEDS_OPERATOR_REVIEW), never auto-approved.
 - **Video references are rare today.** The video follow-up format, and links, are only possible for **public** videos; 42 of 43 uploads are currently private.
 - **Template wording is deliberately plain.** Gemini wording is optional and bounded.
-- **Timing:** the scheduled draft is generated within 5 minutes of the configured time (tick interval).
+- **Timing:** the scheduled draft is generated within 5 minutes of the configured local time (tick interval).
+- **Enabling is not retroactive.** Switching automation on after today's target time schedules the first draft for tomorrow. The catch-up window covers missed checks (daemon or computer down), not windows that began before automation was enabled.
+- **DST:** a target time inside a spring-forward gap runs at the shifted time (02:30 becomes 03:30 EDT); one inside a fall-back overlap runs once, at the first occurrence. See `STAGE_3_32E_SCHEDULING.md` section 3.
 - **The quiz answer** is shown to the operator (dashboard) for the comment reveal; it is not posted automatically.
 - **Replacing an image** is limited to the licensed assets of the draft's own topic and the title card. Uploading arbitrary files is deliberately not supported (no arbitrary file write).

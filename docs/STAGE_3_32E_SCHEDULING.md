@@ -1,93 +1,125 @@
-# Stage 3.32E: Scheduling
+# Stage 3.32E: Scheduling (Community Draft Generation)
+
+**Draft generation time** is when CrazzyDocs creates a Community post *draft* for review, and it is the only time scheduled here.
+
+**YouTube publishing time** (when an approved post goes public) does not exist yet. It is a future Stage 3.32F capability, so the dashboard shows it only as "future capability" and offers no control for it. Approval stays manual, and publishing stays disabled.
+
+The Community schedule is independent of the 24-cycle production schedule and of video publishing times.
 
 ## 1. Mechanism (no second scheduler)
 
-- The production daemon's existing APScheduler instance gets **one** job, the same way it runs the daily summary, analytics and junk-cleaner jobs:
+- **One job** on the production daemon's existing APScheduler, the same way it runs the daily summary, analytics and junk-cleaner jobs:
 
   ```
-  id=community_draft_tick  trigger=CronTrigger(minute="2-59/5", timezone=profile tz)  max_instances=1  coalesce=True
+  id=community_draft_tick  CronTrigger(minute="2-59/5")  max_instances=1  coalesce=True
   ```
-- Each tick calls `CommunityService.tick()`, which reads the Community configuration and decides whether today's draft is due.
-  - The generation time, timezone, pause and kill switches therefore take effect **without** reloading or restarting the scheduler.
-  - The production cycle jobs, recovery windows and schedule revision are unchanged; the revision is computed from cycles only.
-- **The tick is cheap and safe:**
-  - Before Stage 3.32E is configured it does **not** touch the database at all (`not_configured`).
-  - Otherwise it is one config read plus, when due, one generation (about 0.3–0.8 s warm).
-  - It runs in the scheduler's thread pool, never on the asyncio loop, and never raises (errors return `{"status": "error"}`).
-- Ticks fall on minutes 2, 7, 12 ... so they never coincide with a cycle start at :00.
+- **Duplicate protection:**
+  - `configure_scheduler_jobs` removes every job and re-adds each one by its fixed id with `replace_existing`;
+  - the daemon's single-instance lock prevents a second daemon.
+- **Configuration comes from the database.** Every tick reads the Community configuration, so time, timezone, pause and kill switches take effect without a scheduler reload.
+- **Production is untouched.** Production cycles, recovery windows, retry logic and the schedule revision are unchanged; the revision is computed from cycles only.
+- **Cost and failure behaviour:**
+  - Before Stage 3.32E is configured, a tick doesn't touch the database (`not_configured`).
+  - Otherwise it is a config read plus, when due, one generation. It runs in the scheduler's thread pool and never raises.
 
-## 2. Configuration (persistent, `community_config`)
+## 2. Configuration (`community_config`, one row per key)
 
-| Setting | Default | Notes |
+| Key | Default | Validation |
 |---|---|---|
-| `enabled` | `false` | Automatic generation |
-| `paused` | `false` | Pause or resume without losing settings |
-| `generation_time` | `10:00` | HH:MM, 24-hour |
-| `timezone` | `Asia/Kolkata` | Any IANA zone; validated |
-| `formats` | all 8 | Permitted formats, in rotation order |
-| `kill_switch` | `false` | Blocks all generation and regeneration |
-| `catch_up_hours` | `12` | How long after the scheduled time a missed run may still happen |
-| `manual_daily_limit` | `3` | Manual generations per local day (1–10) |
-| `text_mode` | `template` | `gemini` = optional wording, at most 2 calls a day |
-| `excluded_categories` | `[]` | Never chosen |
+| `enabled` | `false` | boolean |
+| `paused` | `false` | boolean |
+| `timezone` | `Asia/Kolkata` | IANA name present in tzdata. **Fixed-offset and legacy names are rejected:** `Etc/GMT±N`, `EST`, `MST`, `HST`, `EST5EDT`, `GMT…`; `UTC` is accepted |
+| `generation_time` | `10:00` | `HH:MM`, 24-hour, local time in `timezone` |
+| `catch_up_hours` | `12` | integer 0–23 |
+| `max_auto_attempts` | `2` | integer 1–3 (scheduled attempts per local date) |
+| `manual_daily_limit` | `3` | integer 1–10 |
+| `formats` | all 8 | non-empty subset |
+| `text_mode` | `template` | `template` or `gemini` |
+| `kill_switch` | `false` | boolean |
+| `excluded_categories` | `[]` | up to 20 names |
+| `_enabled_since` | (internal) | UTC timestamp written when automation is switched on |
+| `_maintenance_date` | (internal) | local date of the last retention run |
 
-Every change records an audit event with the before and after values.
+**Saving rules:**
+- **Atomic:** every value is validated before anything is written; one invalid value rejects the whole request (400) and nothing is saved.
+- **Only real changes are written:** a save that changes nothing writes nothing and adds no audit entry.
+- **Audited:** each real change records a `CONFIG_CHANGED` event with the before and after values, the operator and the time. The dashboard shows the latest one under "Last configuration update".
+- **No side effects:** saving never approves a draft, publishes, touches OAuth, changes video publishing times, the production schedule or autonomy, or generates a draft.
 
-## 3. When is a draft generated?
+## 3. Timezones and DST
 
-For the current local date D in the configured timezone, with S = D at `generation_time`:
+- **All arithmetic uses `zoneinfo`** (tzdata 2026f on this machine), never a fixed UTC offset.
+- **Presets:**
+  - US Eastern `America/New_York`
+  - US Central `America/Chicago`
+  - US Mountain `America/Denver`
+  - US Pacific `America/Los_Angeles`
+  - Arizona `America/Phoenix` (no DST)
+  - Alaska `America/Anchorage`
+  - Hawaii `Pacific/Honolulu` (no DST)
+  - India `Asia/Kolkata`
+- **Any other zone:** any of the 547 accepted IANA names can be searched and selected.
+- **What the dashboard shows for the selected zone:** abbreviation, current UTC offset, whether DST is in effect, the next clock change, and the offset after it.
 
-| Situation | Outcome |
-|---|---|
-| Blocked: disabled, paused, or a kill switch | `blocked`; nothing written |
-| Now < S | `not_due` |
-| Now in [S, S + catch_up] and no run for D | **Generate** (run key `community:scheduled:D`) |
-| A draft for D already exists or is being generated (for example manual) | Run recorded as `SKIPPED` |
-| Now > S + catch_up and no run for D | Run recorded as `SKIPPED` (missed) and the operator notified |
-| The run for D failed or was abandoned, attempts < 2, ≥ 10 min since, inside the window | Retry: same run row, attempt 2, new draft |
-| Otherwise | `done` |
+**How the target time is resolved each day** (RFC 5545 semantics, the same as calendar software):
 
-**Next scheduled run** (`GET /api/community/schedule`):
-- tomorrow's S once today's run exists;
-- "due now (catch-up)" inside the window;
-- none while blocked.
+| Situation | Example (America/New_York) | Behaviour |
+|---|---|---|
+| Normal day | 09:00 | 09:00 local: 14:00 UTC in winter (EST), 13:00 UTC in summer (EDT). The wall clock stays the same all year |
+| Spring forward: the time does not exist | 02:30 on 2026-03-08 | Shifted forward by the length of the gap: **03:30 EDT** (07:30 UTC) |
+| Fall back: the time occurs twice | 01:30 on 2026-11-01 | **First occurrence** only: 01:30 EDT (05:30 UTC). The second 01:30 never starts another run, because runs are keyed by the local date |
 
-## 4. Idempotency and concurrency
+The dashboard lists the next affected dates in plain words, for example "02:30 does not exist on 2027-03-14; the draft is generated at 03:30 EDT instead".
 
-- **One scheduled run per date:** `community_runs.idem_key` UNIQUE = `community:scheduled:<local date>`. This survives dashboard and daemon restarts, task retries and duplicate ticks (tested with 3 extra ticks and a new service instance).
-- **One active draft per date:** partial UNIQUE index on `community_drafts(post_date) WHERE active = 1`. Manual and scheduled generation cannot both produce a draft.
+**The catch-up window is elapsed time:** `end = start (UTC) + catch_up_hours`. A DST change inside the window neither stretches nor shortens it.
+
+## 4. When is a draft generated? (`schedule.decide`)
+
+Each tick evaluates **yesterday's and today's local dates**. Yesterday matters when a late target time's catch-up window crosses local midnight. For each date D, with window [S, S + catch-up]:
+
+| State | Condition | Action |
+|---|---|---|
+| `waiting` | now < S | none |
+| `not_enabled_yet` | S is before the moment automation was switched on, and D has no run | none. **Enabling never generates retroactively** for a window that had already started |
+| `due` | S ≤ now ≤ end, no run for D | claim run `community:scheduled:D` and generate (or record SKIPPED if D already has an active draft, for example a manual one) |
+| `running` | the run for D is RUNNING | none |
+| `retry` / `retry_pending` | the run FAILED or was ABANDONED, attempts < `max_auto_attempts`, now ≤ end, D has no active draft; retry once 10 minutes have passed since it finished | restart the same run row (attempt + 1) with a new draft |
+| `completed` | a run for D exists and needs nothing more | none |
+| `missed` | now > end and no run for D (and the window began after enabling) | record one SKIPPED run and notify once |
+
+Dashboard and API status values are `waiting`, `due`, `running`, `retry_pending`, `completed`, `missed`, `not_enabled_yet` and `blocked` (disabled, paused or kill switch). The response also gives:
+- the next generation time in the selected timezone and in UTC; the browser additionally shows it in the viewer's local time;
+- while blocked, the time it would run if enabled now.
+
+## 5. Duplicate prevention
+
+- **One scheduled run per local date:** `community_runs.idem_key` is UNIQUE (`community:scheduled:<local date>`). This holds across dashboard and daemon restarts, retried tasks and duplicate ticks.
+- **One active draft per local date:** a partial UNIQUE index on `community_drafts(post_date) WHERE active = 1`.
   - Manual first: the scheduled run is SKIPPED.
-  - Scheduled first: manual gets 409.
-  - Six concurrent threads (3 manual, 3 ticks): exactly one active draft and one scheduled run.
-- **Claims** happen inside `BEGIN IMMEDIATE`, so two processes serialise.
-- **A running run holds a 300 s lease.** Manual generation is refused (409) while a run for the date holds a lease.
+  - Scheduled first: manual generation gets 409.
+- **Atomic decisions:** the decision is re-made on fresh rows inside `BEGIN IMMEDIATE`, so concurrent ticks or processes serialise.
+- **Tested cases:**
+  - every 5-minute tick through a fall-back night gives one draft;
+  - ticks every 15 minutes across two UTC dates give one draft for the Kolkata date;
+  - six concurrent threads give one draft;
+  - a restarted service gives no new run.
 
-## 5. Failure, retry and recovery
+## 6. Failure, retry and recovery
 
 | Failure | Handling |
 |---|---|
-| No eligible topic | Draft `GENERATION_FAILED`, run `FAILED`, operator notified |
+| No eligible topic | `GENERATION_FAILED` |
 | No image could be produced | `IMAGE_FAILED` |
 | Validation error | `VALIDATION_FAILED` |
 | Deadline exceeded (120 s) | The draft fails at its current stage |
-| Process stops mid-run | At the next tick the expired lease makes the run `ABANDONED` and the draft `CANCELLED` |
-| Draft stuck in progress for > 10 min (an interrupted regeneration) | Moved to its failed state |
+| Expired run lease (process stopped) | Run `ABANDONED`, draft `CANCELLED`; never resumed blindly |
 
-- Scheduled retries are limited to **2 attempts** per date, 10 minutes apart, within the catch-up window.
-- Manual generations are limited per day.
-- Nothing is resumed from a half-finished state.
+Scheduled retries follow `max_auto_attempts` (default 2), 10 minutes apart, inside the catch-up window.
 
-## 6. Time zones
+## 7. Choosing a US time
 
-- All timestamps are stored in UTC.
-- The draft date (`post_date`) is the local date in the configured timezone. At 23:45 UTC on 20 November the Asia/Kolkata date is already 21 November, and the 21st is used.
-- **Changing the timezone or time mid-day:**
-  - the new local date's key decides;
-  - a date that already has a run is not generated twice.
+The dashboard does not assume a timezone; the operator selects one. A YouTube account's country does not decide the schedule.
 
-## 7. Deployment note
-
-- The tick needs the daemon to load the new code, which means a daemon restart. That is a separate operator approval because the daemon runs production.
-- Until then:
-  - manual generation and every review action work from the dashboard alone, once it is restarted;
-  - automatic generation does not run (nothing is lost; the schedule simply starts after the restart).
+To be ready before US mornings:
+1. Choose the audience's timezone, for example `America/New_York`.
+2. Choose a draft generation time early enough to review the draft before posting it by hand.

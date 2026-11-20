@@ -2516,6 +2516,7 @@ class CommunityScheduleRequest(_AutonomyBody):
     excluded_categories: Optional[List[str]] = Field(default=None, max_length=20)
     catch_up_hours: Optional[int] = Field(default=None, ge=0, le=23)
     manual_daily_limit: Optional[int] = Field(default=None, ge=1, le=10)
+    max_auto_attempts: Optional[int] = Field(default=None, ge=1, le=3)
 
 
 @app.get("/api/community")
@@ -2526,6 +2527,21 @@ async def api_community_overview(_: None = Depends(require_local_control)):
 @app.get("/api/community/schedule")
 async def api_community_schedule(_: None = Depends(require_local_control)):
     return await _community_call(lambda: _community().schedule_status())
+
+
+@app.get("/api/community/timezones")
+async def api_community_timezones(_: None = Depends(require_local_control)):
+    """Preset US and India timezones with their current UTC offset and DST state, plus every accepted IANA name."""
+    return await _community_call(lambda: _community().timezones())
+
+
+@app.get("/api/community/schedule/preview")
+async def api_community_schedule_preview(timezone: str, generation_time: str, catch_up_hours: int = 12,
+                                         _: None = Depends(require_local_control)):
+    """Read-only: what a timezone and target time WOULD do (next runs, DST notes). Nothing is saved."""
+    if len(timezone) > 64 or len(generation_time) > 5:
+        raise HTTPException(status_code=400, detail="invalid timezone or time")
+    return await _community_call(lambda: _community().preview(timezone, generation_time, catch_up_hours))
 
 
 @app.post("/api/community/schedule")

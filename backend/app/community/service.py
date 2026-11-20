@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from backend.app.community import content as C
 from backend.app.community import images as I
+from backend.app.community import schedule as SCH
 from backend.app.community import store as S
 from backend.app.community import validation as V
 from backend.app.community.store import CommunityStore, Conflict, NotFound, StoreError
@@ -35,12 +36,14 @@ SCHEDULER_ACTOR = "system:community-scheduler"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": False, "paused": False, "generation_time": "10:00", "timezone": "Asia/Kolkata",
     "formats": list(C.FORMATS), "kill_switch": False, "text_mode": "template", "excluded_categories": [],
-    "catch_up_hours": 12, "manual_daily_limit": 3,
+    "catch_up_hours": 12, "manual_daily_limit": 3, "max_auto_attempts": 2,
 }
+ENABLED_SINCE_KEY = "_enabled_since"           # internal: when automation was last switched on (no retroactive runs)
 GENERATION_TIMEOUT = 120.0
 RUN_LEASE_SECONDS = 300
 STALE_DRAFT_SECONDS = 600
-MAX_AUTO_ATTEMPTS = 2
+MAX_AUTO_ATTEMPTS = 2                 # default; configurable 1-MAX_AUTO_ATTEMPTS_LIMIT as max_auto_attempts
+MAX_AUTO_ATTEMPTS_LIMIT = 3
 AUTO_RETRY_BACKOFF = timedelta(minutes=10)
 REGENERATION_DAILY_LIMIT = 10
 GEMINI_DAILY_LIMIT = 2
@@ -80,6 +83,14 @@ class NoSource(Exception):
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _tzdata_version() -> Optional[str]:
+    try:
+        import tzdata
+        return str(getattr(tzdata, "IANA_VERSION", None))
+    except Exception:
+        return None
 
 
 def _validate_operator(operator: Any) -> str:
@@ -169,11 +180,10 @@ class CommunityService:
                     raise BadRequest("generation_time must be HH:MM (24-hour)")
                 clean[k] = v
             elif k == "timezone":
-                try:
-                    ZoneInfo(str(v))
-                except (ZoneInfoNotFoundError, ValueError):
-                    raise BadRequest("unknown timezone")
-                clean[k] = str(v)
+                if not SCH.valid_timezone(v):
+                    raise BadRequest("timezone must be an IANA timezone name such as America/New_York "
+                                     "(fixed offsets such as Etc/GMT+5 or EST are not accepted)")
+                clean[k] = v
             elif k == "formats":
                 if not isinstance(v, list) or not v or any(f not in C.FORMATS for f in v) or len(set(v)) != len(v):
                     raise BadRequest(f"formats must be a non-empty list of: {', '.join(C.FORMATS)}")
@@ -194,56 +204,152 @@ class CommunityService:
                 if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 10:
                     raise BadRequest("manual_daily_limit must be 1-10")
                 clean[k] = v
+            elif k == "max_auto_attempts":
+                if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= MAX_AUTO_ATTEMPTS_LIMIT:
+                    raise BadRequest(f"max_auto_attempts must be 1-{MAX_AUTO_ATTEMPTS_LIMIT}")
+                clean[k] = v
             else:
                 raise BadRequest(f"unknown setting {k}")
         if not clean:
             raise BadRequest("no settings to change")
         before = self.config()
+        changes = {k: {"from": before.get(k), "to": v} for k, v in clean.items() if before.get(k) != v}
+        if not changes:
+            return self.schedule_status()                    # nothing differs: no write, no duplicate audit entry
         now = self.clock()
+        to_write = {k: clean[k] for k in changes}
+        if changes.get("enabled", {}).get("to") is True:
+            to_write[ENABLED_SINCE_KEY] = S.ts(now)          # windows that began earlier are not generated retroactively
+        # Every value was validated above, so the write is all or nothing in one transaction.
         with self.store.tx() as conn:
-            self.store.set_config(conn, clean, f"operator:{op}", now)
-            self.store.event(conn, "CONFIG_CHANGED", f"operator:{op}", now,
-                             detail={"changes": {k: {"from": before.get(k), "to": v} for k, v in clean.items()}})
+            self.store.set_config(conn, to_write, f"operator:{op}", now)
+            self.store.event(conn, "CONFIG_CHANGED", f"operator:{op}", now, detail={"changes": changes})
         return self.schedule_status()
 
     # -- schedule -------------------------------------------------------------------------------------------
     def _tz(self, cfg: Dict[str, Any]) -> ZoneInfo:
         try:
-            return ZoneInfo(cfg.get("timezone") or "Asia/Kolkata")
-        except (ZoneInfoNotFoundError, ValueError):
+            return SCH.zone(cfg.get("timezone") or "Asia/Kolkata")
+        except ValueError:
             return ZoneInfo("Asia/Kolkata")
-
-    def _scheduled_at(self, day, cfg: Dict[str, Any]) -> datetime:
-        hh, mm = (int(x) for x in str(cfg.get("generation_time") or "10:00").split(":"))
-        return datetime(day.year, day.month, day.day, hh, mm, tzinfo=self._tz(cfg))
 
     def _local_date(self, now: datetime, cfg: Dict[str, Any]) -> str:
         return now.astimezone(self._tz(cfg)).date().isoformat()
+
+    def _enabled_since(self) -> Optional[datetime]:
+        return S.parse_ts(self.store.get_config().get(ENABLED_SINCE_KEY))
+
+    def _run_lookup(self, conn):
+        def get(key: str) -> Optional[Dict[str, Any]]:
+            if conn is None:
+                return None
+            run = self.store.get_run_by_key(conn, key)
+            if run is not None:
+                run["finished_at"] = S.parse_ts(run.get("finished_at_utc"))
+            return run
+
+        def active(post_date: str) -> bool:
+            return conn is not None and self.store.active_draft_for_date(conn, post_date) is not None
+        return get, active
+
+    def _decisions(self, conn, now: datetime, cfg: Dict[str, Any]) -> List[SCH.Decision]:
+        get, active = self._run_lookup(conn)
+        # While automation is OFF, project "if enabled now": enabling never generates a window that already began.
+        enabled_since = self._enabled_since() if cfg.get("enabled") else now
+        return SCH.decide(now, cfg, get_run=get, has_active_draft=active, enabled_since=enabled_since,
+                          retry_backoff=AUTO_RETRY_BACKOFF)
+
+    def last_config_change(self) -> Optional[Dict[str, Any]]:
+        if not self.store.tables_exist():
+            return None
+        with self.store.read() as conn:
+            row = conn.execute("SELECT actor, created_at_utc, detail_json FROM community_events WHERE event='CONFIG_CHANGED' "
+                               "ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        import json as _json
+        return {"by": row["actor"], "at_utc": row["created_at_utc"],
+                "changes": (_json.loads(row["detail_json"] or "{}").get("changes") or {})}
 
     def schedule_status(self) -> Dict[str, Any]:
         cfg = self.config()
         now = self.clock()
         tz = self._tz(cfg)
         today = now.astimezone(tz).date()
-        sched_today = self._scheduled_at(today, cfg)
-        runs = self.store.list_runs(limit=30)
-        today_run = next((r for r in runs if r["idem_key"] == f"community:scheduled:{today.isoformat()}"), None)
+        configured = self.store.tables_exist()
+        if configured:
+            with self.store.read() as conn:
+                decisions = self._decisions(conn, now, cfg)
+        else:
+            decisions = self._decisions(None, now, cfg)
+        would_run_at, would_state = SCH.next_start(now, cfg, decisions)
         blocked = self._blocked(cfg, automatic=True)
         if blocked:
-            nxt, state = None, blocked
-        elif today_run is None and now < sched_today:
-            nxt, state = sched_today, "scheduled"
-        elif today_run is None and now <= sched_today + timedelta(hours=int(cfg["catch_up_hours"])):
-            nxt, state = now, "due now (catch-up)"
+            nxt, state = None, "blocked"
         else:
-            nxt, state = self._scheduled_at(today + timedelta(days=1), cfg), "scheduled"
+            nxt, state = would_run_at, would_state
+        runs = self.store.list_runs(limit=30)
+        today_run = next((r for r in runs if r["idem_key"] == f"community:scheduled:{today.isoformat()}"), None)
         last_success = next((r for r in runs if r["status"] == S.RUN_SUCCEEDED), None)
-        return {"config": cfg, "kill_switches": self.kill_switches(cfg), "blocked_reason": blocked, "state": state,
+        last_run = runs[0] if runs else None
+        last_draft = self.store.get_draft(last_run["draft_id"]) if last_run and last_run.get("draft_id") else None
+        state_text = {
+            "blocked": f"blocked: {blocked}", "waiting": "waiting for today's target time",
+            "due": "due now: the next 5-minute check generates the draft",
+            "running": "a generation is running", "retry_pending": "a failed attempt will be retried",
+            "completed": "today's scheduled draft is done; next run tomorrow",
+            "missed": "today's window passed without a run; next run tomorrow",
+            "not_enabled_yet": "today's target time passed before automation was enabled; first run tomorrow",
+        }.get(state, state)
+        return {"config": cfg, "kill_switches": self.kill_switches(cfg), "blocked_reason": blocked,
+                "state": state, "state_text": state_text,
                 "next_run_local": nxt.astimezone(tz).isoformat() if nxt else None,
-                "next_run_utc": S.ts(nxt) if nxt else None, "timezone": str(tz),
-                "today": today.isoformat(), "today_run": today_run, "last_run": runs[0] if runs else None,
-                "last_successful_run": last_success, "tick_interval_minutes": 5,
-                "configured": self.store.tables_exist()}
+                "next_run_utc": S.ts(nxt) if nxt else None,
+                "next_run_if_enabled_local": would_run_at.astimezone(tz).isoformat() if would_run_at else None,
+                "next_run_if_enabled_utc": S.ts(would_run_at) if would_run_at else None,
+                "timezone": str(tz), "timezone_details": SCH.tz_details(str(tz), now),
+                "dst_notes": SCH.dst_notes(cfg["generation_time"], tz, now)[:4],
+                "today": today.isoformat(), "today_run": today_run, "last_run": last_run,
+                "last_result": ({"run_status": last_run["status"], "trigger": last_run["trigger"],
+                                 "at_utc": last_run.get("finished_at_utc") or last_run.get("started_at_utc"),
+                                 "error": last_run.get("error"), "draft_id": last_run.get("draft_id"),
+                                 "draft_status": (last_draft or {}).get("status"),
+                                 "validation_status": (last_draft or {}).get("validation_status")}
+                                if last_run else None),
+                "last_successful_run": last_success, "last_config_change": self.last_config_change(),
+                "enabled_since_utc": S.ts(self._enabled_since()) if self._enabled_since() else None,
+                "windows": [{"date": d.day.isoformat(), "state": d.state, "start_utc": S.ts(d.start_utc),
+                             "start_local": d.start_utc.astimezone(tz).isoformat(), "end_utc": S.ts(d.end_utc),
+                             "dst_note": d.note} for d in decisions],
+                "tick_interval_minutes": 5, "configured": configured,
+                "youtube_publishing": {"available": False, "note": "Publishing time is a future capability "
+                                       "(Stage 3.32F). Approved drafts are posted manually in YouTube Studio."}}
+
+    def preview(self, timezone_name: str, generation_time: str, catch_up_hours: int = 12) -> Dict[str, Any]:
+        """What a schedule WOULD do, without saving anything: next three target instants and DST notes."""
+        if not SCH.valid_timezone(timezone_name):
+            raise BadRequest("timezone must be an IANA timezone name such as America/New_York")
+        if not isinstance(generation_time, str) or not TIME_RE.match(generation_time):
+            raise BadRequest("generation_time must be HH:MM (24-hour)")
+        if not isinstance(catch_up_hours, int) or not 0 <= catch_up_hours <= 23:
+            raise BadRequest("catch_up_hours must be 0-23")
+        now = self.clock()
+        tz = SCH.zone(timezone_name)
+        today = now.astimezone(tz).date()
+        upcoming = []
+        for i in range(0, 5):
+            r, end = SCH.window(today + timedelta(days=i), generation_time, tz, catch_up_hours)
+            if r.start_utc > now:
+                upcoming.append({"date": r.day.isoformat(), "local": r.local(tz).isoformat(), "utc": S.ts(r.start_utc),
+                                 "catch_up_until_local": end.astimezone(tz).isoformat(), "dst_note": r.note})
+            if len(upcoming) == 3:
+                break
+        return {"timezone": SCH.tz_details(timezone_name, now), "generation_time": generation_time,
+                "upcoming": upcoming, "dst_notes": SCH.dst_notes(generation_time, tz, now)[:4]}
+
+    def timezones(self) -> Dict[str, Any]:
+        return {"presets": SCH.presets(self.clock()), "zones": list(SCH.timezone_ids()),
+                "tzdata_version": _tzdata_version()}
 
     # -- maintenance ------------------------------------------------------------------------------------------
     def recover_stale(self) -> Dict[str, int]:
@@ -329,50 +435,55 @@ class CommunityService:
             return {"status": "blocked", "reason": blocked, "recovered": recovered}
         now = self.clock()
         tz = self._tz(cfg)
-        day = now.astimezone(tz).date()
-        post_date = day.isoformat()
-        sched = self._scheduled_at(day, cfg)
-        if now < sched:
-            return {"status": "not_due", "next_run_local": sched.isoformat()}
-        key = f"community:scheduled:{post_date}"
-        window_end = sched + timedelta(hours=int(cfg["catch_up_hours"]))
-        missed = False
+        missed: List[str] = []
+        outcome: Dict[str, Any] = {}
+        run = None
+        # One transaction: the decision is re-made on fresh rows while holding the write lock, so two ticks, a
+        # manual generation or a second process can never claim the same local date twice.
         with self.store.tx() as conn:
-            run = self.store.get_run_by_key(conn, key)
-            if run is not None:
-                if run["status"] in (S.RUN_FAILED, S.RUN_ABANDONED) and run["attempts"] < MAX_AUTO_ATTEMPTS \
-                        and now <= window_end and (S.parse_ts(run["finished_at_utc"]) or now) + AUTO_RETRY_BACKOFF <= now \
-                        and self.store.active_draft_for_date(conn, post_date) is None:
-                    self.store.restart_run(conn, run["id"], run["status"], now, RUN_LEASE_SECONDS)
-                    self.store.event(conn, "RUN_RETRY", SCHEDULER_ACTOR, now, run_id=run["id"],
-                                     detail={"attempt": run["attempts"] + 1})
-                    run = self.store.get_run(run["id"], conn)
-                else:
-                    return {"status": "done", "run_status": run["status"], "run_id": run["id"]}
-            elif now > window_end:
-                run = self.store.insert_run(conn, idem_key=key, post_date=post_date, trigger="scheduled",
-                                            requested_by=SCHEDULER_ACTOR, now=now, lease_seconds=RUN_LEASE_SECONDS)
-                self.store.finish_run(conn, run["id"], S.RUN_SKIPPED, now,
-                                      error=f"missed: nothing ran between {sched.strftime('%H:%M')} and the end of the "
-                                            f"{cfg['catch_up_hours']} h catch-up window")
-                self.store.event(conn, "RUN_MISSED", SCHEDULER_ACTOR, now, run_id=run["id"])
-                missed = True
-            elif self.store.active_draft_for_date(conn, post_date) is not None or \
-                    self.store.running_run_for_date(conn, post_date, now) is not None:
-                run = self.store.insert_run(conn, idem_key=key, post_date=post_date, trigger="scheduled",
-                                            requested_by=SCHEDULER_ACTOR, now=now, lease_seconds=RUN_LEASE_SECONDS)
-                self.store.finish_run(conn, run["id"], S.RUN_SKIPPED, now,
-                                      error="a draft for this date already exists or is being generated")
-                self.store.event(conn, "RUN_SKIPPED", SCHEDULER_ACTOR, now, run_id=run["id"])
-                return {"status": "skipped", "run_id": run["id"]}
-            else:
-                run = self.store.insert_run(conn, idem_key=key, post_date=post_date, trigger="scheduled",
-                                            requested_by=SCHEDULER_ACTOR, now=now, lease_seconds=RUN_LEASE_SECONDS)
-        if missed:                                       # the run row was finished as SKIPPED inside the transaction
+            for d in self._decisions(conn, now, cfg):
+                post_date = d.day.isoformat()
+                if d.state == SCH.MISSED:
+                    r = self.store.insert_run(conn, idem_key=d.key, post_date=post_date, trigger="scheduled",
+                                              requested_by=SCHEDULER_ACTOR, now=now, lease_seconds=RUN_LEASE_SECONDS)
+                    self.store.finish_run(conn, r["id"], S.RUN_SKIPPED, now,
+                                          error=f"missed: nothing ran between {d.start_utc.astimezone(tz).strftime('%H:%M %Z')}"
+                                                f" and the end of the {cfg['catch_up_hours']} h catch-up window")
+                    self.store.event(conn, "RUN_MISSED", SCHEDULER_ACTOR, now, run_id=r["id"], detail={"date": post_date})
+                    missed.append(post_date)
+                    outcome = {"status": "missed", "run_id": r["id"]}
+                elif d.state == SCH.RETRY:
+                    self.store.restart_run(conn, d.run["id"], d.run["status"], now, RUN_LEASE_SECONDS)
+                    self.store.event(conn, "RUN_RETRY", SCHEDULER_ACTOR, now, run_id=d.run["id"],
+                                     detail={"attempt": int(d.run["attempts"]) + 1, "date": post_date})
+                    run = self.store.get_run(d.run["id"], conn)
+                    break
+                elif d.state == SCH.DUE:
+                    if self.store.active_draft_for_date(conn, post_date) is not None or \
+                            self.store.running_run_for_date(conn, post_date, now) is not None:
+                        r = self.store.insert_run(conn, idem_key=d.key, post_date=post_date, trigger="scheduled",
+                                                  requested_by=SCHEDULER_ACTOR, now=now, lease_seconds=RUN_LEASE_SECONDS)
+                        self.store.finish_run(conn, r["id"], S.RUN_SKIPPED, now,
+                                              error="a draft for this date already exists or is being generated")
+                        self.store.event(conn, "RUN_SKIPPED", SCHEDULER_ACTOR, now, run_id=r["id"])
+                        outcome = {"status": "skipped", "run_id": r["id"]}
+                        continue
+                    run = self.store.insert_run(conn, idem_key=d.key, post_date=post_date, trigger="scheduled",
+                                                requested_by=SCHEDULER_ACTOR, now=now, lease_seconds=RUN_LEASE_SECONDS)
+                    break
+                elif d.state in (SCH.RUNNING, SCH.RETRY_PENDING, SCH.COMPLETED) and d.day == now.astimezone(tz).date():
+                    outcome = outcome or {"status": "done", "run_status": (d.run or {}).get("status"),
+                                          "run_id": (d.run or {}).get("id")}
+                elif d.state == SCH.NOT_ENABLED_YET and d.day == now.astimezone(tz).date():
+                    outcome = outcome or {"status": "not_due", "reason": "today's window began before automation was enabled"}
+                elif d.state == SCH.WAITING and d.day == now.astimezone(tz).date():
+                    outcome = outcome or {"status": "not_due", "next_run_local": d.start_utc.astimezone(tz).isoformat()}
+        for post_date in missed:                          # outside the transaction; each missed date is recorded once
             self._notify("generation_missed", "Community draft missed",
                          f"No Community draft was generated for {post_date}: the scheduler was not running during "
                          "the generation window. Use Generate now to create one.", "medium", None)
-            return {"status": "missed", "run_id": run["id"]}
+        if run is None:
+            return outcome or {"status": "not_due"}
         res = self._run_generation(run, SCHEDULER_ACTOR)
         return {**res, "status": "generated", "draft_status": res["status"]}
 

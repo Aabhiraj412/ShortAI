@@ -31,7 +31,8 @@ existing scheduler daemon (APScheduler)          dashboard (FastAPI)
 | `community/validation.py` | Independent text and image checks, combined into VALID / VALID_WITH_WARNINGS / NEEDS_OPERATOR_REVIEW / REJECTED. |
 | `community/service.py` | Generation pipeline, lifecycle actions, schedule, idempotency, limits, kill switches, crash recovery, notifications, retention. |
 | `scheduler/scheduler.py` | One added job, `community_draft_tick`, which calls `service.scheduler_tick()`. |
-| `main.py` | 16 `/api/community` routes (section 5 of `STAGE_3_32E_API.md`). |
+| `community/schedule.py` | IANA timezone list and presets, DST-aware window resolution, and the scheduling decision (`decide`) used by both the tick and the status API. |
+| `main.py` | 18 `/api/community` routes (see `STAGE_3_32E_API.md`). |
 | `templates/dashboard.html` | The Community Posts tab. |
 
 ## 2. Reused components (no duplicates)

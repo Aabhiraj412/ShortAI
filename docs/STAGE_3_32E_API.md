@@ -18,7 +18,9 @@ There is **no publish route** and no generic execution route.
 | Method and path | Returns |
 |---|---|
 | `GET /api/community` | Overview: schedule status, counts (ready, approved, rejected, failed drafts, failed runs, validation warnings), active drafts, last 10 notifications, formats, `publishing: {available: false}` |
-| `GET /api/community/schedule` | Config, kill switches, blocked reason, state, `next_run_local` / `next_run_utc`, today's run, last run, last successful run, `configured` |
+| `GET /api/community/schedule` | Config, kill switches, blocked reason, `state` (waiting / due / running / retry_pending / completed / missed / not_enabled_yet / blocked) and `state_text`, `next_run_local` / `next_run_utc`, `next_run_if_enabled_*` while blocked, `timezone_details` (abbreviation, UTC offset, DST active, next clock change), `dst_notes`, `windows` (yesterday and today), `last_result`, `last_config_change` (who, when, which settings), `enabled_since_utc`, `configured`, and `youtube_publishing: {available: false}` |
+| `GET /api/community/timezones` | The 8 presets with their current abbreviation, UTC offset and DST state, all accepted IANA ids (547; fixed-offset and legacy names excluded) and the tzdata version |
+| `GET /api/community/schedule/preview?timezone=&generation_time=&catch_up_hours=` | **Read-only, saves nothing.** The next three target instants (local and UTC, with any DST note) and the upcoming DST gap or overlap dates for that time. 400 on an invalid timezone or time |
 | `GET /api/community/drafts?status=&q=&format=&validation=&date_from=&date_to=&limit=&offset=` | Filtered history. `status` is all, active, failed or a draft status; `q` is at most 100 characters (escaped LIKE); dates are YYYY-MM-DD; `limit` 1–200; `offset` 0–100000 |
 | `GET /api/community/drafts/{id}` | Draft (generation metadata without the raw corpus), current image record, all images, the last 100 audit events, the run, and a 1,500-character research excerpt |
 | `GET /api/community/drafts/{id}/validation` | Validation summary for text and image |
@@ -30,7 +32,7 @@ There is **no publish route** and no generic execution route.
 
 | Method and path | Body | Effect |
 |---|---|---|
-| `POST /api/community/schedule` | `operator` plus any of `enabled`, `paused`, `kill_switch`, `generation_time`, `timezone`, `formats`, `text_mode`, `excluded_categories`, `catch_up_hours`, `manual_daily_limit` | Validates and saves; returns the schedule status. The first save creates the tables |
+| `POST /api/community/schedule` | `operator` plus any of `enabled`, `paused`, `kill_switch`, `generation_time`, `timezone` (IANA), `formats`, `text_mode`, `excluded_categories`, `catch_up_hours`, `manual_daily_limit`, `max_auto_attempts` (1–3) | Validates **every** value first: one invalid value means 400 and nothing is saved. Writes only the settings that actually changed, records `CONFIG_CHANGED`, and returns the schedule status. Enabling stores the switch-on time (no retroactive run). The first save creates the tables. Publishes nothing, approves nothing, never touches the production schedule |
 | `POST /api/community/generate` | `operator` | Generates today's draft now (409 if one is active or running; 423 when killed; 429 over the limit) |
 | `POST /api/community/drafts/{id}/edit` | `operator`, `version`, `text` (≤ 2000) | Sanitises, re-validates, withdraws an approval |
 | `POST /api/community/drafts/{id}/regenerate-text` | `operator`, `version` | New wording from the same research (sometimes a different format); re-validates |
@@ -39,7 +41,7 @@ There is **no publish route** and no generic execution route.
 | `POST /api/community/drafts/{id}/reject` | `operator`, `version`, `reason` (3–500) | `READY_FOR_REVIEW` → `REJECTED` |
 | `POST /api/community/drafts/{id}/archive` | `operator`, `version`, optional `reason` | From a reviewable, decided or failed state → `ARCHIVED`; frees the date |
 
-16 routes in total: 8 reads, 8 writes.
+18 routes in total: 10 reads, 8 writes.
 
 ## Future publishing boundary (Stage 3.32F, not implemented)
 

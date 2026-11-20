@@ -1,12 +1,12 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-20, evening IST (Stage 3.32E implemented, uncommitted).
+**As of:** 2026-11-20, about 18:30 IST. Stage 3.32E is deployed (dashboard and daemon on `89ea49b`). The timezone-aware Community schedule is implemented and uncommitted.
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
-**Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, at `687c156` plus the uncommitted Stage 3.32E work.
+**Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, at `97b7990` (the validator wording fix, committed but **not pushed**) plus the uncommitted timezone-aware schedule work.
 
-**Latest commit:** `687c156`, on `main` and `origin/main`.
+**Latest commit on `main` / `origin/main`:** `89ea49b`.
 
 ## 1. Architecture
 
@@ -59,7 +59,9 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | `d2e0928` | 3.32D: Self-Healing Operations and the Self-Healing tab |
 | `710b8c5` | 3.32D final security audit fixes, plus 99 security tests |
 | `687c156` | 3.32D re-verification: F9 (exact media Content-Type) and F10 (embedded private IPv4 in IPv6), plus 11 tests |
-| (uncommitted, worktree `crazzy-docs-handover-b1a088`) | **3.32E: Community post draft automation**: `backend/app/community/`, 16 `/api/community` routes, Community Posts tab, `community_draft_tick` scheduler job, 75 tests, 6 docs (`docs/STAGE_3_32E_*.md`). Not deployed, not activated |
+| `89ea49b` | **3.32E: Community post draft automation**: `backend/app/community/`, Community Posts tab, `community_draft_tick` scheduler job, 75 tests, 6 docs. **Deployed** (dashboard 16:42, daemon 17:34 IST); automation OFF |
+| `97b7990` (dev branch only, not pushed) | 3.32E: `image_not_blank` validator wording fix plus its regression test |
+| (uncommitted, dev worktree) | 3.32E: **timezone-aware Community Publishing Schedule**: `community/schedule.py` (IANA presets and list, DST rules, scheduling decision), `max_auto_attempts`, no retroactive run on enabling, 2 new read-only routes (18 total), dashboard panel, 52 new tests |
 
 **Test baseline at `710b8c5`:** 1208 passed, 5 failed, 173 skipped. The 5 failures are pre-existing (section 4).
 
@@ -69,17 +71,17 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 
 | Item | State |
 |---|---|
-| Restart at 15:23:59 IST | The computer was restarted from the Start menu under the user's account (System event 1074). At logon the scheduled tasks relaunched everything from the files on disk (`687c156`). No backup was taken for this implicit deployment. |
-| Daemon | PID 5244 (started 15:24:33 IST), code `687c156` (loaded revision `72f4aceffb72cf74`). |
-| Dashboard | PID 5252 (started 15:24:33 IST), code `687c156`. The 3.32D audit fixes (F1–F10) are therefore **live**. Stage 3.32E is not committed, so it is not running. |
+| Restart at 15:23:59 IST | The computer was restarted from the Start menu under the user's account (System event 1074). At logon the scheduled tasks relaunched everything from the files on disk (`687c156`). |
+| Daemon | PID 13216, started 17:34:26 IST by a controlled restart at a safe point; code `89ea49b` (loaded revision `5171904dce2ca340`). 24 cycles plus the `Community Draft Check` job, which returns `blocked` while automation is OFF. |
+| Dashboard | PID 3992, started 16:42:50 IST through `Start-ScheduledTask CrazzyDocs-Health-Dashboard`, because the monitor had reached its 3-relaunches-per-hour cap; code `89ea49b`. |
 | Monitor | PID 5260 (`startup_manager.py --monitor`), running again since the 15:24 restart. |
 | Schedule | Active revision `ccf0bd04f159`, CUSTOM 24 cycles, named profile "24/7", daemon in sync. |
 | Jobs | 45 completed, 12 failed, 40 recovery-window-expired, 1 aborted. |
 | Autonomy | All levels OFF; startup kill switch active (no `autonomy_startup.json`); 0 requests, 0 executions. |
 | Self-healing | BLOCKED (startup kill switch), level OFF; its six `selfheal_*` tables exist and are empty. |
-| Community drafts (3.32E) | Not deployed. The live database has no `community_*` tables. |
+| Community drafts (3.32E) | Automation **OFF**, with no schedule saved. One manual draft, `cdraft_00eeba9275a0990d` (READY_FOR_REVIEW, VALID, not approved, not published). `community_config` holds only the internal `_maintenance_date`. |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
-| Latest backup | `D:\Agents\CrazzyDocs_backups\deploy_5b2a4ad_20261120_111917` |
+| Latest backups | `D:\Agents\CrazzyDocs_backups\deploy_89ea49b_scheduler_20261120_173044` (before the daemon restart) and `deploy_89ea49b_dashboard_20261120_163917` |
 
 ## 4. Outstanding bugs and risks
 
@@ -100,7 +102,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 1. **Deploy `710b8c5` to the dashboard**: the exact next task (section 7).
 2. **Fix the FFmpeg padding defect** (bug 1). This is the largest source of lost cycles.
-3. **3.32E**: Community posts in DRAFT mode. **Implemented and tested, awaiting commit authorization.** Activation needs a dashboard restart (API and tab), a daemon restart (scheduler job, separate approval), then enabling it in Community Posts → Schedule settings. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7.
+3. **3.32E**: Community posts in DRAFT mode. `89ea49b` is deployed with automation OFF. The timezone-aware schedule (US presets, DST) is implemented and tested, awaiting commit authorization; deploying it needs a dashboard **and** a daemon restart. Then the operator picks a timezone and time and enables automation. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7 and `docs/STAGE_3_32E_SCHEDULING.md`.
 4. **3.32G**: controlled autopilot rollout. Phased activation (OBSERVE, then RECOMMEND, then standing diagnostics only) with weekly reports and kill-switch drills. **Each gate needs user approval.**
 5. **3.32F**: Community API publishing. **BLOCKED** on YouTube posts API access, a separate `youtube.force-ssl` consent, and 30 clean days of 3.32E.
 
@@ -135,20 +137,21 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-The 15:24 restart already put `687c156` (3.32D plus the audit fixes) into production, so the old "deploy `710b8c5`" task is done in effect. It had no pre-deployment backup; take one before the next deployment.
+**Review, then commit and deploy the timezone-aware Community schedule.** Each step needs the user's explicit authorization.
 
-**Next: commit Stage 3.32E, then deploy it.** Each step needs the user's explicit authorization.
-
-1. **Commit and push** the 3.32E work from worktree `crazzy-docs-handover-b1a088` (fast-forward `main`, push, verify that `ls-remote` matches).
-2. **Back up** `studio.db` (SQLite online backup and integrity check), the configuration files and the git state, into a new `D:\Agents\CrazzyDocs_backups\deploy_<sha>_<timestamp>` folder.
-3. **Restart the dashboard** (API and Community Posts tab):
-   - between :10 and :50, with no active job;
-   - check the PID's command line, stop only that PID, wait at least 12 s, then run `Start-ScheduledTask CrazzyDocs-Health-Dashboard`;
-   - the monitor is running now and may relaunch it itself, so check for a duplicate.
-4. **Restart the scheduler daemon** to load the `community_draft_tick` job. This needs **separate approval**, because the daemon runs production; same idle and timing checks.
-5. **Verify:**
-   - `/api/community` returns `configured: false`;
-   - the live database has no `community_*` tables until the first save;
-   - the production schedule `ccf0bd04f159` is unchanged;
-   - autonomy is OFF and self-healing is BLOCKED.
-6. **Activation** is a separate decision: in Community Posts, try Generate now, then enable automatic generation at 10:00 Asia/Kolkata. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7.
+1. **Commit** the work in worktree `crazzy-docs-handover-b1a088` (on top of `97b7990`). Pushing then also publishes `97b7990`; decide that together.
+2. **Push** with a fast-forward to `main`, and verify that `ls-remote` matches.
+3. **Back up** to a new `D:\Agents\CrazzyDocs_backups\deploy_<sha>_<timestamp>` folder (studio.db via the online backup and integrity check, configuration, git bundle).
+4. **Restart the dashboard:**
+   - between :15 and :50 with no active job;
+   - stop only the verified dashboard PID;
+   - the monitor relaunches it; otherwise run `Start-ScheduledTask CrazzyDocs-Health-Dashboard`.
+5. **Restart the scheduler daemon:** call `POST /api/control-center/deployment/restart {"confirm": true, "reason": ...}` only when the API reports `safe: true`. The monitor relaunches the daemon.
+6. **Verify:**
+   - both processes are on the new revision;
+   - schedule `ccf0bd04f159` is unchanged with 24 cycles;
+   - `Community Draft Check` is registered and returns `blocked`;
+   - automation is still OFF;
+   - no new draft exists;
+   - autonomy is OFF and self-healing BLOCKED.
+7. **The user** chooses the timezone and time in the dashboard and enables automation (a separate decision). Approval and posting stay manual; publishing through the API is Stage 3.32F (blocked).

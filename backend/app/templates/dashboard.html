@@ -1028,27 +1028,43 @@
       <div class="card-head"><div><h2 class="card-title">Draft workspace</h2><p class="card-desc">Active drafts. Only <strong>VALID</strong> drafts approve normally; warnings or review items need an explicit acknowledgement and a reason, which are recorded. Any edit or regeneration withdraws an approval and re-validates.</p></div></div>
       <div id="cmDrafts" style="font-size:13px;">--</div>
     </div>
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-head"><div><h2 class="card-title">Schedule settings</h2><p class="card-desc">Independent of the production schedule. Checked every 5 minutes; a draft that could not run on time is generated within the catch-up window.</p></div></div>
-        <div class="cm-grid-settings">
-          <label><span><input type="checkbox" id="cmEnabled" /> Automatic generation enabled</span></label>
-          <label><span><input type="checkbox" id="cmPaused" /> Paused</span></label>
-          <label><span><input type="checkbox" id="cmKill" /> Community kill switch</span></label>
-          <label>Generation time<input type="time" id="cmTime" /></label>
-          <label>Timezone<input id="cmTz" maxlength="64" list="cmTzList" /><datalist id="cmTzList"><option value="Asia/Kolkata"></option><option value="UTC"></option><option value="Europe/London"></option><option value="America/New_York"></option></datalist></label>
-          <label>Text<select id="cmTextMode"><option value="template">Templates (no API calls)</option><option value="gemini">Gemini wording (max 2 calls/day)</option></select></label>
-          <label>Catch-up window (hours)<input type="number" id="cmCatchUp" min="0" max="23" /></label>
-          <label>Manual generations per day<input type="number" id="cmManualLimit" min="1" max="10" /></label>
+    <div class="card" id="cmScheduleCard">
+      <div class="card-head"><div><h2 class="card-title">Community Publishing Schedule</h2>
+        <p class="card-desc">Two separate operations. <strong>Draft generation</strong> is when CrazzyDocs creates a Community post draft for your review (configured here). <strong>YouTube publishing</strong> is when an approved post goes public on YouTube (not available yet: you post approved drafts yourself). Independent of the 24-cycle production schedule and of video publishing times.</p></div></div>
+      <div class="grid-2" style="margin:0;">
+        <div>
+          <h3 style="font-size:14px;margin:0 0 8px;">Draft generation time</h3>
+          <div class="cm-grid-settings">
+            <label><span><input type="checkbox" id="cmEnabled" /> Automatic draft generation</span></label>
+            <label><span><input type="checkbox" id="cmPaused" /> Paused</span></label>
+            <label><span><input type="checkbox" id="cmKill" /> Community kill switch</span></label>
+            <label>Timezone preset<select id="cmTzPreset" onchange="cmPickPreset()"><option value="">Choose a preset...</option></select></label>
+            <label>Preferred timezone (IANA, searchable)<input id="cmTz" maxlength="64" list="cmTzList" placeholder="e.g. America/New_York" oninput="cmPreviewSoon()" /><datalist id="cmTzList"></datalist></label>
+            <label>Daily target time (in that timezone)<input type="time" id="cmTime" oninput="cmPreviewSoon()" /></label>
+            <label>Catch-up window (hours)<input type="number" id="cmCatchUp" min="0" max="23" oninput="cmPreviewSoon()" /></label>
+            <label>Max automatic attempts per day<input type="number" id="cmMaxAttempts" min="1" max="3" /></label>
+            <label>Manual generations per day<input type="number" id="cmManualLimit" min="1" max="10" /></label>
+            <label>Text<select id="cmTextMode"><option value="template">Templates (no API calls)</option><option value="gemini">Gemini wording (max 2 calls/day)</option></select></label>
+          </div>
+          <div id="cmTzInfo" style="font-size:12px;color:var(--muted);margin-top:8px;">--</div>
+          <div id="cmPreview" style="font-size:12px;margin-top:6px;">--</div>
+          <div style="margin-top:10px;font-size:12px;color:var(--muted);">Permitted formats</div>
+          <div class="cm-formats" id="cmFormats"></div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm primary" onclick="cmSaveSchedule()">Save schedule</button><span id="cmSchedNote" style="font-size:12px;color:var(--muted);"></span></div>
         </div>
-        <div style="margin-top:10px;font-size:12px;color:var(--muted);">Permitted formats</div>
-        <div class="cm-formats" id="cmFormats"></div>
-        <div class="btn-row" style="margin-top:10px;"><button class="btn sm primary" onclick="cmSaveSchedule()">Save schedule</button><span id="cmSchedNote" style="font-size:12px;color:var(--muted);"></span></div>
+        <div>
+          <h3 style="font-size:14px;margin:0 0 8px;">Current schedule</h3>
+          <div id="cmSchedStatus" style="font-size:13px;">--</div>
+          <div style="margin-top:12px;border:1px dashed var(--border);border-radius:8px;padding:10px;font-size:12px;">
+            <strong>YouTube publishing time</strong> <span class="ops-tag">future capability (Stage 3.32F)</span>
+            <div style="color:var(--muted);margin-top:4px;">Not available. Nothing is published to YouTube by CrazzyDocs. Approve a draft here, then post it yourself in YouTube Studio. Community post publishing through the YouTube API is limited to a pilot programme until general availability (planned for 2027) and would need a broader OAuth permission that this project does not hold.</div>
+          </div>
+        </div>
       </div>
-      <div class="card">
-        <div class="card-head"><div><h2 class="card-title">Notifications</h2><p class="card-desc">Draft ready and generation failures. Also sent to the operator inbox when Autonomy Control allows notifications.</p></div></div>
-        <div id="cmNotes" style="font-size:12px;">--</div>
-      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Notifications</h2><p class="card-desc">Draft ready and generation failures. Also sent to the operator inbox when Autonomy Control allows notifications.</p></div></div>
+      <div id="cmNotes" style="font-size:12px;">--</div>
     </div>
     <div class="card">
       <div class="card-head"><div><h2 class="card-title">History</h2><p class="card-desc">All drafts, searchable. Open one to see its text, image provenance, validation and audit history.</p></div></div>
@@ -3428,8 +3444,9 @@ async function refreshCommunity(force = false) {
     const ks = s.kill_switches || [];
     document.getElementById("cmAuto").innerHTML = ks.length ? `<span class="auto-kill">KILL SWITCH</span>` : cfg.enabled ? (cfg.paused ? `<span style="color:#fcd34d">PAUSED</span>` : `<span class="auto-on">ON</span>`) : `<span class="auto-off">OFF</span>`;
     document.getElementById("cmAutoSub").textContent = s.blocked_reason || `daily at ${cfg.generation_time} ${cfg.timezone}`;
-    document.getElementById("cmNext").textContent = s.next_run_local ? cmLocal(s.next_run_local) : "none";
-    document.getElementById("cmNextSub").textContent = s.state || "";
+    document.getElementById("cmNext").textContent = s.next_run_local ? cmZoned(s.next_run_utc, cfg.timezone) : "none";
+    document.getElementById("cmNextSub").textContent = s.next_run_utc ? `${s.state} · your browser: ${cmBrowser(s.next_run_utc)}` : (s.state || "");
+    cmRenderSchedStatus(s);
     const lr = s.last_run;
     document.getElementById("cmLast").textContent = lr ? cmLocal(lr.started_at_utc) : "never";
     document.getElementById("cmLastSub").textContent = lr ? `${lr.trigger} · ${lr.status}${s.last_successful_run ? "" : " · no success yet"}` : "--";
@@ -3448,6 +3465,9 @@ async function refreshCommunity(force = false) {
       document.getElementById("cmTextMode").value = cfg.text_mode || "template";
       document.getElementById("cmCatchUp").value = cfg.catch_up_hours ?? 12;
       document.getElementById("cmManualLimit").value = cfg.manual_daily_limit ?? 3;
+      document.getElementById("cmMaxAttempts").value = cfg.max_auto_attempts ?? 2;
+      await cmLoadTimezones();
+      cmPreview();
       const on = new Set(cfg.formats || []);
       document.getElementById("cmFormats").innerHTML = cmState.formats.map(f => `<label><input type="checkbox" class="cm-fmt" value="${escHtml(f.id)}" ${on.has(f.id) ? "checked" : ""}/> ${escHtml(f.label)}</label>`).join("");
     }
@@ -3576,14 +3596,86 @@ async function cmToggleDetails(id) {
   cmRenderDrafts(cmActive());
 }
 
+// -- Community Publishing Schedule: timezone-aware display (IANA zones; all instants come from the server in UTC) --
+function cmZoned(utcIso, tz) {
+  if (!utcIso) return "n/a";
+  try { return new Date(utcIso).toLocaleString(undefined, { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }); }
+  catch (_) { return cmLocal(utcIso); }
+}
+function cmBrowser(utcIso) {
+  if (!utcIso) return "n/a";
+  try { return new Date(utcIso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }); }
+  catch (_) { return cmLocal(utcIso); }
+}
+function cmTzLine(t) {
+  if (!t) return "";
+  const dst = !t.observes_dst ? "no daylight saving time" : (t.dst_active ? "daylight saving time in effect" : "standard time");
+  const nxt = t.next_transition_utc ? ` · clocks change ${cmZoned(t.next_transition_utc, t.id)} (to ${escHtml(t.offset_after_transition)})` : "";
+  return `${escHtml(t.id)}: ${escHtml(t.abbreviation || "")} ${escHtml(t.utc_offset)}, ${dst}${nxt}`;
+}
+
+async function cmLoadTimezones() {
+  if (cmState.tz) return;
+  try {
+    cmState.tz = await apiJson("/api/community/timezones");
+    const sel = document.getElementById("cmTzPreset");
+    cmState.tz.presets.forEach(p => { const o = document.createElement("option"); o.value = p.id; o.textContent = `${p.label} · ${p.id} (${p.abbreviation} ${p.utc_offset})`; sel.appendChild(o); });
+    document.getElementById("cmTzList").innerHTML = cmState.tz.zones.map(z => `<option value="${escHtml(z)}"></option>`).join("");
+  } catch (err) { cmState.tz = null; }
+}
+
+function cmPickPreset() {
+  const v = document.getElementById("cmTzPreset").value;
+  if (v) { document.getElementById("cmTz").value = v; cmPreview(); }
+}
+
+let cmPreviewTimer = null;
+function cmPreviewSoon() { clearTimeout(cmPreviewTimer); cmPreviewTimer = setTimeout(cmPreview, 400); }
+
+async function cmPreview() {
+  const tz = document.getElementById("cmTz").value.trim(), t = document.getElementById("cmTime").value;
+  const cu = Number(document.getElementById("cmCatchUp").value || 12);
+  const info = document.getElementById("cmTzInfo"), box = document.getElementById("cmPreview");
+  if (!tz || !t) { box.textContent = "Choose a timezone and a target time."; return; }
+  if (cmState.tz && !cmState.tz.zones.includes(tz)) { info.innerHTML = `<span class="auto-kill">${escHtml(tz)} is not an accepted IANA timezone (fixed offsets such as EST or Etc/GMT+5 are not accepted).</span>`; box.textContent = ""; return; }
+  try {
+    const p = await apiJson(`/api/community/schedule/preview?timezone=${encodeURIComponent(tz)}&generation_time=${encodeURIComponent(t)}&catch_up_hours=${encodeURIComponent(cu)}`);
+    info.innerHTML = cmTzLine(p.timezone);
+    box.innerHTML = `<div><strong>If saved, drafts would be generated at:</strong></div>` + (p.upcoming || []).map(u =>
+      `<div>${escHtml(cmZoned(u.utc, tz))} · your browser: ${escHtml(cmBrowser(u.utc))}${u.dst_note ? ` <span class="ops-tag">${escHtml(u.dst_note)}</span>` : ""}</div>`).join("")
+      + (p.dst_notes || []).slice(0, 2).map(n => `<div style="color:#fcd34d;">${escHtml(n.explanation)}</div>`).join("");
+  } catch (err) { box.innerHTML = `<span class="auto-kill">${escHtml(err.message || String(err))}</span>`; }
+}
+
+function cmRenderSchedStatus(s) {
+  const cfg = s.config || {}, lr = s.last_result, lc = s.last_config_change;
+  const stateColour = { blocked: "#fca5a5", due: "#fcd34d", running: "#93c5fd", retry_pending: "#fcd34d", completed: "#86efac", waiting: "inherit", missed: "#fca5a5", not_enabled_yet: "var(--muted)" };
+  const rows = [
+    ["Automation", cfg.enabled ? (cfg.paused ? "ON (paused)" : "ON") : "OFF"],
+    ["Timezone", `<span>${cmTzLine(s.timezone_details)}</span>`],
+    ["Daily target time", escHtml(`${cfg.generation_time} ${s.timezone_details ? s.timezone_details.abbreviation : ""} (${cfg.timezone})`)],
+    ["Next generation", s.next_run_utc ? `${escHtml(cmZoned(s.next_run_utc, cfg.timezone))}<div style="color:var(--muted)">your browser: ${escHtml(cmBrowser(s.next_run_utc))}</div>`
+                                        : `none${s.next_run_if_enabled_utc ? `<div style="color:var(--muted)">if enabled: ${escHtml(cmZoned(s.next_run_if_enabled_utc, cfg.timezone))} · your browser: ${escHtml(cmBrowser(s.next_run_if_enabled_utc))}</div>` : ""}`],
+    ["Schedule state", `<span style="color:${stateColour[s.state] || "inherit"}">${escHtml(s.state || "")}</span> · ${escHtml(s.state_text || "")}`],
+    ["Catch-up / attempts", escHtml(`${cfg.catch_up_hours} h after the target time · at most ${cfg.max_auto_attempts} automatic attempt(s) per day`)],
+    ["Last generation", lr ? escHtml(`${lr.trigger} · ${lr.run_status}${lr.draft_status ? ` · draft ${lr.draft_status}` : ""}${lr.validation_status ? ` (${lr.validation_status})` : ""} · ${cmBrowser(lr.at_utc)}${lr.error ? ` · ${lr.error.slice(0, 100)}` : ""}`) : "never"],
+    ["Last configuration update", lc ? escHtml(`${lc.by} · ${cmLocal(lc.at_utc)} · ${Object.keys(lc.changes || {}).join(", ")}`) : "never (defaults)"],
+  ];
+  const notes = (s.dst_notes || []).slice(0, 2).map(n => `<div style="color:#fcd34d;font-size:12px;">${escHtml(n.explanation)}</div>`).join("");
+  document.getElementById("cmSchedStatus").innerHTML = opsKV(rows) + notes;
+}
+
 async function cmSaveSchedule() {
   const formats = [...document.querySelectorAll(".cm-fmt")].filter(x => x.checked).map(x => x.value);
   if (!formats.length) { showToast("Choose at least one format.", true); return; }
+  const tz = document.getElementById("cmTz").value.trim();
+  if (cmState.tz && !cmState.tz.zones.includes(tz)) { showToast(`${tz} is not an accepted IANA timezone.`, true); return; }
   const body = { enabled: document.getElementById("cmEnabled").checked, paused: document.getElementById("cmPaused").checked,
     kill_switch: document.getElementById("cmKill").checked, generation_time: document.getElementById("cmTime").value,
-    timezone: document.getElementById("cmTz").value.trim(), text_mode: document.getElementById("cmTextMode").value,
-    catch_up_hours: Number(document.getElementById("cmCatchUp").value), manual_daily_limit: Number(document.getElementById("cmManualLimit").value), formats };
-  if (!(await askConfirm("Save Community schedule?", `Automatic generation: ${body.enabled ? "ON" : "OFF"}${body.paused ? " (paused)" : ""}\nTime: ${body.generation_time} ${body.timezone}\nKill switch: ${body.kill_switch ? "ACTIVE" : "off"}\nText: ${body.text_mode}\nFormats: ${formats.join(", ")}\n\nThis does not change the production schedule.`))) return;
+    timezone: tz, text_mode: document.getElementById("cmTextMode").value,
+    catch_up_hours: Number(document.getElementById("cmCatchUp").value), manual_daily_limit: Number(document.getElementById("cmManualLimit").value),
+    max_auto_attempts: Number(document.getElementById("cmMaxAttempts").value), formats };
+  if (!(await askConfirm("Save the Community draft generation schedule?", `Automatic draft generation: ${body.enabled ? "ON" : "OFF"}${body.paused ? " (paused)" : ""}\nDaily target time: ${body.generation_time} in ${body.timezone}\nCatch-up window: ${body.catch_up_hours} h · max ${body.max_auto_attempts} automatic attempt(s) per day\nKill switch: ${body.kill_switch ? "ACTIVE" : "off"}\nText: ${body.text_mode}\nFormats: ${formats.join(", ")}\n\nThis sets when DRAFTS are generated. It publishes nothing, approves nothing, and does not change the production schedule or video publishing times.`))) return;
   await cmAct("Community schedule saved", () => cmWrite("/api/community/schedule", body));
 }
 

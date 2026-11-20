@@ -138,6 +138,17 @@ def world(tmp_path):
     return World(tmp_path)
 
 
+def enable(world, svc, extra=None):
+    """Switch automation on at 05:30 IST (before the 10:00 target), as an operator would the day before. Windows
+    that began before automation was enabled are never generated retroactively."""
+    saved = world.now[0]
+    world.now[0] = saved.replace(hour=0, minute=0)
+    try:
+        return svc.update_config(OP, {"enabled": True, **(extra or {})})
+    finally:
+        world.now[0] = saved
+
+
 def gen(svc) -> dict:
     out = svc.generate_manual(OP)
     return out["draft"]["draft"]
@@ -175,7 +186,7 @@ def test_channel_relevance_and_excluded_categories(world):
 def test_topic_and_format_rotation_over_a_week(world):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     topics, formats = [], []
     for _ in range(7):
         res = svc.tick()
@@ -616,7 +627,7 @@ def test_ist_schedule_and_next_run(world):
     svc = world.svc()
     svc.store.ensure_schema()
     world.now[0] = datetime(2026, 11, 20, 4, 0, tzinfo=timezone.utc)                       # 09:30 IST
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     st = svc.schedule_status()
     assert st["next_run_utc"] == "2026-11-20T04:30:00.000000Z" and st["next_run_local"].startswith("2026-11-20T10:00:00+05:30")
     assert svc.tick()["status"] == "not_due"
@@ -640,7 +651,7 @@ def test_ist_schedule_and_next_run(world):
 def test_daily_idempotency_and_restart(world):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     assert svc.tick()["status"] == "generated"
     for _ in range(3):
         assert svc.tick()["status"] == "done"
@@ -655,7 +666,7 @@ def test_daily_idempotency_and_restart(world):
 def test_manual_and_scheduled_overlap(world):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     gen(svc)                                                        # manual first
     assert svc.tick()["status"] == "skipped"                        # scheduled run sees the draft and skips
     assert svc.tick()["status"] == "done"
@@ -668,7 +679,7 @@ def test_manual_and_scheduled_overlap(world):
 def test_concurrent_generation_makes_one_draft(world):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True, "manual_daily_limit": 10})
+    enable(world, svc, {"manual_daily_limit": 10})
     results, barrier = [], threading.Barrier(6)
 
     def worker(kind):
@@ -693,7 +704,7 @@ def test_pause_resume_disable(world):
     svc = world.svc()
     svc.store.ensure_schema()
     assert svc.tick()["status"] == "blocked"                       # disabled by default
-    svc.update_config(OP, {"enabled": True, "paused": True})
+    enable(world, svc, {"paused": True})
     assert svc.tick() == {"status": "blocked", "reason": "automatic generation is paused", "recovered": {"runs": 0, "drafts": 0}}
     assert svc.schedule_status()["next_run_local"] is None
     svc.update_config(OP, {"paused": False})
@@ -707,7 +718,7 @@ def test_pause_resume_disable(world):
 def test_failure_and_bounded_retry(world, monkeypatch):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     real = svc.reader.sources
     monkeypatch.setattr(svc.reader, "sources", lambda now: [])           # nothing to post about
     r1 = svc.tick()
@@ -725,7 +736,7 @@ def test_failure_and_bounded_retry(world, monkeypatch):
 def test_retries_stop_after_limit(world, monkeypatch):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     monkeypatch.setattr(svc.reader, "sources", lambda now: [])
     svc.tick()
     world.now[0] += timedelta(minutes=11)
@@ -740,7 +751,7 @@ def test_retries_stop_after_limit(world, monkeypatch):
 def test_missed_window_is_recorded_and_notified(world):
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True, "catch_up_hours": 2})
+    enable(world, svc, {"catch_up_hours": 2})
     world.now[0] = datetime(2026, 11, 20, 8, 0, tzinfo=timezone.utc)                        # 13:30 IST
     assert svc.tick()["status"] == "missed"
     assert svc.tick()["status"] == "done"
@@ -814,7 +825,7 @@ def test_tick_and_reads_before_configuration_create_nothing(world):
 def test_kill_switches_block_all_generation(world, switch):
     svc = world.svc()
     d = gen(svc)
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     world.now[0] += timedelta(days=1)
     if switch == "dashboard":
         svc.update_config(OP, {"kill_switch": True})
@@ -971,7 +982,7 @@ def test_publishing_is_unreachable_from_community_code():
             elif isinstance(node, ast.Import):
                 imported |= {a.name for a in node.names}
     allowed_backend = {"backend.app.community", "backend.app.community.store", "backend.app.community.content",
-                       "backend.app.community.images", "backend.app.community.validation",
+                       "backend.app.community.images", "backend.app.community.validation", "backend.app.community.schedule",
                        "backend.app.autonomy.control_plane", "backend.app.autonomy.registry", "backend.app.core.paths",
                        "backend.app.core.config", "backend.app.content.number_words", "backend.app.content.hook_evaluator"}
     assert {m for m in imported if m.startswith("backend")} <= allowed_backend
@@ -979,7 +990,7 @@ def test_publishing_is_unreachable_from_community_code():
     assert registry.REGISTRY["youtube.community.publish"].prohibited is True
     main_src = (Path(svc_mod.__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     routes = [ln for ln in main_src.splitlines() if ln.startswith("@app.") and "/api/community" in ln]
-    assert len(routes) == 16 and not any("publish" in r or "upload" in r for r in routes)
+    assert len(routes) == 18 and not any("publish" in r or "upload" in r for r in routes)
 
 
 def test_scheduler_job_is_isolated_from_production(monkeypatch):
@@ -1006,7 +1017,7 @@ def test_production_data_untouched_by_full_flow(world, monkeypatch):
     before = world.production_hash()
     svc = world.svc()
     svc.store.ensure_schema()
-    svc.update_config(OP, {"enabled": True})
+    enable(world, svc)
     for _ in range(3):
         r = svc.tick()
         d = svc.detail(r["draft_id"])["draft"]
