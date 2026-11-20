@@ -2445,6 +2445,210 @@ async def api_self_healing_execute(recovery_id: str, req: _AutonomyBody, _: None
     return await _autonomy_call(lambda: _self_healing().execute(recovery_id, req.operator))
 
 
+# -- Stage 3.32E Community post drafts ---------------------------------------------------------------------------
+# Local drafts only: no route here (or anywhere in backend.app.community) can publish. Reads are loopback-only;
+# every write is loopback + same-origin + JSON + per-process CSRF token (require_autonomy_write) with a validated
+# human operator identity, and is recorded in community_events. Images are served by id from the Community folder.
+
+def _community():
+    from backend.app.community.service import get_service
+    return get_service()
+
+
+async def _community_call(fn, *args, **kwargs):
+    from backend.app.community.store import StoreError
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except StoreError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc)[:300])
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail="Community drafts unavailable: database not found.")
+    except HTTPException:
+        raise
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Community draft request failed")
+        raise HTTPException(status_code=503, detail="Community drafts unavailable; no draft was changed.")
+
+
+_COMMUNITY_DRAFT_RE = re.compile(r"^cdraft_[0-9a-f]{16}$")
+
+
+def _community_draft_id(draft_id: str) -> str:
+    if not _COMMUNITY_DRAFT_RE.match(draft_id or ""):
+        raise HTTPException(status_code=404, detail="draft not found")
+    return draft_id
+
+
+class CommunityVersionedRequest(_AutonomyBody):
+    version: int = Field(ge=1, le=1_000_000)
+
+
+class CommunityEditRequest(CommunityVersionedRequest):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class CommunityApproveRequest(CommunityVersionedRequest):
+    acknowledge_warnings: bool = False
+    reason: str = Field(default="", max_length=500)
+
+
+class CommunityRejectRequest(CommunityVersionedRequest):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class CommunityArchiveRequest(CommunityVersionedRequest):
+    reason: str = Field(default="", max_length=500)
+
+
+class CommunityImageRequest(CommunityVersionedRequest):
+    choice: Optional[str] = Field(default=None, max_length=40)
+
+
+class CommunityScheduleRequest(_AutonomyBody):
+    enabled: Optional[bool] = None
+    paused: Optional[bool] = None
+    kill_switch: Optional[bool] = None
+    generation_time: Optional[str] = Field(default=None, max_length=5)
+    timezone: Optional[str] = Field(default=None, max_length=64)
+    formats: Optional[List[str]] = Field(default=None, max_length=8)
+    text_mode: Optional[str] = Field(default=None, max_length=10)
+    excluded_categories: Optional[List[str]] = Field(default=None, max_length=20)
+    catch_up_hours: Optional[int] = Field(default=None, ge=0, le=23)
+    manual_daily_limit: Optional[int] = Field(default=None, ge=1, le=10)
+
+
+@app.get("/api/community")
+async def api_community_overview(_: None = Depends(require_local_control)):
+    return await _community_call(lambda: _community().overview())
+
+
+@app.get("/api/community/schedule")
+async def api_community_schedule(_: None = Depends(require_local_control)):
+    return await _community_call(lambda: _community().schedule_status())
+
+
+@app.post("/api/community/schedule")
+async def api_community_schedule_update(req: CommunityScheduleRequest, _: None = Depends(require_local_control),
+                                        __: None = Depends(require_autonomy_write)):
+    changes = req.model_dump(exclude={"operator"}, exclude_none=True)
+    return await _community_call(lambda: _community().update_config(req.operator, changes))
+
+
+@app.get("/api/community/drafts")
+async def api_community_drafts(status: str = "all", q: str = "", format: str = "", validation: str = "",
+                               date_from: str = "", date_to: str = "", limit: int = 50, offset: int = 0,
+                               _: None = Depends(require_local_control)):
+    from backend.app.community.content import FORMATS
+    from backend.app.community.store import STATUSES, VALIDATION_STATUSES
+    if status not in ("all", "active", "failed") + STATUSES:
+        raise HTTPException(status_code=400, detail="status must be all, active, failed or a draft status")
+    if format and format not in FORMATS:
+        raise HTTPException(status_code=400, detail="unknown format")
+    if validation and validation not in VALIDATION_STATUSES:
+        raise HTTPException(status_code=400, detail="unknown validation status")
+    for d in (date_from, date_to):
+        if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            raise HTTPException(status_code=400, detail="dates must be YYYY-MM-DD")
+    if len(q) > 100:
+        raise HTTPException(status_code=400, detail="search text must be at most 100 characters")
+    if not 1 <= limit <= 200 or not 0 <= offset <= 100000:
+        raise HTTPException(status_code=400, detail="limit must be 1-200 and offset 0-100000")
+    return await _community_call(lambda: {"drafts": _community().list_drafts(
+        status=status, query=q or None, fmt=format or None, validation=validation or None,
+        date_from=date_from or None, date_to=date_to or None, limit=limit, offset=offset),
+        "limit": limit, "offset": offset})
+
+
+@app.get("/api/community/drafts/{draft_id}")
+async def api_community_draft(draft_id: str, _: None = Depends(require_local_control)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().detail(did))
+
+
+@app.get("/api/community/drafts/{draft_id}/validation")
+async def api_community_draft_validation(draft_id: str, _: None = Depends(require_local_control)):
+    did = _community_draft_id(draft_id)
+
+    def _v():
+        d = _community().detail(did)
+        return {"draft_id": did, "validation_status": d["draft"].get("validation_status"),
+                "validation": d["draft"].get("validation"), "image_validation": (d.get("image") or {}).get("validation")}
+    return await _community_call(_v)
+
+
+@app.get("/api/community/drafts/{draft_id}/image-options")
+async def api_community_image_options(draft_id: str, _: None = Depends(require_local_control)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().image_options(did))
+
+
+@app.get("/api/community/images/{image_id}")
+async def api_community_image(image_id: str, _: None = Depends(require_local_control)):
+    if not re.fullmatch(r"cimg_[0-9a-f]{16}", image_id or ""):
+        raise HTTPException(status_code=404, detail="image not found")
+    path = await _community_call(lambda: _community().image_file(image_id))
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store",
+                                                                 "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/community/history")
+async def api_community_history(limit: int = 50, _: None = Depends(require_local_control)):
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return await _community_call(lambda: _community().history(limit))
+
+
+@app.post("/api/community/generate")
+async def api_community_generate(req: _AutonomyBody, _: None = Depends(require_local_control),
+                                 __: None = Depends(require_autonomy_write)):
+    return await _community_call(lambda: _community().generate_manual(req.operator))
+
+
+@app.post("/api/community/drafts/{draft_id}/edit")
+async def api_community_edit(draft_id: str, req: CommunityEditRequest, _: None = Depends(require_local_control),
+                             __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().edit(did, req.operator, req.version, req.text))
+
+
+@app.post("/api/community/drafts/{draft_id}/regenerate-text")
+async def api_community_regen_text(draft_id: str, req: CommunityVersionedRequest, _: None = Depends(require_local_control),
+                                   __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().regenerate_text(did, req.operator, req.version))
+
+
+@app.post("/api/community/drafts/{draft_id}/regenerate-image")
+async def api_community_regen_image(draft_id: str, req: CommunityImageRequest, _: None = Depends(require_local_control),
+                                    __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().regenerate_image(did, req.operator, req.version, req.choice))
+
+
+@app.post("/api/community/drafts/{draft_id}/approve")
+async def api_community_approve(draft_id: str, req: CommunityApproveRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    """Approves the DRAFT only. Nothing is published, uploaded or sent to YouTube."""
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().approve(did, req.operator, req.version, req.acknowledge_warnings,
+                                                              req.reason))
+
+
+@app.post("/api/community/drafts/{draft_id}/reject")
+async def api_community_reject(draft_id: str, req: CommunityRejectRequest, _: None = Depends(require_local_control),
+                               __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().reject(did, req.operator, req.version, req.reason))
+
+
+@app.post("/api/community/drafts/{draft_id}/archive")
+async def api_community_archive(draft_id: str, req: CommunityArchiveRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _community().archive(did, req.operator, req.version, req.reason))
+
+
 @app.get("/api/youtube/quota")
 async def api_youtube_quota(_: None = Depends(require_local_control)):
     """Per-bucket YouTube Data API usage (Stage 3.30): local estimate from sent requests, never Google-reported."""

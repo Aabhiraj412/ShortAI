@@ -920,6 +920,21 @@ def run_junk_cleaner_dry_run() -> Dict:
         return {"outcome": "failed", "error": str(exc)}
 
 
+def run_community_draft_tick() -> Dict:
+    """Stage 3.32E: checks whether today's Community post DRAFT is due and generates it. Independent of production:
+    it reads production data read-only, never touches jobs, cycles or recovery windows, cannot publish, and does
+    nothing at all until an operator configures and enables Community automation."""
+    try:
+        from backend.app.community.service import scheduler_tick
+        res = scheduler_tick()
+        if res.get("status") not in ("not_configured", "blocked", "not_due", "done"):
+            logger.info("[SCHEDULER] Community draft check: %s", {k: res.get(k) for k in ("status", "draft_id", "error")})
+        return res
+    except Exception as exc:
+        logger.warning("[SCHEDULER] Community draft check failed: %s", type(exc).__name__)
+        return {"status": "error", "error": type(exc).__name__}
+
+
 def configure_scheduler_jobs():
     """Configures independent production generation, YouTube status reconciliation, and daily summary jobs."""
     profile = get_active_profile()
@@ -993,6 +1008,19 @@ def configure_scheduler_jobs():
         id="junk_cleaner_dry_run_job",
         replace_existing=True,
         name="Junk Cleaner Dry Run",
+    )
+
+    # 6. Community post drafts (Stage 3.32E): a light "is today's draft due?" check every 5 minutes (minutes 2, 7, ...
+    #    never on a cycle's :00). The generation time, timezone, pause and kill switches live in the Community
+    #    configuration, so changing them needs no scheduler reload. One instance at a time; missed ticks coalesce.
+    scheduler.add_job(
+        run_community_draft_tick,
+        CronTrigger(minute="2-59/5", timezone=profile.tz),
+        id="community_draft_tick",
+        replace_existing=True,
+        name="Community Draft Check",
+        max_instances=1,
+        coalesce=True,
     )
 
     if scheduler.running or os.environ.get("PYTEST_CURRENT_TEST"):

@@ -1,12 +1,12 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-20, about 14:45 IST.
+**As of:** 2026-11-20, evening IST (Stage 3.32E implemented, uncommitted).
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
-**Development worktree:** `.claude\worktrees\crazzy-docs-verify-capabilities-ac634e`, branch `claude/scheduler-redesign-render-fix`. Same commit as `main`.
+**Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, at `687c156` plus the uncommitted Stage 3.32E work.
 
-**Latest commit:** `710b8c5`, on `main`, `origin/main` and the worktree.
+**Latest commit:** `687c156`, on `main` and `origin/main`.
 
 ## 1. Architecture
 
@@ -58,7 +58,8 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | `5b2a4ad` | 3.32C: Recommendation Engine and the Recommendations tab |
 | `d2e0928` | 3.32D: Self-Healing Operations and the Self-Healing tab |
 | `710b8c5` | 3.32D final security audit fixes, plus 99 security tests |
-| (uncommitted, worktree `crazzy-docs-handover-b1a088`) | 3.32D re-verification: F9 (exact media Content-Type) and F10 (embedded private IPv4 in IPv6), plus 11 tests. Suite: 1220 passed / 4 baseline failures / 173 skipped |
+| `687c156` | 3.32D re-verification: F9 (exact media Content-Type) and F10 (embedded private IPv4 in IPv6), plus 11 tests |
+| (uncommitted, worktree `crazzy-docs-handover-b1a088`) | **3.32E: Community post draft automation**: `backend/app/community/`, 16 `/api/community` routes, Community Posts tab, `community_draft_tick` scheduler job, 75 tests, 6 docs (`docs/STAGE_3_32E_*.md`). Not deployed, not activated |
 
 **Test baseline at `710b8c5`:** 1208 passed, 5 failed, 173 skipped. The 5 failures are pre-existing (section 4).
 
@@ -68,13 +69,15 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 
 | Item | State |
 |---|---|
-| Daemon | PID 7648 (started 13:34 IST), code `d2e0928`. **Stale** vs disk (`710b8c5`); harmless, as the daemon does not use the changed modules. |
-| Dashboard | PID 15704 (started 13:36 IST), code `d2e0928`. **Stale**: the audit fixes are not live yet. |
-| Monitor | **Not running** since the Windows Update reboot at 13:33 IST. A stopped dashboard is not relaunched automatically. |
+| Restart at 15:23:59 IST | The computer was restarted from the Start menu under the user's account (System event 1074). At logon the scheduled tasks relaunched everything from the files on disk (`687c156`). No backup was taken for this implicit deployment. |
+| Daemon | PID 5244 (started 15:24:33 IST), code `687c156` (loaded revision `72f4aceffb72cf74`). |
+| Dashboard | PID 5252 (started 15:24:33 IST), code `687c156`. The 3.32D audit fixes (F1–F10) are therefore **live**. Stage 3.32E is not committed, so it is not running. |
+| Monitor | PID 5260 (`startup_manager.py --monitor`), running again since the 15:24 restart. |
 | Schedule | Active revision `ccf0bd04f159`, CUSTOM 24 cycles, named profile "24/7", daemon in sync. |
 | Jobs | 45 completed, 12 failed, 40 recovery-window-expired, 1 aborted. |
 | Autonomy | All levels OFF; startup kill switch active (no `autonomy_startup.json`); 0 requests, 0 executions. |
-| Self-healing | BLOCKED; its six `selfheal_*` tables exist and are empty (created by a read before fix F6). |
+| Self-healing | BLOCKED (startup kill switch), level OFF; its six `selfheal_*` tables exist and are empty. |
+| Community drafts (3.32E) | Not deployed. The live database has no `community_*` tables. |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
 | Latest backup | `D:\Agents\CrazzyDocs_backups\deploy_5b2a4ad_20261120_111917` |
 
@@ -97,7 +100,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 1. **Deploy `710b8c5` to the dashboard**: the exact next task (section 7).
 2. **Fix the FFmpeg padding defect** (bug 1). This is the largest source of lost cycles.
-3. **3.32E**: Community posts in DRAFT mode. Local, daily, validated drafts; no API calls.
+3. **3.32E**: Community posts in DRAFT mode. **Implemented and tested, awaiting commit authorization.** Activation needs a dashboard restart (API and tab), a daemon restart (scheduler job, separate approval), then enabling it in Community Posts → Schedule settings. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7.
 4. **3.32G**: controlled autopilot rollout. Phased activation (OBSERVE, then RECOMMEND, then standing diagnostics only) with weekly reports and kill-switch drills. **Each gate needs user approval.**
 5. **3.32F**: Community API publishing. **BLOCKED** on YouTube posts API access, a separate `youtube.force-ssl` consent, and 30 clean days of 3.32E.
 
@@ -132,26 +135,20 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-**Deploy `710b8c5` to the dashboard only, with autonomy disabled.** Do this only after the user explicitly authorizes the deployment.
+The 15:24 restart already put `687c156` (3.32D plus the audit fixes) into production, so the old "deploy `710b8c5`" task is done in effect. It had no pre-deployment backup; take one before the next deployment.
 
-1. **Pre-check (read-only):**
-   - `main` = `origin/main` = `710b8c5`;
-   - no active job (`/api/control-center/deployment` shows `worker.active_job_id` null);
-   - current time between :10 and :50 IST.
-2. **Back up** into a new folder `D:\Agents\CrazzyDocs_backups\deploy_710b8c5_<timestamp>`:
-   - `studio.db` via the SQLite online backup, then an integrity check;
-   - the config files;
-   - a git bundle, the uncommitted-changes patch and the git status.
-3. **Restart the dashboard:**
-   - check the dashboard PID (currently 15704) by its command line, then stop only that process;
-   - wait at least 12 s;
-   - run `Start-ScheduledTask CrazzyDocs-Health-Dashboard` (the monitor will not relaunch it).
-   - **Do not restart the daemon.**
-4. **Verify:**
-   - the dashboard reports `stale_code: false` on the new revision;
-   - `/api/self-healing` reports mode BLOCKED (`startup_config`) and `initialized`;
-   - the Self-Healing, Recommendations, Operations, Autonomy and Schedule tabs load without console errors;
-   - all GET endpoints return 200;
-   - autonomy levels are all OFF and there are 0 requests;
-   - the schedule `ccf0bd04f159` is unchanged and the daemon PID is unchanged.
-5. **Report**, then stop. Leave activation (3.32G) for a separate, explicit decision.
+**Next: commit Stage 3.32E, then deploy it.** Each step needs the user's explicit authorization.
+
+1. **Commit and push** the 3.32E work from worktree `crazzy-docs-handover-b1a088` (fast-forward `main`, push, verify that `ls-remote` matches).
+2. **Back up** `studio.db` (SQLite online backup and integrity check), the configuration files and the git state, into a new `D:\Agents\CrazzyDocs_backups\deploy_<sha>_<timestamp>` folder.
+3. **Restart the dashboard** (API and Community Posts tab):
+   - between :10 and :50, with no active job;
+   - check the PID's command line, stop only that PID, wait at least 12 s, then run `Start-ScheduledTask CrazzyDocs-Health-Dashboard`;
+   - the monitor is running now and may relaunch it itself, so check for a duplicate.
+4. **Restart the scheduler daemon** to load the `community_draft_tick` job. This needs **separate approval**, because the daemon runs production; same idle and timing checks.
+5. **Verify:**
+   - `/api/community` returns `configured: false`;
+   - the live database has no `community_*` tables until the first save;
+   - the production schedule `ccf0bd04f159` is unchanged;
+   - autonomy is OFF and self-healing is BLOCKED.
+6. **Activation** is a separate decision: in Community Posts, try Generate now, then enable automatic generation at 10:00 Asia/Kolkata. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7.

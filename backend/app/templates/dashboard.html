@@ -217,6 +217,18 @@
     gap: 12px;
   }
   .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  /* Stage 3.32E Community Posts */
+  .cm-draft { display: grid; grid-template-columns: 220px 1fr; gap: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .cm-draft img { width: 220px; height: 220px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: #0b1220; }
+  .cm-noimg { width: 220px; height: 220px; border-radius: 8px; border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; text-align: center; padding: 8px; }
+  .cm-text { white-space: pre-wrap; font-size: 14px; line-height: 1.45; background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px; margin: 6px 0; overflow-wrap: anywhere; }
+  .cm-draft textarea { width: 100%; min-height: 150px; font: inherit; font-size: 13px; }
+  .cm-grid-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 16px; font-size: 13px; }
+  .cm-grid-settings label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+  .cm-formats { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+  .cm-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .cm-draft > div { min-width: 0; }
+  @media (max-width: 700px) { .cm-draft { grid-template-columns: minmax(0, 1fr); } .cm-draft img, .cm-noimg { width: 100%; max-width: 100%; height: auto; aspect-ratio: 1 / 1; } }
   .btn {
     padding: 8px 14px;
     border-radius: 9px;
@@ -361,6 +373,7 @@
     <button class="tab-btn" data-tab="ops" onclick="switchTab('ops', this)">Operations</button>
     <button class="tab-btn" data-tab="recs" onclick="switchTab('recs', this)">Recommendations</button>
     <button class="tab-btn" data-tab="heal" onclick="switchTab('heal', this)">Self-Healing</button>
+    <button class="tab-btn" data-tab="community" onclick="switchTab('community', this)">Community Posts</button>
     <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
     <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
     <button class="tab-btn" data-tab="autonomy" onclick="switchTab('autonomy', this)">Autonomy Control</button>
@@ -991,6 +1004,68 @@
     </div>
   </section>
 
+  <!-- STAGE 3.32E: COMMUNITY POST DRAFTS -->
+  <section id="tab-community" class="tab-panel">
+    <div class="card" style="padding:12px 16px;">
+      <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Community Posts</h2>
+        <p class="card-desc">One Community post <strong>draft</strong> a day, built from our own research and licensed images, validated and kept here for your review. <strong>Nothing is ever published</strong>: approving a draft only marks it ready for you to post by hand in YouTube Studio. Generation is independent of video production.</p></div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <label for="cmOperator" style="font-size:12px;color:var(--muted);">Operator</label>
+          <input id="cmOperator" maxlength="64" placeholder="your name" style="width:130px;" />
+          <button class="btn sm primary" id="cmGenerateBtn" onclick="cmGenerate()">Generate now</button>
+          <button class="btn sm" onclick="refreshCommunity(true)">Refresh</button></div></div>
+      <div class="meta" style="font-size:12px;" id="cmMeta">Open this tab to load.</div>
+    </div>
+    <div class="overview-grid">
+      <div class="kpi-card"><div class="kpi-label">Automation</div><div class="kpi-val" id="cmAuto">--</div><div class="kpi-sub" id="cmAutoSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Next generation</div><div class="kpi-val" id="cmNext" style="font-size:18px;">--</div><div class="kpi-sub" id="cmNextSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Last generation</div><div class="kpi-val" id="cmLast" style="font-size:18px;">--</div><div class="kpi-sub" id="cmLastSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Ready for review</div><div class="kpi-val" id="cmReady" style="color:#fcd34d;">--</div><div class="kpi-sub" id="cmWarn">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Approved / rejected</div><div class="kpi-val" id="cmDecided">--</div><div class="kpi-sub">drafts only, never published</div></div>
+      <div class="kpi-card"><div class="kpi-label">Failed</div><div class="kpi-val" id="cmFailed" style="color:#fca5a5;">--</div><div class="kpi-sub" id="cmFailedSub">--</div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Draft workspace</h2><p class="card-desc">Active drafts. Only <strong>VALID</strong> drafts approve normally; warnings or review items need an explicit acknowledgement and a reason, which are recorded. Any edit or regeneration withdraws an approval and re-validates.</p></div></div>
+      <div id="cmDrafts" style="font-size:13px;">--</div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><div><h2 class="card-title">Schedule settings</h2><p class="card-desc">Independent of the production schedule. Checked every 5 minutes; a draft that could not run on time is generated within the catch-up window.</p></div></div>
+        <div class="cm-grid-settings">
+          <label><span><input type="checkbox" id="cmEnabled" /> Automatic generation enabled</span></label>
+          <label><span><input type="checkbox" id="cmPaused" /> Paused</span></label>
+          <label><span><input type="checkbox" id="cmKill" /> Community kill switch</span></label>
+          <label>Generation time<input type="time" id="cmTime" /></label>
+          <label>Timezone<input id="cmTz" maxlength="64" list="cmTzList" /><datalist id="cmTzList"><option value="Asia/Kolkata"></option><option value="UTC"></option><option value="Europe/London"></option><option value="America/New_York"></option></datalist></label>
+          <label>Text<select id="cmTextMode"><option value="template">Templates (no API calls)</option><option value="gemini">Gemini wording (max 2 calls/day)</option></select></label>
+          <label>Catch-up window (hours)<input type="number" id="cmCatchUp" min="0" max="23" /></label>
+          <label>Manual generations per day<input type="number" id="cmManualLimit" min="1" max="10" /></label>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--muted);">Permitted formats</div>
+        <div class="cm-formats" id="cmFormats"></div>
+        <div class="btn-row" style="margin-top:10px;"><button class="btn sm primary" onclick="cmSaveSchedule()">Save schedule</button><span id="cmSchedNote" style="font-size:12px;color:var(--muted);"></span></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2 class="card-title">Notifications</h2><p class="card-desc">Draft ready and generation failures. Also sent to the operator inbox when Autonomy Control allows notifications.</p></div></div>
+        <div id="cmNotes" style="font-size:12px;">--</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">History</h2><p class="card-desc">All drafts, searchable. Open one to see its text, image provenance, validation and audit history.</p></div></div>
+      <div class="cm-filters">
+        <input id="cmQ" maxlength="100" placeholder="search text or topic" style="width:180px;" onkeydown="if(event.key==='Enter')cmLoadHistory()" />
+        <select id="cmHStatus"><option value="all">All statuses</option><option value="active">Active</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option><option value="ARCHIVED">Archived</option><option value="failed">Failed</option><option value="CANCELLED">Cancelled</option></select>
+        <select id="cmHFormat"><option value="">All formats</option></select>
+        <select id="cmHValid"><option value="">Any validation</option><option value="VALID">Valid</option><option value="VALID_WITH_WARNINGS">With warnings</option><option value="NEEDS_OPERATOR_REVIEW">Needs review</option><option value="REJECTED">Rejected</option></select>
+        <input type="date" id="cmFrom" /><input type="date" id="cmTo" />
+        <button class="btn sm" onclick="cmLoadHistory()">Search</button>
+      </div>
+      <div id="cmHistory" style="font-size:12px;overflow-x:auto;margin-top:8px;">--</div>
+      <div id="cmHistoryDetail" style="margin-top:8px;"></div>
+      <details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:12px;">Generation runs</summary><div id="cmRuns" style="font-size:12px;margin-top:6px;overflow-x:auto;">--</div></details>
+    </div>
+  </section>
+
   <!-- STAGE 3.32B: AUTONOMY CONTROL PLANE -->
   <section id="tab-autonomy" class="tab-panel">
     <div class="card" style="padding:12px 16px;">
@@ -1226,6 +1301,7 @@ function switchTab(tabId, btn) {
   if (tabId === "autonomy") { refreshAutonomy(true); }
   if (tabId === "recs") { refreshRecommendations(true); }
   if (tabId === "heal") { refreshSelfHealing(true); }
+  if (tabId === "community") { refreshCommunity(true); }
 }
 
 async function refreshOverviewAndHealth() {
@@ -3230,6 +3306,288 @@ setInterval(refreshAutonomyPill, 60000);   // one small status GET
 setInterval(() => refreshAutonomy(), 60000);   // only loads while the Autonomy Control tab is open
 setInterval(() => refreshRecommendations(), 120000);   // only loads while the Recommendations tab is open
 setInterval(() => refreshSelfHealing(), 120000);   // only loads while the Self-Healing tab is open
+
+// Stage 3.32E Community Posts. Loads only while the tab is open. Every write sends the operator identity, the
+// per-process CSRF token and the draft version it was shown (stale views are refused with 409). Nothing publishes.
+const cmState = { formats: [], drafts: {}, editing: new Set(), options: {}, open: null, busy: false };
+const CM_VALID = { VALID: "#86efac", VALID_WITH_WARNINGS: "#fcd34d", NEEDS_OPERATOR_REVIEW: "#fdba74", REJECTED: "#fca5a5" };
+const CM_STATUS = { READY_FOR_REVIEW: "#fcd34d", APPROVED: "#86efac", REJECTED: "#fca5a5", ARCHIVED: "var(--muted)",
+  GENERATION_FAILED: "#fca5a5", IMAGE_FAILED: "#fca5a5", VALIDATION_FAILED: "#fca5a5", CANCELLED: "var(--muted)" };
+
+function cmOperator() {
+  const el = document.getElementById("cmOperator");
+  let v = ((el && el.value) || "").trim();
+  if (!v) { try { v = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} if (el) el.value = v; }
+  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
+  return v;
+}
+
+async function cmWrite(url, body) {
+  const op = cmOperator();
+  if (!op) throw new Error("Enter your operator name first.");
+  if (!autoState.csrf) {
+    const s = await apiJson("/api/autonomy/session");
+    autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
+  }
+  try {
+    return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
+                                body: JSON.stringify({ operator: op, ...body }) });
+  } catch (err) { if (/CSRF/i.test(err.message || "")) autoState.csrf = null; throw err; }
+}
+
+function cmLocal(iso) { if (!iso) return "n/a"; try { return new Date(iso).toLocaleString(); } catch (_) { return escHtml(iso); } }
+
+function cmChecks(v) {
+  if (!v) return `<div style="color:var(--muted)">Not validated yet.</div>`;
+  const items = [...(v.errors || []).map(c => ["error", c]), ...(v.reviews || []).map(c => ["review", c]), ...(v.warnings || []).map(c => ["warning", c])];
+  if (!items.length) return `<div style="color:#86efac;">All ${((v.text || []).length + (v.image || []).length)} checks passed.</div>`;
+  const col = { error: "#fca5a5", review: "#fdba74", warning: "#fcd34d" };
+  return items.map(([s, c]) => `<div><span class="ops-tag" style="color:${col[s]}">${escHtml(s)}</span> ${escHtml(c.check)}: ${escHtml(c.detail || "")}</div>`).join("");
+}
+
+function cmProvenance(img) {
+  if (!img) return "no image";
+  const p = img.provenance || {};
+  const bits = [img.method === "licensed_asset" ? `Licensed image (${escHtml(img.licence || "?")})` : "Generated title card (own work)"];
+  if (p.title) bits.push(`"${escHtml(p.title)}"`);
+  if (p.creator) bits.push(`by ${escHtml(p.creator)}`);
+  if (p.source) bits.push(`via ${escHtml(p.source)}`);
+  if (p.production_job) bits.push(`from production ${escHtml(p.production_job)}`);
+  return bits.join(" ") + ` · ${escHtml(img.width)}x${escHtml(img.height)} · ${Math.round((img.bytes || 0) / 1024)} KB`;
+}
+
+function cmDraftCard(d, detail) {
+  const id = escHtml(d.id), ver = escHtml(d.version);
+  const img = detail && detail.image;
+  const editing = cmState.editing.has(d.id);
+  const ready = d.status === "READY_FOR_REVIEW";
+  const btn = (label, fn, extra = "") => `<button class="btn sm${extra}" data-id="${id}" data-ver="${ver}" onclick="${fn}(this.dataset.id, Number(this.dataset.ver))">${label}</button>`;
+  const opts = cmState.options[d.id];
+  const gen = d.generation || {};
+  return `<div class="cm-draft">`
+    + (d.image_url ? `<img src="${escHtml(d.image_url)}?v=${ver}" alt="Draft image" loading="lazy" />` : `<div class="cm-noimg">${d.status === "IMAGE_FAILED" ? "Image needs attention" : "No image yet"}</div>`)
+    + `<div><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">`
+    + `<div><strong>${escHtml(d.post_date)}</strong> · ${escHtml(d.format_label || d.format || "no format")} · <span style="color:${CM_STATUS[d.status] || "inherit"}">${escHtml(d.status)}</span>`
+    + (d.validation_status ? ` · <span class="ops-tag" style="color:${CM_VALID[d.validation_status] || "inherit"}">${escHtml(d.validation_status)}</span>` : "") + `</div>`
+    + `<div style="color:var(--muted);font-size:12px;">${escHtml(d.char_count)} chars · v${ver} · ${cmLocal(d.created_at_utc)}</div></div>`
+    + `<div style="color:var(--muted);font-size:12px;">Topic: ${escHtml(d.topic_title || "n/a")} · ${escHtml(d.category || "")} · source ${escHtml(d.source_kind || "")} ${escHtml(d.source_ref || "")}${gen.answer ? ` · quiz answer: <strong>${escHtml(gen.answer)}</strong> (${escHtml(gen.answer_value)})` : ""}</div>`
+    + (editing ? `<textarea id="cmEdit_${id}" maxlength="2000">${escHtml(d.text || "")}</textarea>` : `<div class="cm-text">${escHtml(d.text || "(no text)")}</div>`)
+    + (d.status_reason ? `<div style="color:#fca5a5;font-size:12px;">${escHtml(d.status_reason)}</div>` : "")
+    + `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Image: ${cmProvenance(img)}</div>`
+    + `<div style="font-size:12px;margin-bottom:6px;">${cmChecks(d.validation)}</div>`
+    + `<div class="btn-row">`
+    + (editing ? btn("Save text", "cmSaveEdit", " primary") + btn("Cancel", "cmCancelEdit")
+              : (["READY_FOR_REVIEW", "APPROVED", "VALIDATION_FAILED"].includes(d.status) ? btn("Edit", "cmStartEdit") : ""))
+    + (["READY_FOR_REVIEW", "APPROVED", "VALIDATION_FAILED", "GENERATION_FAILED"].includes(d.status) ? btn("Regenerate text", "cmRegenText") : "")
+    + (["READY_FOR_REVIEW", "APPROVED", "VALIDATION_FAILED", "IMAGE_FAILED"].includes(d.status) ? btn("Regenerate image", "cmRegenImage") + btn("Replace image", "cmLoadOptions") : "")
+    + (ready && d.approvable ? btn(d.needs_acknowledgement ? "Approve with acknowledgement" : "Approve draft", "cmApprove", " primary") : "")
+    + (ready ? btn("Reject", "cmReject") : "")
+    + (["READY_FOR_REVIEW", "APPROVED", "REJECTED", "GENERATION_FAILED", "IMAGE_FAILED", "VALIDATION_FAILED"].includes(d.status) ? btn("Archive", "cmArchive") : "")
+    + btn(cmState.open === d.id ? "Hide details" : "Details", "cmToggleDetails")
+    + `</div>`
+    + (ready ? `<input id="cmReason_${id}" maxlength="500" placeholder="reason (required to reject or to approve with warnings)" style="width:100%;margin-top:6px;" />` : "")
+    + (opts ? `<div style="margin-top:6px;" class="btn-row"><select id="cmOpt_${id}">${opts.map(o => `<option value="${escHtml(o.choice)}">${escHtml(o.title || o.choice)} · ${escHtml(o.licence)}${o.used_by_another_draft ? " · used before" : ""}</option>`).join("")}</select>${btn("Use this image", "cmReplaceImage", " primary")}</div>` : "")
+    + (cmState.open === d.id ? cmDetailsHtml(detail) : "")
+    + `</div></div>`;
+}
+
+function cmDetailsHtml(detail) {
+  if (!detail) return `<div style="color:var(--muted)">Loading...</div>`;
+  if (detail.error) return `<div class="auto-kill">${escHtml(detail.error)}</div>`;
+  const d = detail.draft || {}, g = d.generation || {}, ev = detail.events || [];
+  const sel = g.selection || {};
+  return `<div style="margin-top:8px;font-size:12px;border-top:1px solid var(--border);padding-top:8px;">`
+    + opsKV([["Text mode", escHtml(g.text_mode || "template") + (g.gemini ? ` (${escHtml(JSON.stringify(g.gemini))})` : "")],
+             ["Selection", escHtml(`${sel.eligible ?? "?"} eligible of ${sel.candidates ?? "?"} topics; rotation ${(sel.format_rotation || []).join(" > ")}`)],
+             ["Fact used", escHtml(g.fact_used || "n/a")], ["Research excerpt", escHtml((detail.corpus_excerpt || "").slice(0, 600))],
+             ["Run", escHtml(detail.run ? `${detail.run.trigger} · ${detail.run.status} · ${JSON.stringify(detail.run.metrics || {})}` : "n/a")]])
+    + `<div style="margin-top:6px;"><strong>Audit history</strong></div>`
+    + `<table class="ops-table"><thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Detail</th></tr></thead><tbody>`
+    + ev.map(e => `<tr><td>${cmLocal(e.created_at_utc)}</td><td>${escHtml(e.event)}</td><td>${escHtml(e.actor)}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml(JSON.stringify(e.detail || {}).slice(0, 400))}</td></tr>`).join("")
+    + `</tbody></table></div>`;
+}
+
+async function cmRenderDrafts(list) {
+  const details = {};
+  await Promise.all(list.map(async d => { try { details[d.id] = await apiJson(`/api/community/drafts/${encodeURIComponent(d.id)}`); } catch (err) { details[d.id] = { error: err.message }; } }));
+  cmState.drafts = details;
+  document.getElementById("cmDrafts").innerHTML = list.map(d => cmDraftCard((details[d.id] && details[d.id].draft) || d, details[d.id])).join("")
+    || `<div style="color:var(--muted)">No active draft. Use Generate now, or enable automatic generation below.</div>`;
+}
+
+async function refreshCommunity(force = false) {
+  const panel = document.getElementById("tab-community");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  if (!force && cmState.editing.size) return;            // never overwrite text the operator is editing
+  cmOperator();
+  const meta = document.getElementById("cmMeta");
+  try {
+    const ov = await apiJson("/api/community");
+    const s = ov.schedule || {}, cfg = s.config || {}, c = ov.counts || {};
+    cmState.formats = ov.formats || [];
+    const ks = s.kill_switches || [];
+    document.getElementById("cmAuto").innerHTML = ks.length ? `<span class="auto-kill">KILL SWITCH</span>` : cfg.enabled ? (cfg.paused ? `<span style="color:#fcd34d">PAUSED</span>` : `<span class="auto-on">ON</span>`) : `<span class="auto-off">OFF</span>`;
+    document.getElementById("cmAutoSub").textContent = s.blocked_reason || `daily at ${cfg.generation_time} ${cfg.timezone}`;
+    document.getElementById("cmNext").textContent = s.next_run_local ? cmLocal(s.next_run_local) : "none";
+    document.getElementById("cmNextSub").textContent = s.state || "";
+    const lr = s.last_run;
+    document.getElementById("cmLast").textContent = lr ? cmLocal(lr.started_at_utc) : "never";
+    document.getElementById("cmLastSub").textContent = lr ? `${lr.trigger} · ${lr.status}${s.last_successful_run ? "" : " · no success yet"}` : "--";
+    document.getElementById("cmReady").textContent = c.ready_for_review ?? 0;
+    document.getElementById("cmWarn").textContent = `${c.validation_warnings || 0} active with warnings or review items`;
+    document.getElementById("cmDecided").textContent = `${c.approved || 0} / ${c.rejected || 0}`;
+    document.getElementById("cmFailed").textContent = c.failed_drafts ?? 0;
+    document.getElementById("cmFailedSub").textContent = `${c.failed_runs || 0} failed or abandoned run(s)`;
+    meta.innerHTML = `${escHtml((ov.publishing || {}).note || "")}` + (s.configured ? "" : ` · <span style="color:#fcd34d;">Not configured yet: nothing runs until you save the schedule or generate a draft.</span>`);
+    if (!document.activeElement || !document.activeElement.closest || !document.activeElement.closest(".cm-grid-settings, #cmFormats")) {
+      document.getElementById("cmEnabled").checked = !!cfg.enabled;
+      document.getElementById("cmPaused").checked = !!cfg.paused;
+      document.getElementById("cmKill").checked = !!cfg.kill_switch;
+      document.getElementById("cmTime").value = cfg.generation_time || "10:00";
+      document.getElementById("cmTz").value = cfg.timezone || "Asia/Kolkata";
+      document.getElementById("cmTextMode").value = cfg.text_mode || "template";
+      document.getElementById("cmCatchUp").value = cfg.catch_up_hours ?? 12;
+      document.getElementById("cmManualLimit").value = cfg.manual_daily_limit ?? 3;
+      const on = new Set(cfg.formats || []);
+      document.getElementById("cmFormats").innerHTML = cmState.formats.map(f => `<label><input type="checkbox" class="cm-fmt" value="${escHtml(f.id)}" ${on.has(f.id) ? "checked" : ""}/> ${escHtml(f.label)}</label>`).join("");
+    }
+    const hf = document.getElementById("cmHFormat");
+    if (hf && hf.options.length <= 1) cmState.formats.forEach(f => { const o = document.createElement("option"); o.value = f.id; o.textContent = f.label; hf.appendChild(o); });
+    document.getElementById("cmSchedNote").textContent = ks.length ? `Kill switch: ${ks.join(", ")}` : "";
+    const notes = ov.notifications || [];
+    document.getElementById("cmNotes").innerHTML = notes.length ? notes.map(n => `<div style="margin-bottom:6px;"><span class="ops-tag">${escHtml(n.severity)}</span> <strong>${escHtml(n.subject)}</strong> · ${cmLocal(n.created_at_utc)} · ${escHtml(n.delivery)}<div style="color:var(--muted)">${escHtml(n.message)}</div></div>`).join("") : `<div style="color:var(--muted)">No notifications.</div>`;
+    await cmRenderDrafts(ov.active_drafts || []);
+    await cmLoadHistory();
+  } catch (err) {
+    if (meta) meta.innerHTML = `<span class="auto-kill">Community Posts unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
+async function cmLoadHistory() {
+  const p = new URLSearchParams({ status: document.getElementById("cmHStatus").value, limit: "50" });
+  const q = document.getElementById("cmQ").value.trim(); if (q) p.set("q", q);
+  const f = document.getElementById("cmHFormat").value; if (f) p.set("format", f);
+  const v = document.getElementById("cmHValid").value; if (v) p.set("validation", v);
+  const a = document.getElementById("cmFrom").value; if (a) p.set("date_from", a);
+  const b = document.getElementById("cmTo").value; if (b) p.set("date_to", b);
+  try {
+    const [res, hist] = await Promise.all([apiJson(`/api/community/drafts?${p.toString()}`), apiJson("/api/community/history?limit=30")]);
+    const rows = res.drafts || [];
+    document.getElementById("cmHistory").innerHTML = rows.length ? `<table class="ops-table"><thead><tr><th>Date</th><th>Format</th><th>Topic</th><th>Status</th><th>Validation</th><th>Decided by</th><th></th></tr></thead><tbody>`
+      + rows.map(d => `<tr><td>${escHtml(d.post_date)}</td><td>${escHtml(d.format_label || "")}</td><td>${escHtml((d.topic_title || "").slice(0, 60))}</td><td style="color:${CM_STATUS[d.status] || "inherit"}">${escHtml(d.status)}</td><td>${escHtml(d.validation_status || "n/a")}</td><td>${escHtml(d.decided_by || "")}</td><td><button class="btn sm" data-id="${escHtml(d.id)}" onclick="cmOpenHistory(this.dataset.id)">Open</button></td></tr>`).join("")
+      + `</tbody></table>` : `<div style="color:var(--muted)">No drafts match.</div>`;
+    const runs = hist.runs || [];
+    document.getElementById("cmRuns").innerHTML = runs.length ? `<table class="ops-table"><thead><tr><th>Started</th><th>Date</th><th>Trigger</th><th>Status</th><th>Attempts</th><th>Duration</th><th>Error</th></tr></thead><tbody>`
+      + runs.map(r => `<tr><td>${cmLocal(r.started_at_utc)}</td><td>${escHtml(r.post_date)}</td><td>${escHtml(r.trigger)}</td><td>${escHtml(r.status)}</td><td>${escHtml(r.attempts)}</td><td>${escHtml((r.metrics || {}).total_ms != null ? r.metrics.total_ms + " ms" : "")}</td><td>${escHtml((r.error || "").slice(0, 140))}</td></tr>`).join("")
+      + `</tbody></table>` : "No runs yet.";
+  } catch (err) {
+    document.getElementById("cmHistory").innerHTML = `<span class="auto-kill">${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
+async function cmOpenHistory(id) {
+  const box = document.getElementById("cmHistoryDetail");
+  try {
+    const det = await apiJson(`/api/community/drafts/${encodeURIComponent(id)}`);
+    cmState.open = id;
+    box.innerHTML = cmDraftCard(det.draft, det);
+    cmState.drafts[id] = det;
+  } catch (err) { box.innerHTML = `<span class="auto-kill">${escHtml(err.message || String(err))}</span>`; }
+}
+
+async function cmAct(label, fn) {
+  if (cmState.busy) return;
+  cmState.busy = true;
+  try { await fn(); showToast(label); }
+  catch (err) { showToast(err.message || String(err), true); }
+  finally { cmState.busy = false; refreshCommunity(true); }
+}
+
+async function cmGenerate() {
+  if (!(await askConfirm("Generate a Community draft now?", "Creates today's draft from our research and licensed images, then validates it. Nothing is published."))) return;
+  const b = document.getElementById("cmGenerateBtn"); if (b) b.disabled = true;
+  try { await cmAct("Draft generated", () => cmWrite("/api/community/generate", {})); } finally { if (b) b.disabled = false; }
+}
+
+function cmActive() { return Object.values(cmState.drafts).map(x => x && x.draft).filter(x => x && x.active); }
+function cmStartEdit(id) { cmState.editing.add(id); cmRenderDrafts(cmActive()); }
+function cmCancelEdit(id) { cmState.editing.delete(id); refreshCommunity(true); }
+
+async function cmSaveEdit(id, ver) {
+  const el = document.getElementById(`cmEdit_${id}`);
+  const text = el ? el.value : "";
+  await cmAct("Text saved and re-validated", async () => { await cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/edit`, { version: ver, text }); cmState.editing.delete(id); });
+}
+
+async function cmRegenText(id, ver) {
+  if (!(await askConfirm("Regenerate the text?", "Writes new wording (and sometimes a different format) from the same research, then re-validates. An approval is withdrawn."))) return;
+  await cmAct("Text regenerated", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/regenerate-text`, { version: ver }));
+}
+
+async function cmRegenImage(id, ver) {
+  if (!(await askConfirm("Regenerate the image?", "Picks another licensed image for this topic (or a title card) and re-validates. An approval is withdrawn."))) return;
+  await cmAct("Image regenerated", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/regenerate-image`, { version: ver }));
+}
+
+async function cmLoadOptions(id) {
+  try { cmState.options[id] = (await apiJson(`/api/community/drafts/${encodeURIComponent(id)}/image-options`)).options || []; }
+  catch (err) { showToast(err.message || String(err), true); return; }
+  cmRenderDrafts(cmActive());
+}
+
+async function cmReplaceImage(id, ver) {
+  const sel = document.getElementById(`cmOpt_${id}`);
+  const choice = sel ? sel.value : "";
+  if (!choice) return;
+  delete cmState.options[id];
+  await cmAct("Image replaced", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/regenerate-image`, { version: ver, choice }));
+}
+
+async function cmApprove(id, ver) {
+  const det = (cmState.drafts[id] || {}).draft || {};
+  const reasonEl = document.getElementById(`cmReason_${id}`);
+  const reason = reasonEl ? reasonEl.value.trim() : "";
+  const ack = !!det.needs_acknowledgement;
+  if (ack && reason.length < 5) { showToast("This draft has warnings or review items: enter a reason (at least 5 characters) to acknowledge them.", true); return; }
+  const v = det.validation || {};
+  const items = [...(v.reviews || []), ...(v.warnings || [])].map(c => `- ${c.check}: ${c.detail}`).join("\n");
+  if (!(await askConfirm(ack ? "Approve with acknowledged warnings?" : "Approve this draft?",
+      `${det.text || ""}\n\n${ack ? "You acknowledge:\n" + items + "\n\n" : ""}Approval records your decision on the draft only. Nothing is published; you post it yourself in YouTube Studio.`))) return;
+  await cmAct("Draft approved (not published)", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/approve`, { version: ver, acknowledge_warnings: ack, reason }));
+}
+
+async function cmReject(id, ver) {
+  const reasonEl = document.getElementById(`cmReason_${id}`);
+  const reason = reasonEl ? reasonEl.value.trim() : "";
+  if (reason.length < 3) { showToast("Enter a rejection reason first.", true); return; }
+  if (!(await askConfirm("Reject this draft?", `Reason: ${reason}`))) return;
+  await cmAct("Draft rejected", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/reject`, { version: ver, reason }));
+}
+
+async function cmArchive(id, ver) {
+  if (!(await askConfirm("Archive this draft?", "Archived drafts stay in history and free the date for a new draft."))) return;
+  await cmAct("Draft archived", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/archive`, { version: ver, reason: "archived from dashboard" }));
+}
+
+async function cmToggleDetails(id) {
+  cmState.open = cmState.open === id ? null : id;
+  const hist = document.getElementById("cmHistoryDetail");
+  if (hist && hist.innerHTML && cmState.drafts[id] && !(cmState.drafts[id].draft || {}).active) { hist.innerHTML = cmState.open ? cmDraftCard(cmState.drafts[id].draft, cmState.drafts[id]) : ""; return; }
+  cmRenderDrafts(cmActive());
+}
+
+async function cmSaveSchedule() {
+  const formats = [...document.querySelectorAll(".cm-fmt")].filter(x => x.checked).map(x => x.value);
+  if (!formats.length) { showToast("Choose at least one format.", true); return; }
+  const body = { enabled: document.getElementById("cmEnabled").checked, paused: document.getElementById("cmPaused").checked,
+    kill_switch: document.getElementById("cmKill").checked, generation_time: document.getElementById("cmTime").value,
+    timezone: document.getElementById("cmTz").value.trim(), text_mode: document.getElementById("cmTextMode").value,
+    catch_up_hours: Number(document.getElementById("cmCatchUp").value), manual_daily_limit: Number(document.getElementById("cmManualLimit").value), formats };
+  if (!(await askConfirm("Save Community schedule?", `Automatic generation: ${body.enabled ? "ON" : "OFF"}${body.paused ? " (paused)" : ""}\nTime: ${body.generation_time} ${body.timezone}\nKill switch: ${body.kill_switch ? "ACTIVE" : "off"}\nText: ${body.text_mode}\nFormats: ${formats.join(", ")}\n\nThis does not change the production schedule.`))) return;
+  await cmAct("Community schedule saved", () => cmWrite("/api/community/schedule", body));
+}
+
+setInterval(() => refreshCommunity(), 120000);   // only loads while the Community Posts tab is open
 </script>
 </body>
 </html>

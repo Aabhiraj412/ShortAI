@@ -159,3 +159,7 @@ tools/
 # Stage 3.32B autonomy runtime state (approval key, reports, drafts, inbox, audit fallback, kill-switch sentinel)
 backend/data/autonomy/
 backend/data/AUTONOMY_DISABLED
+
+# Stage 3.32E Community drafts: generated images and the local kill-switch file (runtime data, never committed)
+backend/data/community/
+backend/data/COMMUNITY_DRAFTS_DISABLED
