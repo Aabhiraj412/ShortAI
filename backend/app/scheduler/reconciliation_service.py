@@ -102,10 +102,18 @@ class SchedulerProcessLock:
         try:
             # 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
             handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if handle:
+            if not handle:
+                return False
+            try:
+                # Stage 3.32H: OpenProcess also succeeds for a process that has EXITED while any other process still
+                # holds a handle to it (e.g. Task Scheduler), so a killed monitor/daemon kept its lock forever and
+                # blocked every relaunch. Only STILL_ACTIVE (259) means running.
+                code = ctypes.c_ulong(0)
+                if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return True          # cannot tell: fail safe (treat as running, never start a duplicate)
+                return code.value == 259
+            finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
         except Exception:
             return False
 

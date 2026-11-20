@@ -558,3 +558,23 @@ def test_scheduler_registers_autopilot_tick_off_cycle_minutes():
         assert sch.run_autopilot_tick() == {"error": "RuntimeError"} and monkey["called"]
     finally:
         rmod.autopilot_tick = orig
+
+
+def test_process_lock_treats_an_exited_but_referenced_process_as_dead(tmp_path):
+    """Stage 3.32H: a killed monitor must not keep its single-instance lock while another process holds its handle."""
+    import subprocess
+    import sys
+    from backend.app.scheduler.reconciliation_service import SchedulerProcessLock
+    lock = SchedulerProcessLock(lock_path=str(tmp_path / "x.lock"))
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert lock._is_pid_alive(child.pid) is True
+        child.kill()
+        child.wait(10)                      # exited, but this test still holds the Popen handle
+        assert lock._is_pid_alive(child.pid) is False
+        (tmp_path / "x.lock").write_text(json.dumps({"pid": child.pid}), encoding="utf-8")
+        assert lock.acquire() is True       # the stale lock is reclaimed
+    finally:
+        lock.release()
+    import os
+    assert lock._is_pid_alive(os.getpid()) is True
