@@ -72,3 +72,44 @@ def install_windows_hidden_subprocess_defaults() -> None:
 
     subprocess.Popen = _HiddenPopen  # type: ignore[misc]
     _SUBPROCESS_PATCHED = True
+
+
+STILL_ACTIVE = 259
+
+
+def pid_running(pid) -> bool:
+    """Stage 3.34: the one process-liveness check (read-only; never signals the process).
+
+    On Windows ``OpenProcess`` also succeeds for a process that has EXITED while any other process still holds a
+    handle to it (Task Scheduler, a parent's Popen object, ...). Treating that as alive kept dead workers "alive":
+    their jobs were never recovered, and a killed monitor blocked its own relaunch. Only ``STILL_ACTIVE`` from
+    ``GetExitCodeProcess`` means running. If the exit code cannot be read, the process is treated as running
+    (fail safe: never start a duplicate)."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong(0)
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == STILL_ACTIVE
+    finally:
+        k32.CloseHandle(handle)

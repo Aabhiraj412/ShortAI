@@ -96,24 +96,12 @@ class SchedulerProcessLock:
         self.lock_path = lock_path
 
     def _is_pid_alive(self, pid: int) -> bool:
-        """Checks if a Windows process with the specified PID is currently running."""
+        """True only while the process is still running (Stage 3.34: the shared exit-code-aware check)."""
         if pid <= 0:
             return False
         try:
-            # 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
-            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if not handle:
-                return False
-            try:
-                # Stage 3.32H: OpenProcess also succeeds for a process that has EXITED while any other process still
-                # holds a handle to it (e.g. Task Scheduler), so a killed monitor/daemon kept its lock forever and
-                # blocked every relaunch. Only STILL_ACTIVE (259) means running.
-                code = ctypes.c_ulong(0)
-                if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                    return True          # cannot tell: fail safe (treat as running, never start a duplicate)
-                return code.value == 259
-            finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
+            from backend.app.core.process_utils import pid_running
+            return pid_running(pid)
         except Exception:
             return False
 

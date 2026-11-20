@@ -307,7 +307,8 @@ def synthesize_and_probe_narration(
             **hidden_subprocess_kwargs(),
         )
         if res.returncode == 0 and os.path.isfile(padded_mp3):
-            os.replace(padded_mp3, combined_mp3)
+            from backend.app.core.fs_utils import replace_with_retry   # Stage 3.34: tolerate a brief file lock
+            replace_with_retry(padded_mp3, combined_mp3)
             total_voice_dur = tts_engine.probe_duration(combined_mp3)
     elif total_voice_dur > 55.6:
         tempo = min(1.28, max(1.01, round(total_voice_dur / 54.4, 4)))
@@ -325,7 +326,8 @@ def synthesize_and_probe_narration(
             **hidden_subprocess_kwargs(),
         )
         if res.returncode == 0 and os.path.isfile(tempo_mp3):
-            os.replace(tempo_mp3, combined_mp3)
+            from backend.app.core.fs_utils import replace_with_retry   # Stage 3.34: WinError 32 failed a production here
+            replace_with_retry(tempo_mp3, combined_mp3)
             total_voice_dur = tts_engine.probe_duration(combined_mp3)
 
     raw_sum = sum(max(0.5, s.duration_sec) for s in synthesized)

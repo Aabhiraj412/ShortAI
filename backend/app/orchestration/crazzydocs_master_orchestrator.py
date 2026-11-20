@@ -1176,11 +1176,13 @@ class CrazzyDocsMasterOrchestrator:
                         progress_pct=92.0,
                         ffmpeg_status="FINALIZING_ENCODE",
                     )
+                    from backend.app.rendering.ffmpeg_geometry import DELIVERY_COLOR_VF
                     mux_cmd = [
                         FFMPEG_EXE, "-y",
                         "-i", str(silent_lemo_mp4),
                         "-i", str(voice_path),
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+                        "-vf", DELIVERY_COLOR_VF,          # Stage 3.34: limited-range BT.709 delivery
+                        "-c:v", "libx264", "-r", "30",
                         "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
                         "-shortest", "-movflags", "+faststart",
                         final_video_path,

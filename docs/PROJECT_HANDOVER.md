@@ -1,6 +1,6 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-21 IST. Roadmap stages 3.31 (demand-led topic intelligence, 3.31K), 3.32 (video creative intelligence; code in `creative_intel/`, distinct from the 3.32A–J autonomy stages) and 3.33 (rendering technology evaluation and architecture decision) are implemented and deployed in the commit that contains this file. Autopilot stays in OBSERVE (since 2026-11-21 01:23 IST). Public publishing is unchanged.
+**As of:** 2026-11-21 IST. Stage 3.34 (controlled production validation and reliability) is implemented and deployed in the commit that contains this file: process-liveness fix for worker recovery, WinError 32 root cause in asset downloads, live stage display, persisted shadow topic evidence, and limited-range BT.709 delivery. See `docs/STAGE_3_34_IMPLEMENTATION_REPORT.md`, `STAGE_3_34_VALIDATION_REPORT.md` and `STAGE_3_34_KNOWN_ISSUES.md`. Autopilot stays in OBSERVE; topic intelligence stays in shadow; public publishing unchanged.
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
@@ -35,6 +35,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3.32A | `services/operational_intelligence.py` | Read-only analytics (production health, failures, renderer, topics, API, recovery). Feeds everything below. |
 | 3.32B | `autonomy/control_plane.py`, `registry.py`, `handlers.py` | The **only** path to any autonomous action: closed action registry (8 permitted, 26 prohibited); levels OFF / OBSERVE / RECOMMEND / APPROVED_EXECUTION (global × category); signed, hash-bound approvals; 3 kill switches; hash-chained append-only audit. |
 | 3.32C | `autonomy/recommendations/` | Rule-based recommendations (28 rules), advice only. |
+| 3.34 | `core/process_utils.py`, `core/fs_utils.py`, `media/downloader.py`, `services/deployment_diagnostics.py`, `rendering/ffmpeg_geometry.py` | **Controlled production validation and reliability.** Exited processes are no longer counted as alive (worker stall recovery, daemon status); oversize/retry/temp-file defects behind WinError 32 in downloads; bounded retries for transient file locks; live worker stage instead of the coarse checkpoint; shadow topic evidence persisted; final videos delivered as limited-range BT.709. One live scheduled cycle observed (heartbeat at most 27 s, peak about 2.9 GB). |
 | 3.31K | `content/demand_signals.py`, `topic_scoring_v2.py`, `expanded_categories.py` | **Demand-led topic intelligence.** Wikimedia most-read + pageview velocity and Google Trends daily searches (provenance in `topic_demand_signals`); eight-signal scoring v2 with historical performance as one bounded signal (5 %, neutral until analytics exist); Cinema & Entertainment, Media & Internet Culture, Sports & Major Events (politics stays out of scope). Flags `demand_signals`, `scoring_v2` (off/shadow/on), `expanded_categories` (off/on). Details: `docs/STAGE_3_31K_DEMAND_LED_TOPIC_INTELLIGENCE.md`. |
 | 3.32 (roadmap) | `creative_intel/` | **Video creative intelligence.** 14 craft dimensions from the script, rendered Pop Info plan, subtitles and the rendered MP4; one `creative_records` row per job linked to its YouTube video ID (for 3.35); controlled `hook_type` experiments. Hourly `creative_evaluation_tick` (skips while a job is active). Details: `docs/STAGE_3_32_CREATIVE_INTELLIGENCE.md`. |
 | 3.33 | `scripts/benchmark_renderers_333.py`, `docs/benchmarks/` | **Rendering architecture decision:** keep Lemo-Opuscar + Pop Info; no migration. Details: `docs/STAGE_3_33_RENDERING_ARCHITECTURE_DECISION.md`. |
@@ -146,7 +147,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-**Recommended next milestone: Stage 3.34** (per the roadmap). Inputs now available:
+**Stage 3.34 is complete. Recommended next milestone: Stage 3.35, YouTube Analytics and Autonomous Learning** (prerequisites in `docs/STAGE_3_34_KNOWN_ISSUES.md`). Inputs now available:
 - per-video creative records keyed by `job_id` and YouTube ID;
 - demand signals with provenance;
 - the rendering decision (no renderer migration pending).

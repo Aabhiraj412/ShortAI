@@ -20,6 +20,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import http.client
+
+from backend.app.core.fs_utils import remove_with_retry, replace_with_retry
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
@@ -74,6 +77,10 @@ def detect_magic_type(header: bytes) -> Optional[str]:
     return None
 
 
+# Every transport failure is retried (a dropped connection mid-stream raises ConnectionError/IncompleteRead,
+# not URLError); file-system errors are not in this tuple and surface normally.
+DOWNLOAD_NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
+
 class AssetDownloader:
     """Downloads and verifies images securely into the local media library."""
 
@@ -105,16 +112,24 @@ class AssetDownloader:
             }
         )
 
+        # Stage 3.34 (WinError 32 root cause): the size-limit branch used to delete the temp file while its own
+        # write handle was still open (Windows refuses: "being used by another process", classified PERMANENT),
+        # and the hash/byte counters were not reset between retries, so a retry after a mid-stream drop
+        # double-counted bytes and could trip that limit falsely. Each attempt now starts clean, the temp file is
+        # removed only after its handle is closed, and every network error type is retried.
         hasher = hashlib.sha256()
         total_downloaded = 0
         header_bytes = b""
+        oversize = False
 
         for attempt in range(MAX_RETRIES + 1):
+            hasher, total_downloaded, header_bytes = hashlib.sha256(), 0, b""
             try:
                 with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp:
                     # Validate Content-Type header if present
                     ctype = resp.headers.get("Content-Type", "").lower()
                     if ctype and not any(t in ctype for t in ("image", "video", "octet-stream")):
+                        remove_with_retry(temp_path)
                         return False, None, None, f"Rejected: HTTP Content-Type is '{ctype}', not image/video media."
 
                     with open(temp_path, "wb") as f:
@@ -126,24 +141,25 @@ class AssetDownloader:
                                 header_bytes = chunk[:16]
                             total_downloaded += len(chunk)
                             if total_downloaded > MAX_FILE_SIZE_BYTES:
-                                if os.path.exists(temp_path):
-                                    os.remove(temp_path)
-                                return False, None, None, f"Rejected: File size exceeded maximum limit ({total_downloaded / (1024*1024):.1f} MB > 25 MB)."
+                                oversize = True
+                                break
                             hasher.update(chunk)
                             f.write(chunk)
                 break
-            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+            except DOWNLOAD_NETWORK_ERRORS as e:
                 if attempt == MAX_RETRIES:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+                    remove_with_retry(temp_path)
                     return False, None, None, f"Download failed after {MAX_RETRIES+1} attempts: {e}"
                 time.sleep(0.5 * (2 ** attempt))
+
+        if oversize:                      # the write handle is closed here, so the delete succeeds
+            remove_with_retry(temp_path)
+            return False, None, None, f"Rejected: File size exceeded maximum limit ({total_downloaded / (1024*1024):.1f} MB > 25 MB)."
 
         # 1. Magic bytes verification
         detected_mime = detect_magic_type(header_bytes)
         if not detected_mime:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            remove_with_retry(temp_path)
             return False, None, None, "Rejected: File header failed magic bytes signature validation (corrupt or unsupported format)."
 
         # 2. Verify image integrity via Pillow OR video/GIF stream header
@@ -163,8 +179,7 @@ class AssetDownloader:
                     if is_animated_gif:
                         asset.asset_type = "existing_animation"
             except Exception as e:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                remove_with_retry(temp_path)
                 return False, None, None, f"Rejected: Media decode/integrity check failed: {e}"
 
         # 3. Finalize path with extension and SHA-256 hash
@@ -174,10 +189,9 @@ class AssetDownloader:
         final_path = os.path.join(self.storage_dir, final_filename)
 
         if os.path.exists(final_path):
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            remove_with_retry(temp_path)
         else:
-            os.replace(temp_path, final_path)
+            replace_with_retry(temp_path, final_path)
 
         # Update asset metadata with full provenance
         orig_name = os.path.basename(urllib.parse.urlparse(url).path) or final_filename

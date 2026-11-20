@@ -18,7 +18,7 @@ import ctypes
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from backend.app.core import code_revision
@@ -49,20 +49,11 @@ def is_pid_alive(pid: Optional[int]) -> bool:
     """Read-only liveness check (never signals the process; os.kill(pid, 0) terminates on Windows)."""
     if not pid or pid <= 0:
         return False
-    if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
     try:
-        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
+        from backend.app.core.process_utils import pid_running   # Stage 3.34: exited processes are not alive
+        return pid_running(pid)
     except Exception:
-        pass
-    return False
+        return False
 
 
 def _read_json(key: str) -> dict[str, Any]:
@@ -148,11 +139,41 @@ def _worker_heartbeat() -> dict[str, Any]:
         )
         if job is None:
             return {"active_job_id": None, "heartbeat_utc": None, "stage": None}
-        return {
+        out = {
             "active_job_id": job.id,
             "heartbeat_utc": job.heartbeat_at.replace(microsecond=0).isoformat() + "Z" if job.heartbeat_at else None,
             "stage": job.current_stage,
+            "checkpoint_stage": job.current_stage,
         }
+    out.update(_live_stage(out["active_job_id"]))
+    return out
+
+
+LIVE_STAGE_MAX_AGE_SEC = 900
+
+
+def _live_stage(job_id: str, store_path: Optional[str] = None, now: Optional[datetime] = None) -> dict[str, Any]:
+    """Stage 3.34: the job's checkpoint stage is coarse (it stays e.g. VOICEOVER through asset acquisition, the
+    browser render and the mux), so the status showed a stage the worker had long left. The production progress
+    store (written by the worker) has the live stage; it is used when it is fresh, else the checkpoint stage stays."""
+    try:
+        if store_path is None:
+            from backend.app.services.production_observability import DEFAULT_STORE_PATH as store_path
+        with open(store_path, "r", encoding="utf-8") as fh:
+            rec = (json.load(fh).get("productions") or {}).get(job_id) or {}
+        stage, updated = rec.get("current_stage"), rec.get("last_updated")
+        if not stage or not updated:
+            return {}
+        ts = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
+        ts = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        age = ((now or datetime.now(timezone.utc)) - ts).total_seconds()
+        if age > LIVE_STAGE_MAX_AGE_SEC:
+            return {"live_stage_stale": True}
+        return {"stage": stage, "operation": str(rec.get("current_operation") or "")[:200],
+                "stage_progress": rec.get("current_stage_progress"), "overall_progress": rec.get("overall_progress"),
+                "live_stage_age_sec": round(age, 1)}
+    except Exception:
+        return {}
 
 
 def _dashboard_startup() -> dict[str, Any]:

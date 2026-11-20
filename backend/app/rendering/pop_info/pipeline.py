@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from backend.app.rendering.ffmpeg_geometry import DELIVERY_COLOR_VF
+
 from backend.app.core.paths import TOOLS_DIR, get_ffmpeg_path, get_ffprobe_path
 from backend.app.rendering.pop_info.film_builder import build_pop_info_film
 from backend.app.rendering.pop_info.scene_planner import ENGINE_VERSION
@@ -114,7 +116,7 @@ def render_pop_info(*, workspace_root: Path, prod_dir: Path, job_id: str, topic:
     audio = mix_audio(ffmpeg=ffmpeg, voice_path=voice_path, plan=film["plan"], work_dir=film_dir / "audio",
                       out_path=film_dir / "audio" / "mix.wav")
     proc = subprocess.run([ffmpeg, "-y", "-i", str(silent), "-i", audio["mix_path"], "-map", "0:v:0", "-map", "1:a:0",
-                           "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-crf", "18", "-c:a", "aac", "-b:a", "192k",
+                           "-vf", DELIVERY_COLOR_VF, "-c:v", "libx264", "-r", "30", "-crf", "18", "-c:a", "aac", "-b:a", "192k",
                            "-shortest", "-movflags", "+faststart", str(output_path)], capture_output=True, text=True, timeout=600)
     if proc.returncode != 0 or not Path(output_path).is_file():
         raise RuntimeError(f"Pop Info mux failed: {proc.stderr[-600:]}")

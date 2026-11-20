@@ -1677,8 +1677,11 @@ class CuriosityTopicEngine:
         if self.flags.is_active("demand_signals"):
             demand_candidates = self._demand_candidates(disc_ts, seen_titles)
             if not self.flags.is_on("demand_signals"):
-                trace.note("demand_shadow", [c.get("title") for c in demand_candidates])
+                # Stage 3.34: persist the full shadow evidence (run notes), not just titles
+                trace.note("demand_shadow", self.last_demand_summary)
                 demand_candidates = []
+            else:
+                trace.note("demand", self.last_demand_summary)
 
         # Pool assembly. Legacy: concatenate and cut at max_candidates + 6, which drops the GNews
         # supplement whenever Wikipedia + RSS fill the pool (audit §5). With the GNews or In-the-news
@@ -1870,6 +1873,7 @@ class CuriosityTopicEngine:
         if self.flags.is_active("scoring_v2"):
             from backend.app.content import topic_scoring_v2 as sv2
             hist = sv2.category_performance_provider(self._db_path())
+            v2_notes: List[Dict[str, Any]] = []
             for c, t in zip(live_cands, scored):
                 try:
                     v2 = sv2.score_v2(c, t, historical=hist)
@@ -1878,10 +1882,17 @@ class CuriosityTopicEngine:
                     continue
                 t.discovery_metadata["score_v1"] = t.composite_score
                 t.discovery_metadata["score_v2"] = v2
+                v2_notes.append({"title": t.title, "v1": t.composite_score, "v2": v2["score"],
+                                 "blended": sv2.blended(t.composite_score, v2),
+                                 "dims": {k: d["value"] for k, d in v2["dimensions"].items()},
+                                 "measured": v2["measured"], "demand": bool(c.get("demand"))})
                 if c.get("demand"):
                     t.discovery_metadata["demand"] = c["demand"]
                 if self.flags.is_on("scoring_v2"):
                     t.composite_score = sv2.blended(t.composite_score, v2)
+            # Stage 3.34: shadow scores are evidence for the activation decision, so they are persisted
+            trace.note("scoring_v2" + stage_suffix, {"mode": self.flags.scoring_v2, "version": sv2.VERSION,
+                                                     "candidates": v2_notes})
         else:
             for c, t in zip(live_cands, scored):
                 if c.get("demand"):
@@ -1919,7 +1930,13 @@ class CuriosityTopicEngine:
             cid = cids[idx] if idx < len(cids) else None
             cid_by_obj[id(t)] = cid
             if cid:
-                trace.score(cid, t.composite_score, t.score_breakdown)
+                bd = t.score_breakdown
+                v2m = t.discovery_metadata.get("score_v2")
+                if v2m:   # Stage 3.34: the ledger row carries the v2 score next to v1 (shadow or on)
+                    bd = {**bd, "_v2": {"score": v2m["score"], "version": v2m["version"],
+                                        "dims": {k: d["value"] for k, d in v2m["dimensions"].items()}},
+                          "_v1_score": t.discovery_metadata.get("score_v1")}
+                trace.score(cid, t.composite_score, bd)
                 if t.composite_score <= 0:
                     unreliable = float(t.score_breakdown.get("factual_reliability", 10.0)) < 7.5
                     trace.reject(cid, cl.SOURCE_UNRELIABLE if unreliable else cl.INSUFFICIENT_EVIDENCE,

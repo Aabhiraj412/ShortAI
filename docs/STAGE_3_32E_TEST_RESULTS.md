@@ -276,3 +276,14 @@ The 4 failures are the known baseline: `test_dashboard_html_page_served`, `test_
 The 4 failures are the known baseline (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, both `test_youtube_branding`). No new failures. Note: `test_stage_3_19_creative_identity_e2e.py` hardcodes the main checkout path and trips the worktree isolation guard when run on its own selection (pre-existing).
 
 Stage 3.33 benchmarks: `docs/benchmarks/stage_3_33_render_benchmarks.json` (run with no production job active).
+
+## 12. Stage 3.34: controlled production validation and reliability (2026-11-21)
+
+| Suite | Result |
+|---|---|
+| `test_production_reliability_334.py` (liveness, stall detection, heartbeat pump, file-lock retries, downloader oversize/retry/cleanup, voiceover timeout, failure classification, readiness, partial MP4, duplicate claims, idle restart, render slot, live stage, delivery colour format) | 36 passed |
+| `test_topic_demand_331k.py` (+ shadow evidence persisted) | 31 passed |
+| Pipeline-related suites (Pop Info, render, Lemo, orchestrator, download, media, TTS, deployment, worker, reconciliation, locks, daemon, health) | 293 passed, 13 skipped |
+| **Full suite** | **1594 passed, 4 failed, 173 skipped** (18 min 20 s) |
+
+The 4 failures are the known baseline (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, both `test_youtube_branding`). No new failures, none resolved, no flaky tests observed. No lint, type-check or dependency-audit tool is configured in this repository; the changed modules compile, and no dependency was added. Tests use temporary databases; the production database is refused under pytest (existing guard).

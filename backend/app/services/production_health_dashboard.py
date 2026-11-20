@@ -117,9 +117,8 @@ class ProductionHealthDashboard:
                     is_fresh = False
 
             # Check process liveness
-            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
+            from backend.app.core.process_utils import pid_running   # Stage 3.34: an exited daemon is not RUNNING
+            if pid_running(pid):
                 state = "RUNNING" if is_fresh else "STALE_HEARTBEAT"
                 return {
                     "state": state,
@@ -227,6 +226,15 @@ class ProductionHealthDashboard:
 
             if active_prod_job:
                 pipeline_stage = f"{active_prod_job.current_stage} ({active_prod_job.progress_pct:.0f}%)"
+                try:   # Stage 3.34: the live stage from the worker's progress store, not the coarse checkpoint
+                    from backend.app.services.deployment_diagnostics import _live_stage
+                    live = _live_stage(active_prod_job.id)
+                    if live.get("stage"):
+                        pct = live.get("overall_progress")
+                        pct = float(pct) if isinstance(pct, (int, float)) else float(active_prod_job.progress_pct or 0)
+                        pipeline_stage = f"{str(live['stage']).upper()} ({pct:.0f}%)"
+                except Exception:
+                    pass
                 if "RECOVER" in (active_prod_job.id or ""):
                     recovery_status = "RECOVERING"
             else:

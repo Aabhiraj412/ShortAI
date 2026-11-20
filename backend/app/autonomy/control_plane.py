@@ -165,7 +165,7 @@ FAILED_OUTCOMES = ("FAILED", "TIMED_OUT", "VERIFY_FAILED", "INTERRUPTED")
 
 
 def _default_pid_alive(pid: int) -> bool:
-    """True when a process with this id is running (Windows: OpenProcess; elsewhere: signal 0). Fail safe: True."""
+    """True when a process with this id is running (Windows: OpenProcess + STILL_ACTIVE; elsewhere: signal 0). Fail safe: True."""
     if not pid or pid <= 0:
         return False
     try:

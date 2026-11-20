@@ -190,6 +190,8 @@ class ExpressiveTTSEngine:
                     await asyncio.sleep(1.0 * (attempt + 1))
                 else:
                     logger.error("[TTS FATAL] %s failed after %d retries: %s", seg.id, self.max_retries, e)
+                    from backend.app.core.fs_utils import remove_with_retry   # Stage 3.34: no partial audio left behind
+                    remove_with_retry(raw_mp3)
                     raise RuntimeError(f"TTS synthesis failed for {seg.id}: {e}")
 
         # Apply safe padding (using adelay/apad filters)

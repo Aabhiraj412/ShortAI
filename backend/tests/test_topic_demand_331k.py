@@ -274,3 +274,23 @@ def test_scoring_v2_shadow_records_without_changing_scores(tmp_path):
     _, _, _, scored_on = eng_on._score_and_filter([dict(cand)], filter_duplicates=False)
     t2 = scored_on[0]
     assert t2.composite_score == sv2.blended(t2.discovery_metadata["score_v1"], t2.discovery_metadata["score_v2"])
+
+
+def test_shadow_evidence_is_persisted_for_the_activation_decision(tmp_path):
+    """Stage 3.34: shadow v2 scores and the shadow demand summary must reach the ledger and the run notes."""
+    from topic_fakes_331 import web_for_every_query
+    sqlite3.connect(str(tmp_path / "studio.db")).close()
+    eng = make_engine(tmp_path, None, candidate_ledger="on", demand_signals="shadow", scoring_v2="shadow")
+    web = DemandWeb(search=web_for_every_query(eng).search, kinds={"Kilauea": "volcano"})
+    web.install(eng)
+    eng.begin_run("job_shadow")
+    eng.discover_and_rank_live_topics(max_candidates=6)
+    conn = sqlite3.connect(str(tmp_path / "studio.db"))
+    notes = json.loads(conn.execute("SELECT notes_json FROM topic_discovery_runs WHERE run_id='job_shadow'").fetchone()[0])
+    assert notes["demand_shadow"]["signals"] >= 1 and "candidates" in notes["demand_shadow"]
+    assert notes["scoring_v2"]["mode"] == "shadow" and notes["scoring_v2"]["candidates"]
+    assert all({"v1", "v2", "dims"} <= set(c) for c in notes["scoring_v2"]["candidates"])
+    rows = [json.loads(r[0] or "{}") for r in conn.execute("SELECT score_breakdown_json FROM topic_candidate_ledger "
+                                                          "WHERE score_breakdown_json IS NOT NULL")]
+    scored = [r for r in rows if r]
+    assert scored and all("_v2" in r and "_v1_score" in r for r in scored)

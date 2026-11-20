@@ -62,3 +62,13 @@ def self_check() -> dict:
     det = classify_error(RuntimeError("Padded dimensions cannot be smaller than input dimensions."))[0]
     ok = "860:854" in f and "force_divisible_by=2" in f and det == DETERMINISTIC
     return {"ok": ok, "filter": f, "padding_error_class": det}
+
+
+# Stage 3.34: delivery colour format for final videos. The browser-capture renderer pipes JPEG frames, so its output
+# is FULL-range (pc) with the SD BT.601 matrix; measured on production files, 97 % of frames reach luma 255 (above
+# the 235 video ceiling). Players that ignore the range flag clip those highlights, which matters for Pop Info's
+# bright designs. The final mux already re-encodes, so converting there adds no encode generation: limited range
+# (tv), BT.709 matrix/primaries/transfer, yuv420p. Measured on a production film: PSNR 40 dB vs the full-range
+# encode (visually identical), identical frames and duration, +11 % mux time (about 5 s), 7 % smaller file.
+DELIVERY_COLOR_VF = ("scale=out_range=tv:out_color_matrix=bt709,format=yuv420p,"
+                     "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709")
