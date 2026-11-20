@@ -1,0 +1,110 @@
+{
+  "generated_at_utc": "2026-11-20T20:42:04Z",
+  "machine": {
+    "os": "Windows-10-10.0.26300-SP0",
+    "cpu": "AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD",
+    "logical_cpus": 8,
+    "ram_total_gb": 13.9,
+    "ram_available_gb_at_start": 4.0,
+    "gpu": "AMD Radeon(TM) RX Vega 10 Graphics"
+  },
+  "clip": {
+    "seconds": 6,
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "cases": {
+    "ffmpeg_composition": {
+      "returncode": 0,
+      "wall_sec": 13.2,
+      "cpu_sec_sampled": 63.4,
+      "peak_working_set_mb": 1004.3,
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "output": {
+        "exists": true,
+        "width": 1080,
+        "height": 1920,
+        "pix_fmt": "yuv420p",
+        "frames": "180",
+        "duration": "6.000000",
+        "size_mb": 1.85
+      },
+      "realtime_factor": 2.2
+    },
+    "pillow_procedural": {
+      "returncode": 0,
+      "wall_sec": 16.84,
+      "cpu_sec_sampled": 22.0,
+      "peak_working_set_mb": 435.4,
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "output": {
+        "exists": true,
+        "width": 1080,
+        "height": 1920,
+        "pix_fmt": "yuv420p",
+        "frames": "180",
+        "duration": "6.000000",
+        "size_mb": 0.08
+      },
+      "realtime_factor": 2.81
+    },
+    "browser_canvas_w1": {
+      "returncode": 0,
+      "wall_sec": 26.02,
+      "cpu_sec_sampled": 91.0,
+      "peak_working_set_mb": 1341.5,
+      "stderr_tail": "",
+      "stdout_tail": "w0 0/180  2s\nw0 60/180  7s\nw0 120/180  14s\ndone C:\\Users\\aabhi\\AppData\\Local\\Temp\\cd_bench_333_2pkaz7ng\\browser_canvas_w1.mp4 180 frames 22s\n",
+      "output": {
+        "exists": true,
+        "width": 1080,
+        "height": 1920,
+        "pix_fmt": "yuvj420p",
+        "frames": "180",
+        "duration": "6.000000",
+        "size_mb": 5.72
+      },
+      "realtime_factor": 4.34
+    },
+    "browser_canvas_w2": {
+      "returncode": 0,
+      "wall_sec": 22.87,
+      "cpu_sec_sampled": 115.2,
+      "peak_working_set_mb": 2488.0,
+      "stderr_tail": "",
+      "stdout_tail": "w1 0/90  2s\nw0 0/90  2s\nw1 60/90  10s\nw0 60/90  10s\ndone C:\\Users\\aabhi\\AppData\\Local\\Temp\\cd_bench_333_2pkaz7ng\\browser_canvas_w2.mp4 180 frames 20s\n",
+      "output": {
+        "exists": true,
+        "width": 1080,
+        "height": 1920,
+        "pix_fmt": "yuvj420p",
+        "frames": "180",
+        "duration": "6.000000",
+        "size_mb": 5.73
+      },
+      "realtime_factor": 3.81
+    },
+    "pop_info_production": {
+      "returncode": 0,
+      "wall_sec": 138.59,
+      "cpu_sec_sampled": 358.6,
+      "peak_working_set_mb": 1378.9,
+      "stderr_tail": "",
+      "stdout_tail": "/1625  86s\nw0 1080/1625  90s\nw0 1140/1625  95s\nw0 1200/1625  99s\nw0 1260/1625  104s\nw0 1320/1625  109s\nw0 1380/1625  114s\nw0 1440/1625  119s\nw0 1500/1625  124s\nw0 1560/1625  129s\nw0 1620/1625  133s\ndone C:\\Users\\aabhi\\AppData\\Local\\Temp\\cd_bench_333_2pkaz7ng\\pop_info_production.mp4 1625 frames 135s\n",
+      "output": {
+        "exists": true,
+        "width": 1080,
+        "height": 1920,
+        "pix_fmt": "yuvj420p",
+        "frames": "1625",
+        "duration": "54.166667",
+        "size_mb": 38.68
+      },
+      "source_film": "D:\\Agents\\CrazzyDocs\\media\\productions\\cycle_9_20261120_0800\\pop_info_film",
+      "realtime_factor": 2.56
+    }
+  }
+}

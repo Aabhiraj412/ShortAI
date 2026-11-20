@@ -263,3 +263,16 @@ No console errors except connection refusals while the preview server restarted,
 | **Full suite** | **1510 passed, 4 failed, 173 skipped** (20 min 37 s) |
 
 The 4 failures are the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run` and both `test_youtube_branding` tests. No new failures. The 3.32B source-safety allow-list now includes `autonomy.activation`, `autonomy.reports`, `core.health_monitoring` and `rendering.ffmpeg_geometry`, with a rationale.
+
+## 11. Roadmap stages 3.31K, 3.32 (creative intelligence) and 3.33 (2026-11-21)
+
+| Suite | Result |
+|---|---|
+| `test_topic_demand_331k.py` (filters, collector, provenance, ranking, scoring v2 bounds, analytics provider, expanded scope, flags, engine off/shadow/on) | 30 passed |
+| `test_creative_intel_332.py` (script, scene, subtitle and render dimensions on synthetic video; store and video linking; experiments and hook assignment; runner; API) | 16 passed |
+| Related existing suites (3.31A–D, topic, script writer, scheduler, category, hook, creative) | 242 passed |
+| **Full suite** | **1557 passed, 4 failed, 173 skipped** (17 min 47 s) |
+
+The 4 failures are the known baseline (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, both `test_youtube_branding`). No new failures. Note: `test_stage_3_19_creative_identity_e2e.py` hardcodes the main checkout path and trips the worktree isolation guard when run on its own selection (pre-existing).
+
+Stage 3.33 benchmarks: `docs/benchmarks/stage_3_33_render_benchmarks.json` (run with no production job active).

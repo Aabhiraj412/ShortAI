@@ -1,6 +1,6 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-21, 01:30 IST. Stages 3.32H (production reliability), 3.32I (phased Autopilot activation) and 3.32J (operational reporting) are deployed: dashboard, scheduler daemon and health monitor. **Autopilot phase: OBSERVE since 2026-11-21 01:23:16 IST** (`autonomy_activation_history`, operator `milestone-3.32HIJ`), activated after every readiness check passed. The startup kill switch is still active, so nothing can execute. There are no standing approvals and no `autonomy_startup.json`. Recommended observation: at least 48 h and 48 cycles (until 2026-11-23 01:23 IST or later). RECOMMEND needs the user's explicit authorization.
+**As of:** 2026-11-21 IST. Roadmap stages 3.31 (demand-led topic intelligence, 3.31K), 3.32 (video creative intelligence; code in `creative_intel/`, distinct from the 3.32A–J autonomy stages) and 3.33 (rendering technology evaluation and architecture decision) are implemented and deployed in the commit that contains this file. Autopilot stays in OBSERVE (since 2026-11-21 01:23 IST). Public publishing is unchanged.
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
@@ -35,6 +35,9 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3.32A | `services/operational_intelligence.py` | Read-only analytics (production health, failures, renderer, topics, API, recovery). Feeds everything below. |
 | 3.32B | `autonomy/control_plane.py`, `registry.py`, `handlers.py` | The **only** path to any autonomous action: closed action registry (8 permitted, 26 prohibited); levels OFF / OBSERVE / RECOMMEND / APPROVED_EXECUTION (global × category); signed, hash-bound approvals; 3 kill switches; hash-chained append-only audit. |
 | 3.32C | `autonomy/recommendations/` | Rule-based recommendations (28 rules), advice only. |
+| 3.31K | `content/demand_signals.py`, `topic_scoring_v2.py`, `expanded_categories.py` | **Demand-led topic intelligence.** Wikimedia most-read + pageview velocity and Google Trends daily searches (provenance in `topic_demand_signals`); eight-signal scoring v2 with historical performance as one bounded signal (5 %, neutral until analytics exist); Cinema & Entertainment, Media & Internet Culture, Sports & Major Events (politics stays out of scope). Flags `demand_signals`, `scoring_v2` (off/shadow/on), `expanded_categories` (off/on). Details: `docs/STAGE_3_31K_DEMAND_LED_TOPIC_INTELLIGENCE.md`. |
+| 3.32 (roadmap) | `creative_intel/` | **Video creative intelligence.** 14 craft dimensions from the script, rendered Pop Info plan, subtitles and the rendered MP4; one `creative_records` row per job linked to its YouTube video ID (for 3.35); controlled `hook_type` experiments. Hourly `creative_evaluation_tick` (skips while a job is active). Details: `docs/STAGE_3_32_CREATIVE_INTELLIGENCE.md`. |
+| 3.33 | `scripts/benchmark_renderers_333.py`, `docs/benchmarks/` | **Rendering architecture decision:** keep Lemo-Opuscar + Pop Info; no migration. Details: `docs/STAGE_3_33_RENDERING_ARCHITECTURE_DECISION.md`. |
 | 3.32H | `rendering/ffmpeg_geometry.py`, `core/health_monitoring.py`, `scripts/startup_manager.py` | **Production reliability.** FFmpeg padding root cause fixed (odd 855-row viewport vs yuv420p chroma rounding in `pad`): even geometry everywhere, geometry errors now DETERMINISTIC, bounded stderr, partial-output cleanup. Monitor: liveness `/api/health/live` and readiness `/api/health/ready` probes, HEALTHY/DEGRADED/UNAVAILABLE/UNHEALTHY with thresholds and hysteresis, restarts only when unhealthy AND no dashboard process, persisted probe ledger. |
 | 3.32I | `autonomy/activation.py` | **Phased activation** OFF → OBSERVE → RECOMMEND → RESTRICTED_EXECUTION → EXPANSION, one step at a time, readiness re-checked, authorization phrase for RECOMMEND+, never grants standing approvals or creates `autonomy_startup.json`. Observation cycle via the existing scheduler (`autopilot_tick`). |
 | 3.32J | `autonomy/reports.py` | **Daily and weekly operational reports** from persisted data: observed facts, calculated metrics (with formulas), rule-based interpretations (no AI), missing data listed. Details for H/I/J: `docs/STAGE_3_32HIJ_RELIABILITY_ACTIVATION_REPORTING.md`. |
@@ -143,21 +146,23 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-**Autopilot activation gates (each needs explicit user authorization):**
+**Recommended next milestone: Stage 3.34** (per the roadmap). Inputs now available:
+- per-video creative records keyed by `job_id` and YouTube ID;
+- demand signals with provenance;
+- the rendering decision (no renderer migration pending).
 
-1. **OBSERVE**: **active since 2026-11-21 01:23:16 IST.** Observe for at least 48 h and 48 observation cycles.
-2. **RECOMMEND**: when the dashboard shows readiness passing, the operator advances with the phrase `AUTHORIZE RECOMMEND`. Proposals queue; nothing executes.
-3. **RESTRICTED_EXECUTION**: after 7 days in RECOMMEND and 5 or more human-reviewed proposals:
-   - the operator creates `backend/data/autonomy_startup.json`;
-   - restarts the dashboard;
-   - advances with `AUTHORIZE RESTRICTED_EXECUTION` and the action list (`diagnostic.readonly.run`, `report.operational.generate`);
-   - standing approvals remain a separate decision.
-4. **EXPANSION**: only after 14 days of clean restricted execution.
+**Decisions waiting for the operator (each needs explicit approval):**
 
-Never authorized by any phase: public YouTube publishing, external communications, OAuth changes, destructive operations, financial actions and destructive git operations.
+1. **Topic intelligence.** After about 48 h of `demand_signals: shadow` / `scoring_v2: shadow` (enabled at this deployment), review Ops → *Topic intelligence*. Then decide on `expanded_categories: on`, `demand_signals: on` and `scoring_v2: on`, in that order.
+2. **Creative experiments.** Optionally run a `hook_type` experiment. The craft data shows the hook is the weakest dimension (mean about 45/100).
+3. **Autopilot.** It is in OBSERVE since 2026-11-21 01:23 IST. RECOMMEND needs `AUTHORIZE RECOMMEND` once readiness passes (no earlier than about 2026-11-23 01:23 IST).
+4. **Stage 3.35 analytics.** Audience learning needs YouTube Analytics data. `video_performance` has 0 rows today.
 
-Outside autonomy, still open:
+Never authorized by any of this: public YouTube publishing, external communications, OAuth changes, destructive operations, financial actions and destructive git operations.
+
+Outside these stages, still open:
 - WinError 32 file locks during acquisition;
 - QC duration failures;
 - YouTube quota pressure;
-- Community API publishing waits for Google pilot access and a `youtube.force-ssl` re-consent.
+- Community API publishing waits for Google pilot access and a `youtube.force-ssl` re-consent;
+- `test_stage_3_19_creative_identity_e2e.py` hardcodes the main checkout path (it trips the worktree isolation guard when run in a focused selection).

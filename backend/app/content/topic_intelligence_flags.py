@@ -43,6 +43,10 @@ _FLAG_MODES = {
     "gnews_candidates": (OFF, ON),
     "wikipedia_in_the_news": (OFF, ON),
     "exhaustion_recovery": (OFF, ON),
+    # Stage 3.31K (demand-led discovery)
+    "demand_signals": (OFF, SHADOW, ON),       # trending/public-interest signals as a candidate source
+    "scoring_v2": (OFF, SHADOW, ON),           # multi-signal topic score (demand, velocity, novelty, ...)
+    "expanded_categories": (OFF, ON),          # cinema & entertainment, media & internet culture, sports & events
 }
 
 
@@ -64,6 +68,9 @@ class TopicIntelligenceFlags:
     gnews_candidates: str = OFF
     wikipedia_in_the_news: str = OFF
     exhaustion_recovery: str = OFF
+    demand_signals: str = OFF
+    scoring_v2: str = OFF
+    expanded_categories: str = OFF
     exhaustion_limits: ExhaustionLimits = field(default_factory=ExhaustionLimits)
 
     def is_on(self, name: str) -> bool:

@@ -136,6 +136,9 @@ _OOS_LEXICON: Dict[str, Tuple[str, ...]] = {
                  "sanctions", "dissident", "activist", "attacks"),
 }
 OOS_MIN = 4.0
+# Stage 3.31K: out-of-scope domains that become in-scope categories once the expanded specs are registered.
+EXPANDED_SCOPE: Dict[str, str] = {"entertainment": "cinema_and_entertainment", "music": "cinema_and_entertainment",
+                                  "sport": "sports_and_major_events"}
 
 
 @dataclass
@@ -284,6 +287,13 @@ class CategoryClassifierV2:
             if dom and dom_score > top:
                 oos_domain = dom
         if oos_domain and not (def_type and not def_type.startswith("oos:")) and top < DEFINITION_W + MIN_SCORE:
+            # Stage 3.31K: with the expanded categories registered (flag ``expanded_categories``), film/TV/music
+            # and sport subjects are in scope. Politics always stays out of scope.
+            mapped = EXPANDED_SCOPE.get(oos_domain)
+            if mapped and mapped in specs:
+                s = specs[mapped]
+                ev = {mapped: [f"subject_type:{oos_domain}"], **ev}
+                return ClassificationResult(mapped, s.display_name, s.category_code, CLASSIFIED, 0.75, None, top3, ev, hint)
             return ClassificationResult(None, None, None, OUT_OF_SCOPE, 0.0, oos_domain, top3, ev, hint)
         if top < MIN_SCORE:
             return ClassificationResult(None, None, None, UNKNOWN, round(top / (MIN_SCORE * 2), 3), None, top3, ev, hint)

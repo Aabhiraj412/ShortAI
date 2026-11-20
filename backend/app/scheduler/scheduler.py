@@ -935,6 +935,21 @@ def run_community_draft_tick() -> Dict:
         return {"status": "error", "error": type(exc).__name__}
 
 
+def run_creative_evaluation_tick() -> Dict:
+    """Stage 3.32 (creative intelligence): evaluates up to 3 finished productions from their saved artifacts and
+    links them to their YouTube video ids. Skips entirely while any production job is active; never touches
+    jobs, cycles, recovery windows or publishing."""
+    try:
+        from backend.app.creative_intel.runner import evaluate_pending
+        res = evaluate_pending()
+        if res.get("evaluated") or res.get("errors"):
+            logger.info("[SCHEDULER] Creative evaluation: %s", {k: res.get(k) for k in ("evaluated", "backlog", "errors")})
+        return res
+    except Exception as exc:
+        logger.warning("[SCHEDULER] Creative evaluation failed: %s", type(exc).__name__)
+        return {"error": type(exc).__name__}
+
+
 def run_autopilot_tick() -> Dict:
     """Stage 3.32I/J: one Autopilot observation cycle (only when the operator has activated OBSERVE or higher; it never
     advances a phase or executes anything) plus daily/weekly operational report upkeep. Reads production data
@@ -1047,6 +1062,18 @@ def configure_scheduler_jobs():
         id="autopilot_tick",
         replace_existing=True,
         name="Autopilot Observation & Reports",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # 8. Creative evaluation (Stage 3.32 creative intelligence): hourly at :33, after the cycle's render window;
+    #    skips while any production job is active.
+    scheduler.add_job(
+        run_creative_evaluation_tick,
+        CronTrigger(minute="33", timezone=profile.tz),
+        id="creative_evaluation_tick",
+        replace_existing=True,
+        name="Creative Evaluation",
         max_instances=1,
         coalesce=True,
     )

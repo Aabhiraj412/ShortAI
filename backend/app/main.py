@@ -2623,6 +2623,85 @@ async def api_autopilot_report_generate(req: ReportGenerateRequest, _: None = De
     return await _autonomy_call(lambda: _reports().generate(req.kind, req.key, generated_by=op, force=req.force))
 
 
+# -- Roadmap Stages 3.31 / 3.32 / 3.33: topic, creative and rendering intelligence (persisted data only) ---------
+class CreativeExperimentCreate(_AutonomyBody):
+    dimension: str = Field(pattern=r"^hook_type$")
+    arms: List[str] = Field(min_length=2, max_length=5)
+    hypothesis: str = Field(min_length=3, max_length=500)
+
+
+class CreativeExperimentStatus(_AutonomyBody):
+    status: str = Field(pattern=r"^(ACTIVE|PAUSED|COMPLETED)$")
+
+
+def _creative_store():
+    from backend.app.creative_intel.store import CreativeStore
+    return CreativeStore()
+
+
+def _intelligence_view() -> Dict[str, Any]:
+    from backend.app.content.topic_intelligence_flags import load_flags
+    from backend.app.content.demand_signals import DemandSignalStore
+    from backend.app.core.paths import DATABASE_PATH, PROJECT_ROOT
+    flags = load_flags().to_dict()
+    flags.pop("exhaustion_limits", None)
+    signals = DemandSignalStore(str(DATABASE_PATH)).recent(hours=48, limit=300)
+    seen, top = set(), []
+    for s in sorted(signals, key=lambda r: -(r.get("value") or 0)):
+        key = (s.get("wikipedia_title") or s.get("term") or "").lower()
+        if key and key not in seen:
+            seen.add(key)
+            top.append({k: s.get(k) for k in ("term", "source", "region", "metric", "value", "velocity", "fetched_at_utc")})
+        if len(top) >= 15:
+            break
+    store = _creative_store()
+    bench_path = PROJECT_ROOT / "docs" / "benchmarks" / "stage_3_33_render_benchmarks.json"
+    try:
+        bench = json.loads(bench_path.read_text(encoding="utf-8"))
+    except Exception:
+        bench = None
+    return {
+        "topic": {"flags": flags, "demand_signals_48h": len(signals),
+                  "last_signal_at_utc": signals[0]["fetched_at_utc"] if signals else None, "top_demand": top},
+        "creative": {"summary": store.summary(), "records": store.list_records(15), "experiments": store.list_experiments()},
+        "rendering": {"benchmarks": bench, "decision": "Keep Lemo-Opuscar + Pop Info as the production renderer; "
+                                                       "see docs/STAGE_3_33_RENDERING_ARCHITECTURE_DECISION.md"},
+    }
+
+
+@app.get("/api/intelligence/topic-creative-rendering")
+async def api_intelligence_view(_: None = Depends(require_local_control)):
+    return await _autonomy_call(_intelligence_view)
+
+
+@app.post("/api/creative/experiments")
+async def api_creative_experiment_create(req: CreativeExperimentCreate, _: None = Depends(require_local_control),
+                                         __: None = Depends(require_autonomy_write)):
+    """Creates a DRAFT experiment (nothing changes until it is activated)."""
+    from backend.app.autonomy.control_plane import validate_operator
+    from backend.app.creative_intel.store import CreativeStoreError
+    op = await _autonomy_call(validate_operator, req.operator)
+    try:
+        return await asyncio.to_thread(_creative_store().create_experiment, req.dimension, req.arms, req.hypothesis, op)
+    except CreativeStoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300])
+
+
+@app.post("/api/creative/experiments/{exp_id}/status")
+async def api_creative_experiment_status(exp_id: str, req: CreativeExperimentStatus, _: None = Depends(require_local_control),
+                                         __: None = Depends(require_autonomy_write)):
+    """ACTIVE limits the script writer's hook-style assignment to the experiment's arms (one active per dimension)."""
+    from backend.app.autonomy.control_plane import validate_operator
+    from backend.app.creative_intel.store import CreativeStoreError
+    if not re.fullmatch(r"exp_[0-9a-f]{10}", exp_id or ""):
+        raise HTTPException(status_code=404, detail="experiment not found")
+    op = await _autonomy_call(validate_operator, req.operator)
+    try:
+        return await asyncio.to_thread(_creative_store().set_experiment_status, exp_id, req.status, op)
+    except CreativeStoreError as exc:
+        raise HTTPException(status_code=404 if "not found" in str(exc) else 409, detail=str(exc)[:300])
+
+
 @app.post("/api/autopilot/recommendations/{rec_id}/propose")
 async def api_autopilot_propose(rec_id: str, req: AutopilotProposeRequest, _: None = Depends(require_local_control),
                                 __: None = Depends(require_autonomy_write)):

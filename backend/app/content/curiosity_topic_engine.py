@@ -310,7 +310,9 @@ class ScoredTopic:
 
 # ---- Stage 3.31C pool assembly ------------------------------------------------------------------
 # Small supplementary families get a few reserved slots so the pool cap cannot silently drop them.
-POOL_RESERVED_SLOTS: Dict[str, int] = {"gnews": 3, "wikipedia_itn": 2}
+POOL_RESERVED_SLOTS: Dict[str, int] = {"gnews": 3, "wikipedia_itn": 2, "demand": 4}
+DEMAND_MAX_CANDIDATES = 6     # Stage 3.31K: trending terms resolved to verified Wikipedia articles per run
+DEMAND_REQUEST_GAP_SEC = 0.5
 GNEWS_MAX_LEADS = 2           # single-source headlines resolved to an encyclopedic article per run
 _LEAD_STOPWORDS = frozenset({
     "the", "a", "an", "of", "in", "on", "for", "to", "and", "is", "are", "was", "with", "how", "why", "what",
@@ -387,6 +389,11 @@ class CuriosityTopicEngine:
         self._rotation_advances: Dict[str, Tuple[int, str]] = {}
         self._last_plan: Dict[str, Any] = {}
         self.last_recovery_report: Dict[str, Any] = {}
+        self.last_demand_summary: Dict[str, Any] = {}
+        # Stage 3.31K: expanded categories join the policy only when their flag is on.
+        if self.flags.is_on("expanded_categories"):
+            from backend.app.content.expanded_categories import register_expanded_categories
+            register_expanded_categories(self.policy)
 
     # ------------------------------------------------------------------------------------------
     # Stage 3.31 helpers. Every helper is a no-op / identical-to-v1 while its flag is off.
@@ -1664,13 +1671,22 @@ class CuriosityTopicEngine:
         else:
             gnews_candidates = self._gnews_candidates(preferred_category, disc_ts)
 
+        # 6. Stage 3.31K demand-led candidates: trending / public-interest signals resolved to verified
+        #    Wikipedia articles. Shadow: collected and recorded, never added to the pool.
+        demand_candidates: List[Dict[str, Any]] = []
+        if self.flags.is_active("demand_signals"):
+            demand_candidates = self._demand_candidates(disc_ts, seen_titles)
+            if not self.flags.is_on("demand_signals"):
+                trace.note("demand_shadow", [c.get("title") for c in demand_candidates])
+                demand_candidates = []
+
         # Pool assembly. Legacy: concatenate and cut at max_candidates + 6, which drops the GNews
         # supplement whenever Wikipedia + RSS fill the pool (audit §5). With the GNews or In-the-news
         # flag on, those small families get reserved slots instead.
         cap = max_candidates + 6
-        if self.flags.is_on("gnews_candidates") or itn_on:
+        if self.flags.is_on("gnews_candidates") or itn_on or demand_candidates:
             pool, dropped = assemble_candidate_pool(
-                [enriched_candidates, rss_candidates, gnews_candidates], cap,
+                [demand_candidates, enriched_candidates, rss_candidates, gnews_candidates], cap,
                 reserved=POOL_RESERVED_SLOTS)
         else:
             combined = enriched_candidates + rss_candidates + gnews_candidates
@@ -1734,6 +1750,73 @@ class CuriosityTopicEngine:
             self.last_failed_providers.append({"provider": "gnews", "error": type(exc).__name__})
         return out
 
+    def _demand_candidates(self, disc_ts: str, seen_titles: set) -> List[Dict[str, Any]]:
+        """Stage 3.31K: collects demand signals, persists them with provenance, and resolves the strongest
+        terms to Wikipedia articles through the normal (verified) enrichment. Never raises."""
+        from backend.app.content import demand_signals as ds
+        out: List[Dict[str, Any]] = []
+        summary: Dict[str, Any] = {"at_utc": disc_ts, "mode": self.flags.demand_signals, "signals": 0,
+                                   "errors": {}, "candidates": [], "unresolved": []}
+        try:
+            collector = ds.DemandSignalCollector(lambda u, t: self._http_get_json(u, timeout=t),
+                                                 lambda u, t: self._http_get_text(u, timeout=t))
+            signals = collector.collect()
+            summary["signals"], summary["errors"] = len(signals), dict(collector.errors)
+            db = self._db_path()
+            if db:
+                try:
+                    ds.DemandSignalStore(db).record(signals, run_id=self._run_id)
+                except Exception as exc:
+                    summary["errors"]["store"] = type(exc).__name__
+            for term in ds.rank_demand_terms(signals, limit=DEMAND_MAX_CANDIDATES * 2):
+                if len(out) >= DEMAND_MAX_CANDIDATES:
+                    break
+                title = term.get("wikipedia_title") or self._resolve_wikipedia_title(term["term"])
+                if not title:
+                    summary["unresolved"].append(term["term"])
+                    continue
+                key = re.sub(r"\W+", "", title.lower())
+                if key in seen_titles:
+                    continue
+                news = [s.get("related") for s in term["signals"] if s.get("related")]
+                blurb = (news[0][0].get("title") if news and news[0] else "") or ""
+                src = term["sources"][0]
+                time.sleep(DEMAND_REQUEST_GAP_SEC)      # politeness: bursts get rate-limited by Wikipedia
+                cand = self.enrich_wikipedia_candidate(title, event_blurb=blurb, discovery_origin=f"demand:{src}")
+                if not cand:
+                    summary["unresolved"].append(term["term"])
+                    continue
+                why = ds.article_unsuitable(cand.get("summary") or cand.get("extended_extract") or "")
+                if why:
+                    summary.setdefault("skipped", []).append({"title": cand.get("title"), "reason": why})
+                    continue
+                cand["demand"] = {"demand_index": term["demand_index"], "velocity": term["velocity"],
+                                  "sources": term["sources"], "term": term["term"],
+                                  "news": [n for group in news for n in group][:3]}
+                self._apply_category(cand)
+                seen_titles.add(key)
+                out.append(cand)
+                summary["candidates"].append({"title": cand.get("title"), "demand_index": term["demand_index"],
+                                              "velocity": term["velocity"], "sources": term["sources"],
+                                              "category": cand.get("category")})
+        except Exception as exc:
+            summary["errors"]["collector"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+            logger.warning("Demand signal discovery failed: %s", exc)
+        self.last_demand_summary = summary
+        return out
+
+    def _resolve_wikipedia_title(self, term: str) -> Optional[str]:
+        """Maps a trending search term to the best-matching Wikipedia article title (or None)."""
+        url = ("https://en.wikipedia.org/w/rest.php/v1/search/title?limit=1&q="
+               + urllib.parse.quote(term[:100]))
+        data = self._http_get_json(url, timeout=8.0) or {}
+        pages = data.get("pages") or []
+        if not pages:
+            return None
+        title = str(pages[0].get("title") or "")
+        from backend.app.content.demand_signals import acceptable_term
+        return title if acceptable_term(title) else None
+
     def discover_and_rank_live_topics(
         self,
         filter_duplicates: bool = True,
@@ -1783,6 +1866,26 @@ class CuriosityTopicEngine:
         trace = self.trace
         cids = [trace.candidate(c, "scoring" + stage_suffix) for c in live_cands]
         scored = [self.score_candidate(c) for c in live_cands]
+        # Stage 3.31K scoring v2: recorded in shadow, blended into the score when on.
+        if self.flags.is_active("scoring_v2"):
+            from backend.app.content import topic_scoring_v2 as sv2
+            hist = sv2.category_performance_provider(self._db_path())
+            for c, t in zip(live_cands, scored):
+                try:
+                    v2 = sv2.score_v2(c, t, historical=hist)
+                except Exception as exc:
+                    logger.warning("scoring v2 failed for %s: %s", c.get("title"), exc)
+                    continue
+                t.discovery_metadata["score_v1"] = t.composite_score
+                t.discovery_metadata["score_v2"] = v2
+                if c.get("demand"):
+                    t.discovery_metadata["demand"] = c["demand"]
+                if self.flags.is_on("scoring_v2"):
+                    t.composite_score = sv2.blended(t.composite_score, v2)
+        else:
+            for c, t in zip(live_cands, scored):
+                if c.get("demand"):
+                    t.discovery_metadata["demand"] = c["demand"]
         valid: List[ScoredTopic] = []
         audit_rows: List[Dict[str, Any]] = []
         dups_rejected = 0

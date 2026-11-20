@@ -77,6 +77,24 @@ def choose_hook_type(job_id: str) -> Tuple[str, str]:
     return HOOK_TYPES[idx]
 
 
+def choose_hook_type_for_job(job_id: str) -> Tuple[Tuple[str, str], Optional[Dict[str, str]]]:
+    """Stage 3.32 controlled experiments: an ACTIVE ``hook_type`` experiment limits the per-job (hash) assignment
+    to its arms. Without one - the default - this is exactly ``choose_hook_type``. Any problem reading the
+    experiment falls back to the normal rotation; it never blocks a script."""
+    try:
+        from backend.app.creative_intel.store import CreativeStore, experiment_arm
+        exp = CreativeStore().active_experiment("hook_type")
+    except Exception:
+        exp = None
+    if exp:
+        by_name = dict(HOOK_TYPES)
+        arms = [a for a in exp.get("arms") or [] if a in by_name]
+        if len(arms) >= 2:
+            arm = experiment_arm(job_id, arms)
+            return (arm, by_name[arm]), {"id": exp["id"], "dimension": "hook_type", "arm": arm}
+    return choose_hook_type(job_id), None
+
+
 def _words(text: str) -> List[str]:
     return re.findall(r"[a-z0-9']+", (text or "").lower())
 
@@ -278,7 +296,7 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
                           client: Any = None, model: Optional[str] = None) -> Dict[str, Any]:
     from backend.app.rendering.documentary_storyboard_builder import compose_structured_script
 
-    hook_type = choose_hook_type(job_id)
+    hook_type, experiment = choose_hook_type_for_job(job_id)
     if client is None:
         try:
             client, model = default_client()
@@ -315,10 +333,13 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
                                  "problems": feedback, "calls": calls, "draft": data if feedback else None})
                 if not feedback:
                     policy_arc, category = _arc_and_category(topic, execution_context)
-                    return _with_quality(_assemble(sections, policy_arc, category, script_source=f"llm:{current}",
-                                                   model=current, configured_model=model,
-                                                   hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
-                                                   writer_attempts=attempts), topic)
+                    out = _assemble(sections, policy_arc, category, script_source=f"llm:{current}",
+                                    model=current, configured_model=model,
+                                    hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
+                                    writer_attempts=attempts)
+                    if experiment:
+                        out["creative_experiment"] = experiment
+                    return _with_quality(out, topic)
             if not api_unavailable:
                 break   # drafts failed validation, or a non-transient API error: another model is not the fix
         logger.warning("Script writer: no accepted model draft, using extractive fallback: %s",

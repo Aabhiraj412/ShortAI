@@ -925,6 +925,22 @@
       <div id="opsTopicBody" style="font-size:13px;">--</div></div>
     <div class="card"><div class="card-head"><div><h2 class="card-title">API usage and quota</h2><p class="card-desc">YouTube usage is CrazzyDocs' own count of requests sent (estimate), not Google-reported.</p></div></div>
       <div id="opsApiBody" style="font-size:13px;">--</div></div>
+    <!-- Roadmap 3.31 / 3.32 / 3.33: topic, creative and rendering intelligence -->
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Topic intelligence: demand signals</h2><p class="card-desc">Public-interest signals (Wikipedia most-read with pageview velocity; Google Trends daily searches), with their source. They become candidates only when <code>demand_signals</code> is <strong>on</strong>; in <em>shadow</em> they are collected and recorded only.</p></div></div>
+        <div id="intelTopic" style="font-size:12px;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Rendering architecture</h2><p class="card-desc">The Stage 3.33 benchmark on this machine and the architecture decision.</p></div></div>
+        <div id="intelRender" style="font-size:12px;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Creative intelligence</h2><p class="card-desc">Each finished production is scored from its saved script, scene plan, subtitles and rendered video (14 craft dimensions) and linked to its YouTube video ID for later analytics. These are craft scores, not audience predictions.</p></div></div>
+      <div id="intelCreative" style="font-size:12px;overflow-x:auto;">--</div>
+      <div style="margin-top:8px;font-size:12px;"><strong>Hook-style experiment</strong> (limits the per-job hook rotation to the chosen styles; nothing changes until activated):
+        <div class="btn-row" style="margin-top:4px;align-items:center;flex-wrap:wrap;">
+          <label for="intelOperator" style="color:var(--muted)">Operator</label><input id="intelOperator" maxlength="64" style="width:120px;" />
+          <span id="intelArms"></span>
+          <input id="intelHypothesis" maxlength="500" placeholder="hypothesis" style="width:260px;" />
+          <button class="btn sm" onclick="intelCreateExperiment()">Create draft</button></div>
+        <div id="intelExperiments" style="margin-top:6px;"></div></div></div>
   </section>
 
   <!-- STAGE 3.32C: RECOMMENDATION CENTER -->
@@ -2776,6 +2792,57 @@ async function refreshOps(force = false) {
   } catch (err) {
     if (meta) meta.innerHTML = `<span style="color:#fca5a5">Operational intelligence unavailable: ${escHtml(err.message || String(err))}</span>`;
   }
+  refreshIntel();
+}
+
+// -- Roadmap 3.31 / 3.32 / 3.33 intelligence (persisted backend data; loads with the Ops tab, no own polling) --
+const INTEL_HOOKS = ["surprising_fact", "direct_question", "contradiction", "stakes", "scale"];
+async function intelWrite(url, body) {
+  const op = ((document.getElementById("intelOperator") || {}).value || "").trim();
+  const ao = document.getElementById("autoOperator");
+  if (op && ao) ao.value = op;
+  return autoWrite(url, "POST", body);
+}
+async function refreshIntel() {
+  const t = document.getElementById("intelTopic"); if (!t) return;
+  const arms = document.getElementById("intelArms");
+  if (arms && !arms.innerHTML) arms.innerHTML = INTEL_HOOKS.map(h => `<label style="margin-right:6px;"><input type="checkbox" class="intelArm" value="${h}"> ${h.replace(/_/g, " ")}</label>`).join("");
+  let d;
+  try { d = await apiJson("/api/intelligence/topic-creative-rendering"); }
+  catch (err) { t.innerHTML = `<span class="ops-tag">unavailable</span> ${escHtml(err.message || String(err))}`; return; }
+  const tp = d.topic || {}, fl = tp.flags || {};
+  t.innerHTML = opsKV([
+    ["Flags", escHtml(Object.entries(fl).map(([k, v]) => `${k}: ${v}`).join(" · "))],
+    ["Signals (48 h)", `${escHtml(tp.demand_signals_48h ?? 0)}${tp.last_signal_at_utc ? " · last " + autoTime(tp.last_signal_at_utc) : ""}`],
+  ]) + ((tp.top_demand || []).length ? apTable(["Term", "Source", "Value", "Velocity"], tp.top_demand.map(s => `<tr><td>${escHtml(s.term)}</td><td>${escHtml(s.source)}${s.region && s.region !== "global-en" ? " " + escHtml(s.region) : ""}</td><td>${escHtml(Math.round(s.value || 0).toLocaleString())} ${escHtml(s.metric === "daily_views" ? "views" : "searches")}</td><td>${s.velocity != null ? escHtml(s.velocity + "x") : "--"}</td></tr>`))
+    : `<div style="color:var(--muted);margin-top:4px;">No demand signals recorded yet (the flag is off, or no discovery has run since it was enabled).</div>`);
+  const b = (d.rendering || {}).benchmarks;
+  document.getElementById("intelRender").innerHTML = `<div style="margin-bottom:6px;">${escHtml((d.rendering || {}).decision || "")}</div>` + (b ? apTable(["Case", "Wall", "Per video second", "Peak RAM"], Object.entries(b.cases || {}).map(([k, c]) => `<tr><td>${escHtml(k.replace(/_/g, " "))}</td><td>${c.wall_sec != null ? escHtml(c.wall_sec + " s") : escHtml(c.error || "--")}</td><td>${c.realtime_factor != null ? escHtml(c.realtime_factor + " s") : "--"}</td><td>${c.peak_working_set_mb != null ? escHtml(c.peak_working_set_mb + " MB") : "--"}</td></tr>`))
+    + `<div style="color:var(--muted);margin-top:4px;">${escHtml((b.machine || {}).gpu || "")} · ${escHtml((b.machine || {}).ram_total_gb || "?")} GB RAM · measured ${autoTime(b.generated_at_utc)}</div>` : `<span class="ops-tag">unavailable</span>`);
+  const c = d.creative || {}, s = c.summary || {};
+  const dm = s.dimension_means || {};
+  document.getElementById("intelCreative").innerHTML = !s.records ? `<div style="color:var(--muted)">No productions evaluated yet. The scheduler evaluates up to three finished productions an hour.</div>` :
+    opsKV([
+      ["Evaluated productions", `${escHtml(s.records)} · ${escHtml(s.linked_to_youtube)} linked to YouTube · mean craft score ${escHtml(s.mean_overall)}`],
+      ["Weakest dimensions (mean)", escHtml(Object.entries(dm).sort((a, b) => a[1] - b[1]).slice(0, 4).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(" · "))],
+      ["By hook type (craft score)", escHtml(Object.entries(s.by_hook_type || {}).map(([k, v]) => `${k.replace(/_/g, " ")} ${v.mean_craft_score} (n=${v.n})`).join(" · "))],
+    ]) + apTable(["Job", "Video", "Hook", "Overall", "Plan", "Render", "Weakest"], (c.records || []).map(r => `<tr><td>${escHtml(r.job_id)}</td><td>${escHtml(r.youtube_video_id || "--")}</td><td>${escHtml(r.hook_type || "--")}</td><td>${r.overall_score ?? "--"}</td><td>${r.plan_score ?? "--"}</td><td>${r.render_score ?? "--"}</td><td>${escHtml((r.weakest || []).map(w => `${w.dimension} ${w.score}`).join(", "))}</td></tr>`));
+  const ex = c.experiments || [];
+  document.getElementById("intelExperiments").innerHTML = ex.length ? apTable(["Experiment", "Arms (productions)", "Status", "Hypothesis", ""], ex.map(e => `<tr><td>${escHtml(e.id)}</td><td>${escHtml(Object.entries(e.productions_per_arm || {}).map(([a, n]) => `${a} (${n})`).join(", "))}</td><td>${escHtml(e.status)}</td><td>${escHtml(e.hypothesis)}</td><td>${e.status === "ACTIVE" ? `<button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'PAUSED')">Pause</button>` : (e.status !== "COMPLETED" ? `<button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'ACTIVE')">Activate</button>` : "")}${e.status !== "COMPLETED" ? ` <button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'COMPLETED')">Complete</button>` : ""}</td></tr>`))
+    : `<div style="color:var(--muted)">No experiments. Hook styles rotate across all five by job (the default).</div>`;
+}
+async function intelCreateExperiment() {
+  const arms = [...document.querySelectorAll(".intelArm:checked")].map(x => x.value);
+  const hypothesis = ((document.getElementById("intelHypothesis") || {}).value || "").trim();
+  try { await intelWrite("/api/creative/experiments", { dimension: "hook_type", arms, hypothesis }); showToast("Experiment created (draft)"); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshIntel();
+}
+async function intelSetStatus(id, status) {
+  if (status === "ACTIVE" && !(await askConfirm("Activate this experiment?", "New scripts will use only this experiment's hook styles, assigned per job. Pause it at any time to return to the normal rotation."))) return;
+  try { await intelWrite(`/api/creative/experiments/${encodeURIComponent(id)}/status`, { status }); showToast(`Experiment ${status.toLowerCase()}`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshIntel();
 }
 
 // ---------------------------------------------------------------------------
