@@ -29,6 +29,8 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.app.rendering.ffmpeg_geometry import even_floor, fit_and_pad_filter, stderr_tail
+
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from backend.app.content.creative_identity_policy import CreativeIdentityPolicy
@@ -164,6 +166,15 @@ def extract_numeric_metrics(full_text: str, topic_title: str) -> List[Tuple[str,
             ("SOURCES", float(max(2, len(topic_title.split()))), str(max(2, len(topic_title.split())))),
         ]
     return items
+
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        if path and os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
 
 
 class ExplainerAnimationEngine:
@@ -352,7 +363,9 @@ class ExplainerAnimationEngine:
 
         os.makedirs(os.path.dirname(out_mp4_path), exist_ok=True)
         vx0, vy0, vx1, vy1 = 110, 355, self.width - 110, 1210
-        vw, vh = vx1 - vx0, vy1 - vy0
+        # Stage 3.32H: the FFmpeg viewport must be even in both dimensions (yuv420p chroma grid); 855 rows made
+        # `pad` round its target below the scaled input for every portrait or square source.
+        vw, vh = even_floor(vx1 - vx0), even_floor(vy1 - vy0)
 
         # Build RGBA documentary overlay frame with transparent viewport punch-out
         bg_rgb = _draw_base_documentary_backdrop(
@@ -393,8 +406,7 @@ class ExplainerAnimationEngine:
         target_dur = max(1.0, float(duration_sec))
         filter_complex = (
             f"color=c=0x0b101c:s={self.width}x{self.height}:r={fps}:d={target_dur:.3f}[bg];"
-            f"[0:v]scale={vw}:{vh}:force_original_aspect_ratio=decrease,"
-            f"pad={vw}:{vh}:(ow-iw)/2:(oh-ih)/2:color=0x101727,setsar=1,fps={fps}[fg];"
+            f"[0:v]{fit_and_pad_filter(vw, vh, color='0x101727')},setsar=1,fps={fps}[fg];"
             f"[bg][fg]overlay={vx0}:{vy0}:shortest=1[comp];"
             f"[comp][1:v]overlay=0:0:shortest=1[out]"
         )
@@ -418,9 +430,14 @@ class ExplainerAnimationEngine:
             out_mp4_path,
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45, check=False)
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45, check=False)
+            except subprocess.TimeoutExpired as exc:   # subprocess.run has already killed and reaped FFmpeg
+                _remove_quietly(out_mp4_path)
+                raise RuntimeError(f"FFmpeg Priority B adaptation timed out after {exc.timeout:.0f}s") from None
             if proc.returncode != 0 or not os.path.isfile(out_mp4_path):
-                raise RuntimeError(f"FFmpeg Priority B adaptation failed: {proc.stderr}")
+                _remove_quietly(out_mp4_path)          # never leave a partial clip behind
+                raise RuntimeError(f"FFmpeg Priority B adaptation failed: {stderr_tail(proc.stderr)}")
         finally:
             try:
                 os.remove(overlay_png)

@@ -83,7 +83,7 @@ class HybridVisualEngine:
                 "-y",
                 "-i", anim_path,
                 "-t", f"{beat.duration:.3f}",
-                "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p",
+                "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p",
                 "-an",
                 "-c:v", "libx264",
                 "-preset", "veryfast",

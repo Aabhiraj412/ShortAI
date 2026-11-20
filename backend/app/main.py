@@ -1285,6 +1285,33 @@ async def get_dashboard_stats(filter: str = "all"):
     return production_health_dashboard.get_production_statistics(time_filter=filter)
 
 
+@app.get("/api/health/live")
+async def api_health_live():
+    """Stage 3.32H liveness: answers from the event loop without touching the database or Windows services."""
+    from datetime import datetime, timezone
+    return {"status": "alive", "pid": os.getpid(), "at_utc": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/health/ready")
+def api_health_ready():
+    """Stage 3.32H readiness: a bounded, read-only database check (runs in the threadpool, never blocks the loop)."""
+    import sqlite3 as _sq
+    import time as _time
+    from pathlib import Path as _P
+    from backend.app.core.paths import DATABASE_PATH
+    start = _time.perf_counter()
+    try:
+        conn = _sq.connect(_P(DATABASE_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=3.0)
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "reason": f"database: {type(exc).__name__}",
+                                                      "latency_ms": round((_time.perf_counter() - start) * 1000, 1)})
+    return {"status": "ready", "latency_ms": round((_time.perf_counter() - start) * 1000, 1)}
+
+
 @app.get("/api/dashboard/health")
 async def get_dashboard_health():
     from backend.app.services.production_health_dashboard import production_health_dashboard
@@ -2467,6 +2494,133 @@ async def api_autopilot(_: None = Depends(require_local_control)):
 async def api_autopilot_policy(_: None = Depends(require_local_control)):
     from backend.app.autonomy.autopilot import action_policy
     return await _autonomy_call(action_policy)
+
+
+# -- Stage 3.32H/I/J: operations, phased activation, operational reports ----------------------------------------
+class ActivationAdvanceRequest(_AutonomyBody):
+    target: str = Field(min_length=3, max_length=32)
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+    authorization: str = Field(default="", max_length=64)
+    authorized_actions: List[str] = Field(default_factory=list, max_length=12)
+
+
+class ActivationRetreatRequest(_AutonomyBody):
+    target: str = Field(min_length=2, max_length=32)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ReportGenerateRequest(_AutonomyBody):
+    kind: str = Field(pattern=r"^(daily|weekly)$")
+    key: Optional[str] = Field(default=None, pattern=r"^\d{4}-(\d{2}-\d{2}|W\d{2})$")
+    force: bool = False
+
+
+def _activation():
+    from backend.app.autonomy.activation import get_activation
+    return get_activation()
+
+
+def _reports():
+    from backend.app.autonomy.reports import get_reports
+    return get_reports()
+
+
+def _operations_view() -> Dict[str, Any]:
+    from datetime import datetime, timezone, timedelta as _td
+    from backend.app.core import health_monitoring as hm
+    from backend.app.core.paths import LOGS_DIR
+    from backend.app.autonomy.control_plane import safe_error
+    since = (datetime.now(timezone.utc) - _td(hours=24)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    events = hm.read_events(LOGS_DIR, since_utc=since)
+    health = {"state": hm.read_state(LOGS_DIR), "last_24h": hm.summarize_events(events),
+              "recent_restarts": [e for e in events if e.get("type") == "restart"][-10:],
+              "recent_transitions": [e for e in events if e.get("type") == "probe"
+                                     and e.get("state") != e.get("previous_state")][-10:]}
+    rendering: Dict[str, Any] = {}
+    try:
+        from backend.app.rendering.ffmpeg_geometry import fit_and_pad_filter
+        f = fit_and_pad_filter(860, 855)
+        rendering["geometry_fix_active"] = "860:854" in f and "force_divisible_by=2" in f
+    except Exception as exc:
+        rendering["geometry_fix_active"] = False
+        rendering["geometry_error"] = safe_error(exc)
+    try:
+        from backend.app.services.operational_intelligence import get_service
+        rr = get_service().renderer_reliability(days=7)
+        fi = get_service().failure_intelligence(days=7)
+        trend = (fi.get("metrics") or {}).get("daily_trend") or {}
+        rendering["last_7_days"] = {
+            "status": rr.get("status"),
+            "metrics": {k: (rr.get("metrics") or {}).get(k) for k in (
+                "renders_completed", "renders_failed", "render_success_pct", "avg_render_seconds", "ffmpeg_errors",
+                "render_timeouts", "file_lock_errors", "lemo_opuscar_produced")},
+            "ffmpeg_failures_by_day": {d: v.get("ffmpeg") for d, v in trend.items() if v.get("ffmpeg")},
+            "unavailable": rr.get("unavailable") or {}}
+    except Exception as exc:
+        rendering["last_7_days"] = {"status": "unavailable", "error": safe_error(exc)}
+    try:
+        activation = _activation().overview()
+    except Exception as exc:
+        activation = {"error": safe_error(exc)}
+    return {"health_monitor": health, "rendering": rendering, "activation": activation,
+            "reports": _reports().list_reports(limit=14), "generated_at_utc": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/autopilot/operations")
+async def api_autopilot_operations(_: None = Depends(require_local_control)):
+    return await _autonomy_call(_operations_view)
+
+
+@app.get("/api/autopilot/activation")
+async def api_autopilot_activation(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _activation().overview())
+
+
+@app.get("/api/autopilot/activation/readiness")
+async def api_autopilot_activation_readiness(phase: Optional[str] = None, _: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _activation().assess(phase))
+
+
+@app.post("/api/autopilot/activation/advance")
+async def api_autopilot_activation_advance(req: ActivationAdvanceRequest, _: None = Depends(require_local_control),
+                                           __: None = Depends(require_autonomy_write)):
+    """Advances ONE phase after re-validating readiness. RECOMMEND and above need the exact authorization phrase;
+    restricted execution also needs the operator-created autonomy_startup.json. Never grants standing approvals."""
+    return await _autonomy_call(lambda: _activation().advance(req.target, req.operator, req.reason, confirm=req.confirm,
+                                                              authorization=req.authorization,
+                                                              authorized_actions=req.authorized_actions))
+
+
+@app.post("/api/autopilot/activation/retreat")
+async def api_autopilot_activation_retreat(req: ActivationRetreatRequest, _: None = Depends(require_local_control),
+                                           __: None = Depends(require_autonomy_write)):
+    return await _autonomy_call(lambda: _activation().retreat(req.target, req.operator, req.reason))
+
+
+@app.get("/api/autopilot/reports")
+async def api_autopilot_reports(kind: Optional[str] = None, _: None = Depends(require_local_control)):
+    if kind not in (None, "daily", "weekly"):
+        raise HTTPException(status_code=400, detail="kind must be daily or weekly")
+    return await _autonomy_call(lambda: {"reports": _reports().list_reports(kind, 60)})
+
+
+@app.get("/api/autopilot/reports/{kind}/{key}")
+async def api_autopilot_report(kind: str, key: str, _: None = Depends(require_local_control)):
+    if kind not in ("daily", "weekly") or not re.fullmatch(r"\d{4}-(\d{2}-\d{2}|W\d{2})", key or ""):
+        raise HTTPException(status_code=404, detail="report not found")
+    rep = await _autonomy_call(lambda: _reports().get(kind, key))
+    if rep is None:
+        raise HTTPException(status_code=404, detail="report not generated yet")
+    return rep
+
+
+@app.post("/api/autopilot/reports/generate")
+async def api_autopilot_report_generate(req: ReportGenerateRequest, _: None = Depends(require_local_control),
+                                        __: None = Depends(require_autonomy_write)):
+    from backend.app.autonomy.control_plane import validate_operator
+    op = await _autonomy_call(validate_operator, req.operator)
+    return await _autonomy_call(lambda: _reports().generate(req.kind, req.key, generated_by=op, force=req.force))
 
 
 @app.post("/api/autopilot/recommendations/{rec_id}/propose")

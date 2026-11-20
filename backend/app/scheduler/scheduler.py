@@ -935,6 +935,22 @@ def run_community_draft_tick() -> Dict:
         return {"status": "error", "error": type(exc).__name__}
 
 
+def run_autopilot_tick() -> Dict:
+    """Stage 3.32I/J: one Autopilot observation cycle (only when the operator has activated OBSERVE or higher; it never
+    advances a phase or executes anything) plus daily/weekly operational report upkeep. Reads production data
+    read-only; never touches jobs, cycles, recovery windows, Community or publishing."""
+    try:
+        from backend.app.autonomy.reports import autopilot_tick
+        res = autopilot_tick()
+        obs = res.get("observation") or {}
+        if obs.get("ran") or obs.get("error"):
+            logger.info("[SCHEDULER] Autopilot tick: observation=%s", {k: obs.get(k) for k in ("phase", "outcome", "error")})
+        return res
+    except Exception as exc:
+        logger.warning("[SCHEDULER] Autopilot tick failed: %s", type(exc).__name__)
+        return {"error": type(exc).__name__}
+
+
 def configure_scheduler_jobs():
     """Configures independent production generation, YouTube status reconciliation, and daily summary jobs."""
     profile = get_active_profile()
@@ -1019,6 +1035,18 @@ def configure_scheduler_jobs():
         id="community_draft_tick",
         replace_existing=True,
         name="Community Draft Check",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # 7. Autopilot observation + operational reports (Stage 3.32I/J): every 30 minutes at :11 and :41 (never on a
+    #    cycle's :00 or a Community check minute). Only report upkeep while the Autopilot phase is OFF.
+    scheduler.add_job(
+        run_autopilot_tick,
+        CronTrigger(minute="11,41", timezone=profile.tz),
+        id="autopilot_tick",
+        replace_existing=True,
+        name="Autopilot Observation & Reports",
         max_instances=1,
         coalesce=True,
     )

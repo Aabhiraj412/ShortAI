@@ -89,8 +89,12 @@ def verify_sqlite_database(db_path: Optional[Path] = None) -> bool:
         return False
 
 
-def is_backend_healthy(health_url: str = "http://127.0.0.1:8000/api/dashboard/health", timeout: float = 2.0) -> bool:
-    """Checks that /api/dashboard/health responds HTTP 200 with healthy database status."""
+def is_backend_healthy(health_url: str = "http://127.0.0.1:8000/api/dashboard/health", timeout: float = 10.0) -> bool:
+    """Checks that /api/dashboard/health responds HTTP 200 with healthy database status.
+
+    Used only as the boot readiness gate. Stage 3.32H: the aggregate endpoint routinely takes about 2 s, so the old
+    2 s timeout reported a working dashboard as down; the continuous monitor now uses the liveness/readiness probes.
+    """
     try:
         req = urllib.request.Request(health_url, headers={"User-Agent": "CrazzyDocs-StartupManager/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -210,26 +214,59 @@ class BoundedRestartTracker:
 
 
 def run_health_monitor_loop(
-    interval_sec: float = 30.0,
+    interval_sec: Optional[float] = None,
     max_iterations: Optional[int] = None,
     health_probe: Optional[Callable[[], bool]] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
+    *,
+    live_probe: Optional[Callable[[], Any]] = None,
+    ready_probe: Optional[Callable[[], Any]] = None,
+    process_alive: Optional[Callable[[], bool]] = None,
+    restart_fn: Optional[Callable[[], Any]] = None,
+    logs_dir: Optional[Path] = None,
 ) -> Dict[str, int]:
-    """Monitors dashboard health and optionally restarts crashed components with bounded backoff."""
+    """Monitors dashboard liveness/readiness (Stage 3.32H) and restarts it only when it is genuinely down.
+
+    * a slow or not-ready dashboard is DEGRADED and never restarted;
+    * liveness must fail ``failure_threshold`` consecutive times (UNHEALTHY) before a restart is considered;
+    * a restart happens only when no dashboard process holds the server lock (a live process is never killed);
+    * restarts are capped per hour with exponential backoff; every probe, state and restart is persisted.
+    """
     from backend.app.scheduler.reconciliation_service import SchedulerProcessLock
+    from backend.app.core import health_monitoring as hm
 
     mon_lock = SchedulerProcessLock(lock_path=str(MONITOR_LOCK))
     if not mon_lock.acquire():
         logger.warning("[MONITOR] Another health monitor instance is already active. Exiting.")
         return {"iterations": 0, "restarts": 0, "skipped_duplicate": 1}
 
-    probe = health_probe or is_backend_healthy
+    cfg = hm.load_config()
+    interval = cfg.interval_sec if interval_sec is None else interval_sec
+    if health_probe is not None:            # legacy boolean probe (tests): treat it as the liveness result
+        def _legacy_live():
+            ok = bool(health_probe())
+            return hm.ProbeResult(ok, 0.0, "ok" if ok else "probe_failed")
+        live_probe = live_probe or _legacy_live
+        ready_probe = ready_probe or (lambda: None)
+    live_probe = live_probe or (lambda: hm.probe_liveness(cfg))
+    ready_probe = ready_probe or (lambda: hm.probe_readiness(cfg))
+    if process_alive is None:
+        def process_alive() -> bool:
+            from backend.app.core import dashboard_startup as ds
+            return ds.server_instance_active()
+    restart_fn = restart_fn or (lambda: ensure_dashboard_running(open_browser=False))
     sleeper = sleep_fn or time.sleep
-    tracker = BoundedRestartTracker(max_restarts_per_hour=3, base_backoff_sec=5.0)
+    ledger = hm.HealthLedger(logs_dir or Path(MONITOR_LOCK).parent)   # the lock lives in the logs directory
+    evaluator = hm.HealthEvaluator(cfg)
+    tracker = BoundedRestartTracker(max_restarts_per_hour=cfg.max_restarts_per_hour, base_backoff_sec=cfg.base_backoff_sec)
     iterations = 0
     restarts = 0
+    restart_log: list = []
     last_utc = datetime.now(timezone.utc)
     last_mono = time.monotonic()
+    logger.info("[MONITOR] Started (config: %s; interval %.0fs, liveness timeout %.1fs, readiness timeout %.1fs, "
+                "unhealthy after %d failures, recovery after %d successes).", cfg.source, interval,
+                cfg.liveness_timeout_sec, cfg.readiness_timeout_sec, cfg.failure_threshold, cfg.recovery_threshold)
 
     try:
         while max_iterations is None or iterations < max_iterations:
@@ -242,33 +279,44 @@ def run_health_monitor_loop(
             if wall_jump > 90.0:
                 logger.info("[MONITOR] Sleep/resume clock jump detected (%.1fs); re-verifying health.", wall_jump)
 
-            from backend.app.core import dashboard_startup as ds
-            starting = (not probe()) and health_probe is None and ds.server_instance_active()
-            if starting:
-                # a dashboard process holds the server lock: it is still starting (cold boot) or busy;
-                # launching another would only fail on the port. Not a crash.
-                logger.info("[MONITOR] Dashboard not answering yet but its process is alive; not restarting.")
-            elif not probe():
+            live = live_probe()
+            ready = ready_probe() if live.ok else None
+            alive = bool(process_alive()) if not live.ok else True
+            decision = evaluator.observe(live, ready, alive)
+            if decision.state != decision.previous_state:
+                log = logger.info if decision.state in (hm.HEALTHY, hm.DEGRADED) else logger.warning
+                log("[MONITOR] Dashboard %s -> %s: %s (liveness %.0f ms, %s).", decision.previous_state,
+                    decision.state, decision.reason, live.latency_ms, live.reason)
+            if decision.action == hm.ACTION_RESTART:
                 allowed, backoff = tracker.can_restart("dashboard")
                 if allowed:
-                    logger.warning("[MONITOR] Dashboard unhealthy; backing off %.1fs before restart.", backoff)
+                    logger.warning("[MONITOR] Dashboard unhealthy (%s); backing off %.1fs before restart.",
+                                   decision.reason, backoff)
                     sleeper(backoff)
-                    tracker.record_restart("dashboard")
-                    ensure_dashboard_running(open_browser=False)
-                    restarts += 1
+                    if process_alive():         # re-check: a process may have appeared during the backoff
+                        restart_log.append(ledger.record_restart("skipped_process_appeared", decision.reason, backoff))
+                    else:
+                        tracker.record_restart("dashboard")
+                        ok = bool(restart_fn())
+                        restarts += 1
+                        restart_log.append(ledger.record_restart("restarted" if ok else "restart_not_healthy",
+                                                                 decision.reason, backoff))
                 else:
-                    logger.error("[MONITOR] Dashboard restart cap reached (3/hour); suppressing restart storm.")
+                    decision.action = hm.ACTION_SUPPRESSED
+                    logger.error("[MONITOR] Dashboard restart cap reached (%d/hour); suppressing restart storm.",
+                                 cfg.max_restarts_per_hour)
+                    restart_log.append(ledger.record_restart("suppressed_cap", decision.reason, 0.0))
+            ledger.record_decision(decision, cfg, restart_log)
 
             ensure_scheduler_running_if_authorized()
             mon_lock.update_heartbeat()
             if max_iterations is not None and iterations >= max_iterations:
                 break
-            sleeper(interval_sec)
+            sleeper(interval)
     finally:
         mon_lock.release()
 
     return {"iterations": iterations, "restarts": restarts, "skipped_duplicate": 0}
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CrazzyDocs Startup Manager & Health Monitor")

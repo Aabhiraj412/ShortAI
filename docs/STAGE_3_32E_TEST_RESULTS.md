@@ -252,3 +252,14 @@ No console errors except connection refusals while the preview server restarted,
 - One failure was new: the 3.32B import allow-list, a test-only expectation. After updating it, the 3.32B and 3.32G suites pass (78 cases).
 - **Effective result: 1415 passed, 4 failed.** All 4 are the known baseline (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, `test_youtube_branding` × 2); the timing-sensitive dashboard test passed in this run.
 - **No regressions.**
+
+## 10. Stages 3.32H, 3.32I and 3.32J: reliability, activation, reports (2026-11-21)
+
+| Suite | Result |
+|---|---|
+| `test_render_geometry_332h.py` (real FFmpeg on synthetic media: 7 sources × 5 targets, Priority B adapter with MP4 and GIF, invalid input, timeout) | 55 passed |
+| `test_reliability_activation_reports_332hij.py` (health evaluator, probes, monitor loop, endpoints, every phase transition and refusal, reports, API, dashboard and scheduler wiring) | 40 passed |
+| Related suites (autonomy, autopilot, recommendations, self-healing, startup, daemon restart, scheduler, retry, community) | 674 passed + 118 after the allow-list update |
+| **Full suite** | **1510 passed, 4 failed, 173 skipped** (20 min 37 s) |
+
+The 4 failures are the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run` and both `test_youtube_branding` tests. No new failures. The 3.32B source-safety allow-list now includes `autonomy.activation`, `autonomy.reports`, `core.health_monitoring` and `rendering.ffmpeg_geometry`, with a rationale.

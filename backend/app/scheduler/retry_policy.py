@@ -74,6 +74,10 @@ DETERMINISTIC_MESSAGE_MARKERS = (
     "check_a_topic_narration",
     "invalid research",
     "script validation",
+    # Stage 3.32H: FFmpeg geometry/parameter errors repeat identically on every retry (same inputs, same code)
+    "padded dimensions cannot be smaller than input",
+    "not divisible by 2",
+    "invalid too big or non positive size",
 )
 
 POST_RENDER_STAGES = frozenset({"RENDERING", "THUMBNAIL", "QUALITY_CHECK", "SEO", "COMPLETED", "PUBLISHING_QUEUE_HANDOFF"})

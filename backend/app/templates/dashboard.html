@@ -1112,6 +1112,16 @@
       <div class="kpi-card"><div class="kpi-label">Executions</div><div class="kpi-val" id="apExecCount">--</div><div class="kpi-sub" id="apExecCountSub">--</div></div>
       <div class="kpi-card"><div class="kpi-label">Safety</div><div class="kpi-val" id="apSafety">--</div><div class="kpi-sub" id="apSafetySub">--</div></div>
     </div>
+    <!-- STAGE 3.32H/I/J: reliability, phased activation, operational reports -->
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Dashboard health</h2><p class="card-desc">From the health monitor's persisted ledger. Liveness and readiness are probed separately. A slow or not-ready dashboard is <em>degraded</em> and is never restarted; a restart needs consecutive liveness failures <em>and</em> no running dashboard process.</p></div></div><div id="apHealth" style="font-size:12px;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Rendering and FFmpeg</h2><p class="card-desc">Last 7 days from the stored production records, plus the 3.32H scale/pad geometry fix.</p></div></div><div id="apRender" style="font-size:12px;">--</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Autopilot activation</h2><p class="card-desc">Phases advance one at a time and never automatically. Each advance re-checks readiness. RECOMMEND and later phases need an exact authorization phrase. Restricted execution also needs the operator-created <code>autonomy_startup.json</code>. Activation never grants standing approvals. Retreating to a lower phase is always allowed.</p></div></div><div id="apActivation" style="font-size:12px;">--</div></div>
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Operational reports</h2><p class="card-desc">Daily summaries and weekly Autopilot reports, built from stored data only. <strong>Observed facts</strong>, <strong>calculated metrics</strong> (with their formulas) and <strong>rule-based interpretations</strong> (with the metrics they cite) are kept apart. Missing data is listed, never shown as zero. No AI text; no notifications are sent.</p></div>
+      <div class="btn-row"><button class="btn sm" onclick="apGenerateReport('daily')">Update today's summary</button><button class="btn sm" onclick="apGenerateReport('weekly')">Update this week's report</button></div></div>
+      <div id="apReportList" style="font-size:12px;overflow-x:auto;">--</div>
+      <div id="apReportView" style="font-size:12px;margin-top:10px;"></div></div>
     <div class="grid-2">
       <div class="card"><div class="card-head"><div><h2 class="card-title">Categories</h2><p class="card-desc">Effective level = min(global, category), and why each category cannot execute.</p></div></div><div id="apCats" style="font-size:12px;overflow-x:auto;">--</div></div>
       <div class="card"><div class="card-head"><div><h2 class="card-title">Connected components</h2><p class="card-desc">Self-Healing, Community drafts and publishing readiness, as each reports itself.</p></div></div><div id="apComponents" style="font-size:12px;">--</div></div>
@@ -3900,6 +3910,7 @@ async function refreshAutopilot(force = false) {
   } catch (err) {
     if (meta) meta.innerHTML = `<span class="auto-kill">Autopilot unavailable: ${escHtml(err.message || String(err))}</span>`;
   }
+  refreshAutopilotOps(force);
 }
 
 async function apPropose(recId, actionType) {
@@ -3912,6 +3923,143 @@ async function apPropose(recId, actionType) {
 }
 
 setInterval(() => refreshAutopilot(), 120000);   // only loads while the Autopilot tab is open
+
+// -- Stage 3.32H/I/J operations: health, rendering, phased activation and reports (persisted backend state only). --
+const AP_STATE_COLOR = { HEALTHY: "#86efac", DEGRADED: "#fcd34d", UNAVAILABLE: "#fdba74", UNHEALTHY: "#fca5a5" };
+let apReportShown = null;
+
+async function apOpsWrite(url, body) {
+  const op = ((document.getElementById("apOperator") || {}).value || "").trim();
+  const ao = document.getElementById("autoOperator");
+  if (op && ao) ao.value = op;
+  return autoWrite(url, "POST", body);
+}
+
+function apNum(v, unit = "") { return v === null || v === undefined ? `<span style="color:var(--muted)">unavailable</span>` : escHtml(`${v}${unit}`); }
+
+async function refreshAutopilotOps(force = false) {
+  const panel = document.getElementById("tab-autopilot");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  let o;
+  try { o = await apiJson("/api/autopilot/operations"); }
+  catch (err) {
+    ["apHealth", "apRender", "apActivation", "apReportList"].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = `<span class="auto-kill">unavailable: ${escHtml(err.message || String(err))}</span>`; });
+    return;
+  }
+  // health
+  const h = o.health_monitor || {}, st = h.state || {}, last = st.last || {}, d = h.last_24h || {};
+  const hEl = document.getElementById("apHealth");
+  if (!last.state) {
+    hEl.innerHTML = `<div style="color:#fcd34d">The health monitor has not recorded any state yet (it is not running the 3.32H code).</div>`;
+  } else {
+    const lat = d.liveness_latency_ms || {};
+    hEl.innerHTML = opsKV([
+      ["State", `<strong style="color:${AP_STATE_COLOR[last.state] || "inherit"}">${escHtml(last.state)}</strong> · ${escHtml(last.reason || "")}`],
+      ["Last probe", `${autoTime(last.at_utc)} · liveness ${apNum(last.live_latency_ms, " ms")} (${escHtml(last.live_reason || "")}) · readiness ${last.ready_ok === null || last.ready_ok === undefined ? "--" : (last.ready_ok ? "ready" : "NOT READY")} ${last.ready_latency_ms != null ? escHtml(last.ready_latency_ms + " ms") : ""}`],
+      ["Last 24 h", d.available ? `${escHtml(d.probes)} probes · availability ${apNum(d.availability_pct, "%")} · latency p50 ${apNum(lat.p50, " ms")}, p95 ${apNum(lat.p95, " ms")}, max ${apNum(lat.max, " ms")}` : `<span style="color:var(--muted)">${escHtml(d.reason || "no data")}</span>`],
+      ["States (24 h)", escHtml(Object.entries(d.states || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "--")],
+      ["Failure reasons", escHtml(Object.entries(d.failure_reasons || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "none")],
+      ["Restarts (24 h)", (h.recent_restarts || []).length ? (h.recent_restarts || []).map(r => `${autoTime(r.at_utc)} ${escHtml(r.outcome)}: ${escHtml((r.reason || "").slice(0, 100))}`).join("<br>") : "none"],
+      ["Thresholds", escHtml(`unhealthy after ${(st.config || {}).failure_threshold} liveness failures · healthy again after ${(st.config || {}).recovery_threshold} good probes · liveness timeout ${(st.config || {}).liveness_timeout_sec}s · slow above ${(st.config || {}).slow_latency_ms} ms · max ${(st.config || {}).max_restarts_per_hour} restarts/h`)],
+    ]) + ((h.recent_transitions || []).length ? `<div style="margin-top:6px;color:var(--muted)">Recent transitions: ${(h.recent_transitions || []).map(t => `${autoTime(t.at_utc)} ${escHtml(t.previous_state)}→${escHtml(t.state)}`).join(" · ")}</div>` : "");
+  }
+  // rendering
+  const r = o.rendering || {}, r7 = r.last_7_days || {}, rm = r7.metrics || {};
+  document.getElementById("apRender").innerHTML = opsKV([
+    ["Geometry fix", r.geometry_fix_active ? `<span class="auto-on">active</span> (even viewport, scale forced to even sizes)` : `<span class="auto-kill">not active</span>`],
+    ["Renders (7 d)", `${apNum(rm.renders_completed)} completed · ${apNum(rm.renders_failed)} failed · success ${apNum(rm.render_success_pct, "%")} · avg ${apNum(rm.avg_render_seconds, " s")}`],
+    ["Lemo-Opuscar", apNum(rm.lemo_opuscar_produced)],
+    ["FFmpeg errors (7 d)", `${apNum(rm.ffmpeg_errors)} · timeouts ${apNum(rm.render_timeouts)} · file locks ${apNum(rm.file_lock_errors)}`],
+    ["FFmpeg failures by day", escHtml(Object.entries(r7.ffmpeg_failures_by_day || {}).map(([k, v]) => `${k}: ${v}`).join(" · ") || "none")],
+    ["Unavailable", escHtml(Object.entries(r7.unavailable || {}).map(([k, v]) => `${k}: ${v}`).join("; ") || "--")],
+  ]);
+  // activation
+  const a = o.activation || {}, as = a.state || {}, nx = a.next || {}, ob = a.observation || {};
+  const phases = a.phases || [];
+  const idx = phases.indexOf(as.phase);
+  const lower = phases.slice(0, Math.max(0, idx));
+  const drift = Object.entries(a.level_drift || {});
+  document.getElementById("apActivation").innerHTML = a.error ? `<span class="auto-kill">${escHtml(a.error)}</span>` : (
+    opsKV([
+      ["Current phase", `<strong>${escHtml(as.phase || "OFF")}</strong>${as.phase_started_at_utc ? ` since ${autoTime(as.phase_started_at_utc)} (by ${escHtml(as.changed_by || "")})` : " (never activated)"}`],
+      ["Phases", escHtml(phases.join(" → "))],
+      ["Observation", `${escHtml(ob.cycles ?? 0)} cycles (${escHtml(ob.failed ?? 0)} with errors) · ${escHtml(ob.observations_recorded ?? 0)} observations recorded${ob.last_at_utc ? " · last " + autoTime(ob.last_at_utc) : ""}`],
+      ["Recommended observation", a.observe_recommended_until_utc ? `at least ${escHtml(a.observe_min_hours)} h, until ${autoTime(a.observe_recommended_until_utc)} or later` : "--"],
+      ["Level drift", drift.length ? `<span style="color:#fcd34d">${drift.map(([k, v]) => `${escHtml(k)}: expected ${escHtml(v.expected)}, actual ${escHtml(v.actual)}`).join("; ")}</span>` : "levels match the phase"],
+    ])
+    + (nx.target_phase ? `<div style="margin-top:8px;"><strong>Readiness for ${escHtml(nx.target_phase)}</strong>: ${nx.ready ? `<span class="auto-on">ready</span>` : `<span style="color:#fcd34d">${(nx.blockers || []).length} blocker(s)</span>`}</div>`
+      + apTable(["Check", "Result", "Detail"], (nx.checks || []).map(c => `<tr><td>${escHtml(c.id)}</td><td>${c.ok ? `<span class="auto-on">pass</span>` : (c.blocking ? `<span class="auto-kill">blocked</span>` : `<span style="color:#fcd34d">info</span>`)}</td><td>${escHtml(c.detail || "")}</td></tr>`))
+      + `<div class="btn-row" style="margin-top:8px;align-items:center;flex-wrap:wrap;">
+           <input id="apActReason" maxlength="500" placeholder="reason" style="width:220px;" />
+           ${nx.requires_authorization_phrase ? `<input id="apActAuth" maxlength="64" placeholder="type: ${escHtml(nx.authorization_phrase)}" style="width:250px;" />` : ""}
+           ${(nx.allowed_actions || []).length ? `<input id="apActActions" maxlength="300" placeholder="authorized actions: ${escHtml(nx.allowed_actions.join(", "))}" style="width:320px;" />` : ""}
+           <button class="btn sm" ${nx.ready ? "" : "disabled title=\"readiness checks are not passing\""} data-target="${escHtml(nx.target_phase)}" onclick="apAdvancePhase(this.dataset.target)">Advance to ${escHtml(nx.target_phase)}</button>
+           ${lower.length ? `<select id="apRetreatTarget">${lower.map(p => `<option>${escHtml(p)}</option>`).join("")}</select><button class="btn sm" onclick="apRetreatPhase()">Retreat</button>` : ""}
+         </div>` : "")
+    + ((a.history || []).length ? `<div style="margin-top:8px;"><strong>History</strong></div>` + apTable(["When", "Change", "Outcome", "Operator", "Reason"], (a.history || []).slice(0, 10).map(e => `<tr${e.outcome === "REFUSED" ? ` style="color:#fca5a5"` : ""}><td>${autoTime(e.at_utc)}</td><td>${escHtml(e.from_phase)} → ${escHtml(e.to_phase)}</td><td>${escHtml(e.outcome)}</td><td>${escHtml(e.operator)}</td><td>${escHtml((e.reason || "").slice(0, 120))}${(e.blockers || []).length ? " · blockers: " + escHtml(e.blockers.map(b => b.id).join(", ")) : ""}</td></tr>`)) : ""));
+  // reports
+  const reps = o.reports || [];
+  document.getElementById("apReportList").innerHTML = reps.length ? apTable(["Report", "Period", "Complete", "Generated", ""],
+    reps.map(x => `<tr><td>${escHtml(x.kind)}</td><td>${escHtml(x.period_key)}</td><td>${x.complete ? "yes" : "in progress"}</td><td>${autoTime(x.generated_at_utc)} · ${escHtml(x.generated_by)}</td><td><button class="btn sm" data-kind="${escHtml(x.kind)}" data-key="${escHtml(x.period_key)}" onclick="apViewReport(this.dataset.kind, this.dataset.key)">View</button></td></tr>`))
+    : `<div style="color:var(--muted)">No reports generated yet. The scheduler updates them every 30 minutes; you can also update them now.</div>`;
+  if (!apReportShown && reps.length) apViewReport(reps[0].kind, reps[0].period_key);
+}
+
+function apRenderReport(rep) {
+  const f = rep.observed_facts || {}, m = rep.calculated_metrics || {}, p = rep.period || {}, s = rep.stored || {};
+  const prod = (f.production || {}).values || {}, hm = f.health_monitor || {}, rec = f.recommendations || {}, au = f.autonomy || {};
+  return `<div style="border-top:1px solid var(--border);padding-top:8px;"><strong>${escHtml(rep.kind === "weekly" ? "Weekly Autopilot report" : "Daily operational summary")}: ${escHtml(p.label || "")}</strong>
+    <span style="color:var(--muted)"> · ${p.complete ? "complete" : "in progress (covers until " + autoTime(p.covered_until_utc) + ")"} · generated ${autoTime(rep.generated_at_utc)} by ${escHtml(rep.generated_by || "")} · integrity ${s.sha256_verified ? "verified" : "NOT verified"}</span></div>`
+    + `<div style="margin-top:6px;"><strong>Calculated metrics</strong></div>` + apTable(["Metric", "Value", "Formula", "Inputs"], Object.entries(m).map(([k, v]) => `<tr><td>${escHtml(k)}</td><td>${apNum(v.value)}</td><td>${escHtml(v.formula || "")}</td><td>${escHtml(JSON.stringify(v.inputs || {}))}</td></tr>`))
+    + `<div style="margin-top:6px;"><strong>Interpretations</strong> <span style="color:var(--muted)">(rule-based; ${escHtml((rep.ai_interpretation || {}).note || "")})</span></div>`
+    + ((rep.interpretations || []).map(i => `<div style="color:${i.level === "warning" ? "#fcd34d" : "inherit"}">• ${escHtml(i.text)} <span style="color:var(--muted)">[${escHtml((i.cites || []).join(", "))}]</span></div>`).join("") || "<div>none</div>")
+    + ((rep.recommended_actions || []).length ? `<div style="margin-top:6px;"><strong>Recommended actions</strong> (for the operator; nothing runs automatically)</div>` + rep.recommended_actions.map(a => `<div>• ${escHtml(a.action)}</div>`).join("") : "")
+    + `<div style="margin-top:6px;"><strong>Observed facts</strong></div>` + opsKV([
+      ["Production", escHtml(`${prod.total_cycles ?? "?"} cycles · ${prod.completed ?? "?"} completed · ${prod.failed ?? "?"} failed · ${prod.recovery_window_expired ?? "?"} recovery-window expired`)],
+      ["Rendering failures", escHtml(`FFmpeg ${(f.rendering_failure_trend || {}).ffmpeg_failures ?? "?"} · file locks ${(f.rendering_failure_trend || {}).file_lock_failures ?? "?"}`)],
+      ["Dashboard health", hm.available ? escHtml(`${hm.probes} probes · availability ${hm.availability_pct}% · ${hm.restarts} restart(s)`) : `<span style="color:var(--muted)">${escHtml(hm.reason || "unavailable")}</span>`],
+      ["Recommendations", escHtml(`${rec.created ?? "?"} created · ${rec.open_now ?? "?"} open now · decided ${JSON.stringify(rec.decided_by_status || {})}`)],
+      ["Approvals", escHtml(JSON.stringify(f.approvals || {}))],
+      ["Executions", escHtml(JSON.stringify(f.executions || {}))],
+      ["Blocked actions", escHtml(JSON.stringify((f.blocked_actions || {}).by_event || {}))],
+      ["Circuit breakers", escHtml(JSON.stringify(f.circuit_breakers || {}))],
+      ["Autopilot", escHtml(`phase ${au.phase || "?"}${au.next_phase ? ` · next ${au.next_phase} ${au.next_phase_ready ? "ready" : "not ready"}` : ""} · ${au.observation_cycles_in_period ?? 0} observation cycles · kill switches ${(au.kill_switches_active || []).join(", ") || "none"}`)],
+    ])
+    + ((rep.missing || []).length ? `<div style="margin-top:6px;color:var(--muted)"><strong>Missing data</strong>: ${rep.missing.map(x => `${escHtml(x.item)} (${escHtml(x.reason)})`).join("; ")}</div>` : "");
+}
+
+async function apViewReport(kind, key) {
+  const el = document.getElementById("apReportView");
+  try { const rep = await apiJson(`/api/autopilot/reports/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`); apReportShown = `${kind}:${key}`; el.innerHTML = apRenderReport(rep); }
+  catch (err) { el.innerHTML = `<span class="auto-kill">${escHtml(err.message || String(err))}</span>`; }
+}
+
+async function apGenerateReport(kind) {
+  try { const rep = await apOpsWrite("/api/autopilot/reports/generate", { kind }); showToast(rep.cached ? "Report for a completed period already stored" : "Report updated"); apReportShown = `${rep.kind}:${(rep.period || {}).key}`; document.getElementById("apReportView").innerHTML = apRenderReport(rep); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilotOps(true);
+}
+
+async function apAdvancePhase(target) {
+  const reason = ((document.getElementById("apActReason") || {}).value || "").trim();
+  const auth = ((document.getElementById("apActAuth") || {}).value || "").trim();
+  const actions = ((document.getElementById("apActActions") || {}).value || "").split(",").map(s => s.trim()).filter(Boolean);
+  if (!reason) { showToast("Enter a reason first", true); return; }
+  if (!(await askConfirm(`Advance Autopilot to ${target}?`, `Readiness is re-checked on the server. ${target === "OBSERVE" ? "OBSERVE records observations only; nothing is proposed or executed." : target === "RECOMMEND" ? "RECOMMEND queues proposals for approval; nothing executes." : "Execution still needs autonomy_startup.json, explicit approvals and every gate. No standing approval is granted."}`))) return;
+  try { await apOpsWrite("/api/autopilot/activation/advance", { target, reason, confirm: true, authorization: auth, authorized_actions: actions }); showToast(`Autopilot phase: ${target}`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilot(true);
+}
+
+async function apRetreatPhase() {
+  const target = (document.getElementById("apRetreatTarget") || {}).value;
+  const reason = ((document.getElementById("apActReason") || {}).value || "").trim();
+  if (!target || !reason) { showToast("Choose a phase and enter a reason", true); return; }
+  if (!(await askConfirm(`Retreat Autopilot to ${target}?`, "This only lowers autonomy levels."))) return;
+  try { await apOpsWrite("/api/autopilot/activation/retreat", { target, reason }); showToast(`Autopilot phase: ${target}`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilot(true);
+}
 
 </script>
 </body>

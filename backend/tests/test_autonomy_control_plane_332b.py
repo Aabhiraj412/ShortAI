@@ -675,7 +675,12 @@ def test_production_records_untouched_and_no_production_calls(tmp_path, monkeypa
                    # the recommendation engine to read one recommendation for the bridge). Each has its own
                    # source-safety tests (3.32C, 3.32D, 3.32E, 3.32F); none of them is executed from autonomy.
                    "backend.app.autonomy.recommendations.engine", "backend.app.autonomy.self_healing.engine",
-                   "backend.app.community.service", "backend.app.community.publishing"}
+                   "backend.app.community.service", "backend.app.community.publishing",
+                   # Stage 3.32I/J: activation.py and reports.py import each other and read persisted state only:
+                   # the 3.32H health-monitor ledger (file reads), the FFmpeg geometry self-check (pure function) and
+                   # the 3.32A read-only intelligence. Their own tests: test_reliability_activation_reports_332hij.py.
+                   "backend.app.autonomy.activation", "backend.app.autonomy.reports",
+                   "backend.app.core.health_monitoring", "backend.app.rendering.ffmpeg_geometry"}
     assert {m for m in imported if m.startswith(("backend", "app"))} <= allowed_app
     assert not imported & {"subprocess", "requests", "urllib.request", "socket", "shutil", "httpx"}
     # registry.py only *names* the guarded production functions (as data); the executable modules never mention them.

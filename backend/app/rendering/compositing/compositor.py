@@ -350,8 +350,8 @@ class UniversalCompositor:
 
         # 5. Build filter_complex with format normalization for seamless concatenation
         filter_parts = []
-        filter_parts.append("[0:v]setsar=1,fps=30,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];")
-        filter_parts.append("[1:v]setsar=1,fps=30,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];")
+        filter_parts.append("[0:v]setsar=1,fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];")
+        filter_parts.append("[1:v]setsar=1,fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];")
 
         if main_has_audio:
             filter_parts.append("[0:a]aformat=sample_rates=48000:channel_layouts=stereo[a0];")
