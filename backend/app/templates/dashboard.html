@@ -359,6 +359,7 @@
     <button class="tab-btn" data-tab="schedule" onclick="switchTab('schedule', this)">Production Schedule</button>
     <button class="tab-btn" data-tab="queue" onclick="switchTab('queue', this)">Publishing Queue</button>
     <button class="tab-btn" data-tab="ops" onclick="switchTab('ops', this)">Operations</button>
+    <button class="tab-btn" data-tab="recs" onclick="switchTab('recs', this)">Recommendations</button>
     <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
     <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
     <button class="tab-btn" data-tab="autonomy" onclick="switchTab('autonomy', this)">Autonomy Control</button>
@@ -911,6 +912,42 @@
       <div id="opsApiBody" style="font-size:13px;">--</div></div>
   </section>
 
+  <!-- STAGE 3.32C: RECOMMENDATION CENTER -->
+  <section id="tab-recs" class="tab-panel">
+    <div class="card" style="padding:12px 16px;">
+      <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Recommendation Center</h2>
+        <p class="card-desc"><strong>Advice only.</strong> Findings come from the Operations data with deterministic rules. Approving a recommendation records your agreement; <strong>nothing is executed</strong>. Executable approval requests live in Autonomy Control.</p></div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <label for="recOperator" style="font-size:12px;color:var(--muted);">Operator</label>
+          <input id="recOperator" maxlength="64" placeholder="your name" style="width:130px;" />
+          <button class="btn sm primary" onclick="recRun()">Analyse now</button>
+          <button class="btn sm" onclick="refreshRecommendations(true)">Refresh</button></div></div>
+      <div class="meta" style="font-size:12px;" id="recMeta">Open this tab to load.</div>
+    </div>
+    <div class="overview-grid">
+      <div class="kpi-card"><div class="kpi-label">Active recommendations</div><div class="kpi-val" id="recActive">--</div><div class="kpi-sub" id="recActiveSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Critical</div><div class="kpi-val" id="recCritical" style="color:#fca5a5;">--</div><div class="kpi-sub">priority ≥ 80</div></div>
+      <div class="kpi-card"><div class="kpi-label">High priority</div><div class="kpi-val" id="recHigh" style="color:#fcd34d;">--</div><div class="kpi-sub">priority 60–79</div></div>
+      <div class="kpi-card"><div class="kpi-label">New (24 h)</div><div class="kpi-val" id="recNew">--</div><div class="kpi-sub">recently detected issues</div></div>
+      <div class="kpi-card"><div class="kpi-label">Engine</div><div class="kpi-val" id="recMode">--</div><div class="kpi-sub" id="recModeSub">--</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">By category and confidence</h2><p class="card-desc">Open recommendations.</p></div></div>
+        <div id="recBreakdown" style="font-size:13px;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Historical trend</h2><p class="card-desc">New recommendations per day (last 14 days).</p></div></div>
+        <div class="ops-cols" id="recTrend"></div><div class="meta" style="font-size:11px;margin-top:4px;" id="recTrendLegend"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Recommendations</h2><p class="card-desc">Sorted by priority. Each shows whether it is a confirmed observation, a strongly supported hypothesis or a weak hypothesis.</p></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <select id="recFilter" onchange="refreshRecommendations(true)"><option value="open">Open</option><option value="history">History</option><option value="all">All</option></select>
+          <select id="recCategory" onchange="refreshRecommendations(true)"><option value="">All categories</option></select></div></div>
+      <div id="recList" style="font-size:13px;">--</div>
+      <details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:12px;">Checks without enough evidence in the last analysis</summary>
+        <div id="recInsufficient" style="font-size:12px;color:var(--muted);margin-top:6px;">--</div></details>
+    </div>
+  </section>
+
   <!-- STAGE 3.32B: AUTONOMY CONTROL PLANE -->
   <section id="tab-autonomy" class="tab-panel">
     <div class="card" style="padding:12px 16px;">
@@ -1144,6 +1181,7 @@ function switchTab(tabId, btn) {
   if (tabId === "ops") { refreshOps(); }
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
+  if (tabId === "recs") { refreshRecommendations(true); }
 }
 
 async function refreshOverviewAndHealth() {
@@ -2551,6 +2589,148 @@ async function refreshOps(force = false) {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 3.32C Recommendation Center. Advice only: no call here executes an operational action. Status changes and
+// analysis runs use the autonomy CSRF token; server values are escaped and ids pass through data-* attributes.
+// ---------------------------------------------------------------------------
+const recState = { list: [], open: new Set(), categories: {} };
+const REC_COLOURS = { CRITICAL: "#fca5a5", HIGH: "#fcd34d", MEDIUM: "#93c5fd", LOW: "var(--muted)" };
+const REC_EVIDENCE = { CONFIRMED: "Confirmed observation", STRONG: "Strongly supported hypothesis", WEAK: "Weak hypothesis" };
+
+function recOperator() {
+  const el = document.getElementById("recOperator");
+  let v = ((el && el.value) || "").trim();
+  if (!v) { try { v = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} if (el) el.value = v; }
+  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
+  return v;
+}
+
+async function recWrite(url, body) {
+  const op = recOperator();
+  if (!op) throw new Error("Enter your operator name first.");
+  if (!autoState.csrf) {
+    const s = await apiJson("/api/autonomy/session");
+    autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
+  }
+  try {
+    return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
+                                body: JSON.stringify({ operator: op, ...body }) });
+  } catch (err) { if (/CSRF/i.test(err.message || "")) autoState.csrf = null; throw err; }
+}
+
+function recVal(v) {
+  if (v === null || v === undefined) return `<span class="ops-tag">unavailable</span>`;
+  if (typeof v === "object") return `<code style="font-size:11px;">${escHtml(JSON.stringify(v))}</code>`;
+  return escHtml(v);
+}
+
+function recCard(r) {
+  const open = recState.open.has(r.id);
+  const colour = REC_COLOURS[r.priority_label] || "var(--muted)";
+  const actions = [];
+  if (r.open) {
+    if (r.status === "NEW") actions.push(`<button class="btn sm" data-id="${escHtml(r.id)}" onclick="recAct('acknowledge', this.dataset.id)">Acknowledge</button>`);
+    if (r.status !== "APPROVED") actions.push(`<button class="btn sm ok" data-id="${escHtml(r.id)}" onclick="recAct('approve', this.dataset.id)" title="Records agreement only; nothing is executed">Agree</button>`);
+    actions.push(`<button class="btn sm danger" data-id="${escHtml(r.id)}" onclick="recAct('reject', this.dataset.id)">Reject…</button>`);
+    actions.push(`<button class="btn sm primary" data-id="${escHtml(r.id)}" onclick="recAct('resolve', this.dataset.id)">Mark resolved…</button>`);
+  }
+  const sc = r.scoring || {};
+  const conf = sc.confidence || {}, prio = sc.priority || {};
+  const details = open ? `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">`
+    + `<div><strong>Detected problem:</strong> ${escHtml(r.problem)}</div>`
+    + `<div style="margin-top:4px;"><strong>Root-cause hypothesis</strong> <span class="ops-tag">${escHtml(REC_EVIDENCE[r.hypothesis_strength] || r.hypothesis_strength)}</span>: ${escHtml(r.hypothesis)}</div>`
+    + `<div style="margin-top:4px;"><strong>Suggested action:</strong> ${escHtml(r.action)} <span class="ops-tag">action risk ${escHtml(r.risk)}</span></div>`
+    + `<div style="margin-top:4px;"><strong>Expected benefit:</strong> ${escHtml(r.benefit)}</div>`
+    + (r.explanation ? `<div style="margin-top:4px;color:var(--muted);"><strong>Plain-language summary (Gemini):</strong> ${escHtml(r.explanation)}</div>` : "")
+    + `<div style="margin-top:6px;"><strong>Supporting evidence</strong><ul style="margin:4px 0 0 18px;">`
+    + (r.evidence || []).map(e => `<li>${escHtml(e.fact)}: ${recVal(e.value)} <span style="color:var(--muted);font-size:11px;">(${escHtml(e.source)})</span></li>`).join("") + `</ul></div>`
+    + ((r.observations || []).length ? `<div style="margin-top:4px;"><strong>Historical observations</strong><ul style="margin:4px 0 0 18px;">${r.observations.map(o => `<li>${escHtml(o)}</li>`).join("")}</ul></div>` : "")
+    + (((r.related || {}).jobs || []).length ? `<div style="margin-top:4px;"><strong>Related jobs:</strong> <span style="font-size:11px;">${r.related.jobs.map(escHtml).join(", ")}</span></div>` : "")
+    + `<div style="margin-top:6px;color:var(--muted);font-size:11px;">Confidence ${escHtml(conf.score)} = ${escHtml(JSON.stringify(conf.components || {}))} · Priority ${escHtml(prio.score)} from ${escHtml(JSON.stringify(prio.components || {}))}</div>`
+    + `<div style="color:var(--muted);font-size:11px;">First detected ${autoTime(r.first_detected_at)} · last ${autoTime(r.last_detected_at)} · seen in ${escHtml(r.detections)} analyses · expires ${autoTime(r.expires_at)} · ${escHtml(r.id)}</div>`
+    + (r.status_by ? `<div style="color:var(--muted);font-size:11px;">${escHtml(r.status)} by ${escHtml(r.status_by)} ${autoTime(r.status_at)}${r.status_reason ? " — " + escHtml(r.status_reason) : ""}${r.resolution_evidence ? " — evidence: " + escHtml(r.resolution_evidence) : ""}</div>` : "")
+    + `</div>` : "";
+  return `<div class="control-doc" style="border-left:3px solid ${colour};padding-left:10px;margin-bottom:8px;">`
+    + `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start;">`
+    + `<div style="flex:1;min-width:240px;"><span style="color:${colour};font-weight:600;">${escHtml(r.priority_label)} ${escHtml(r.priority)}</span> `
+    + `<span class="ops-tag">${escHtml((recState.categories || {})[r.category] || r.category)}</span> `
+    + `<span class="ops-tag" title="confidence score">${escHtml(r.confidence_label)} confidence ${escHtml(r.confidence)}</span> `
+    + `<span class="ops-tag">${escHtml(REC_EVIDENCE[r.hypothesis_strength] || "")}</span> <span class="ops-tag">${escHtml(r.status)}</span>`
+    + `<div style="margin-top:4px;"><strong>${escHtml(r.title)}</strong></div><div style="color:var(--muted);">${escHtml(r.description)}</div></div>`
+    + `<div class="btn-row" style="gap:4px;flex-wrap:wrap;"><button class="btn sm" data-id="${escHtml(r.id)}" onclick="recToggle(this.dataset.id)">${open ? "Hide" : "Details"}</button>${actions.join("")}</div></div>`
+    + details + `</div>`;
+}
+
+function recToggle(id) {
+  if (recState.open.has(id)) recState.open.delete(id); else recState.open.add(id);
+  document.getElementById("recList").innerHTML = recState.list.map(recCard).join("") || `<div style="color:var(--muted)">No recommendations.</div>`;
+}
+
+async function refreshRecommendations(force = false) {
+  const panel = document.getElementById("tab-recs");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  recOperator();
+  const meta = document.getElementById("recMeta");
+  try {
+    const status = document.getElementById("recFilter").value || "open";
+    const cat = document.getElementById("recCategory").value || "";
+    const [ov, tr] = await Promise.all([
+      apiJson(`/api/recommendations?status=${encodeURIComponent(status)}${cat ? "&category=" + encodeURIComponent(cat) : ""}`),
+      apiJson("/api/recommendations/trend?days=14"),
+    ]);
+    recState.list = ov.recommendations || [];
+    recState.categories = ov.categories || {};
+    const sel = document.getElementById("recCategory");
+    if (sel && sel.options.length <= 1) sel.innerHTML = `<option value="">All categories</option>` + Object.entries(recState.categories).map(([k, v]) => `<option value="${escHtml(k)}">${escHtml(v)}</option>`).join("");
+    const st = ov.state || {}, sm = ov.summary || {}, lr = ov.last_run;
+    document.getElementById("recActive").textContent = sm.active ?? "--";
+    document.getElementById("recActiveSub").textContent = Object.entries(sm.by_status || {}).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(" · ") || "--";
+    document.getElementById("recCritical").textContent = sm.critical ?? "--";
+    document.getElementById("recHigh").textContent = sm.high ?? "--";
+    document.getElementById("recNew").textContent = sm.new_last_24h ?? "--";
+    document.getElementById("recMode").innerHTML = st.mode === "RECOMMEND" ? `<span class="auto-on">ACTIVE</span>` : st.mode === "OBSERVE" ? "OBSERVE" : `<span class="auto-off">${escHtml(st.mode || "--")}</span>`;
+    document.getElementById("recModeSub").textContent = st.reason || "";
+    meta.innerHTML = `${escHtml(ov.note || "")} · Last analysis: ${lr ? `${autoTime(lr.started_at)} (${escHtml(lr.findings)} findings, ${escHtml(lr.window_days)}-day window)` : "never"}`
+      + (st.mode !== "RECOMMEND" ? ` · <span style="color:#fcd34d;">Engine ${escHtml(st.mode)}: ${escHtml(st.reason)}. Levels and kill switches are managed in Autonomy Control.</span>` : "")
+      + (ov.database_available === false ? ` · <span class="auto-kill">database unavailable</span>` : "");
+    const conf = sm.by_confidence || {}, cats = sm.by_category || {};
+    document.getElementById("recBreakdown").innerHTML = Object.keys(cats).length
+      ? opsKV(Object.entries(cats).map(([k, v]) => [recState.categories[k] || k, escHtml(v)]).concat([["Confidence", escHtml(["HIGH", "MEDIUM", "LOW"].map(l => `${l.toLowerCase()} ${conf[l] || 0}`).join(" · "))]]))
+      : `<div style="color:var(--muted)">No open recommendations.</div>`;
+    const days = [];
+    for (let i = 13; i >= 0; i--) { const d = new Date(Date.now() - i * 86400000); days.push(d.toISOString().slice(0, 10)); }
+    const counts = days.map(d => Object.values((tr.created_by_day || {})[d] || {}).reduce((a, b) => a + b, 0));
+    const mx = Math.max(1, ...counts);
+    document.getElementById("recTrend").innerHTML = counts.map((c, i) => `<div class="${c ? "" : "none"}" style="height:${c ? Math.max(6, 100 * c / mx) : 4}%" title="${escHtml(days[i])}: ${c}"></div>`).join("");
+    document.getElementById("recTrendLegend").textContent = `${days[0]} → ${days[13]} · max ${mx}/day`;
+    document.getElementById("recList").innerHTML = recState.list.map(recCard).join("") || `<div style="color:var(--muted)">No recommendations${status === "open" ? " open" : ""}.</div>`;
+    document.getElementById("recInsufficient").innerHTML = lr && (lr.insufficient || []).length
+      ? lr.insufficient.map(i => `<div>${escHtml(i.rule_id)}: ${escHtml(i.reason)}</div>`).join("") : "None.";
+  } catch (err) {
+    if (meta) meta.innerHTML = `<span class="auto-kill">Recommendation Center unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
+async function recRun() {
+  try {
+    const r = await recWrite("/api/recommendations/run", { force: true });
+    showToast(r.ran ? `Analysis finished: ${r.run.findings} finding(s), ${r.run.created || 0} new.` : `Not run: ${r.reason}`, !r.ran);
+  } catch (err) { showToast("Analysis failed: " + err.message, true); }
+  refreshRecommendations(true);
+}
+
+async function recAct(kind, id) {
+  const r = recState.list.find(x => x.id === id);
+  if (!r) return;
+  let body = {};
+  if (kind === "reject") { const reason = prompt(`Why reject “${r.title}”? (it will not be re-raised for 7 days)`); if (!reason) return; body = { reason }; }
+  else if (kind === "resolve") { const evidence = prompt(`Evidence that “${r.title}” is resolved (what was fixed or verified):`); if (!evidence) return; body = { evidence }; }
+  else if (kind === "approve") { if (!(await askConfirm("Agree with this recommendation?", `${r.title}\n\nSuggested action: ${r.action}\n\nThis only records your agreement. Nothing is executed automatically.`))) return; }
+  try { await recWrite(`/api/recommendations/${encodeURIComponent(id)}/${kind}`, body); showToast("Recommendation updated."); }
+  catch (err) { showToast("Update failed: " + err.message, true); }
+  refreshRecommendations(true);
+}
+
+// ---------------------------------------------------------------------------
 // Stage 3.32B Autonomy Control Plane. Reads are cheap GETs; the tab loads only when opened and the header pill
 // refreshes every 60 s. Every state change sends the per-process CSRF token and JSON, and asks for confirmation.
 // Server values are always escaped (escHtml); request ids are passed through data attributes, never inline JS.
@@ -2809,6 +2989,7 @@ setInterval(() => refreshOps(), 120000);   // only loads while the Operations ta
 refreshAutonomyPill();
 setInterval(refreshAutonomyPill, 60000);   // one small status GET
 setInterval(() => refreshAutonomy(), 60000);   // only loads while the Autonomy Control tab is open
+setInterval(() => refreshRecommendations(), 120000);   // only loads while the Recommendations tab is open
 </script>
 </body>
 </html>

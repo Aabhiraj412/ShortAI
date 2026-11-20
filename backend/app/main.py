@@ -2281,6 +2281,94 @@ async def api_autonomy_assessment(req: _AutonomyBody, _: None = Depends(require_
     return await _autonomy_call(_run)
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Stage 3.32C Recommendation Center. Recommendation-only: no endpoint here executes an operational action.
+# Reads are localhost-only; status changes and runs need the same CSRF protection as the autonomy controls.
+# ---------------------------------------------------------------------------------------------------------------
+def _recommendations():
+    from backend.app.autonomy.recommendations import engine as _rec_engine
+    return _rec_engine.get_engine()
+
+
+class RecommendationNoteRequest(_AutonomyBody):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class RecommendationRejectRequest(_AutonomyBody):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class RecommendationResolveRequest(_AutonomyBody):
+    evidence: str = Field(min_length=1, max_length=2000)
+
+
+class RecommendationRunRequest(_AutonomyBody):
+    force: bool = False
+
+
+@app.get("/api/recommendations")
+async def api_recommendations(status: str = "open", category: Optional[str] = None, limit: int = 100,
+                              _: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _recommendations().overview(status=status, category=category, limit=limit))
+
+
+@app.get("/api/recommendations/trend")
+async def api_recommendations_trend(days: int = 14, _: None = Depends(require_local_control)):
+    if not 1 <= days <= 60:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 60")
+    def _build():
+        eng = _recommendations()
+        return eng.store.trend(days, eng.clock())
+    return await _autonomy_call(_build)
+
+
+@app.get("/api/recommendations/{rec_id}")
+async def api_recommendation_detail(rec_id: str, _: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _recommendations().detail(rec_id))
+
+
+@app.post("/api/recommendations/run")
+async def api_recommendations_run(req: RecommendationRunRequest, _: None = Depends(require_local_control),
+                                  __: None = Depends(require_autonomy_write)):
+    """Analyse now (bounded 7-day window). Gated by the control plane: OFF -> nothing; OBSERVE -> observations only;
+    any kill switch -> blocked. Never executes anything."""
+    from backend.app.autonomy.control_plane import validate_operator
+
+    def _run():
+        op = validate_operator(req.operator)
+        return _recommendations().run(triggered_by=f"operator:{op}", force=req.force)
+    return await _autonomy_call(_run)
+
+
+async def _rec_status(rec_id: str, status: str, operator: str, reason: Optional[str] = None, evidence: Optional[str] = None):
+    return await _autonomy_call(lambda: _recommendations().set_status(rec_id, status, operator, reason=reason, evidence=evidence))
+
+
+@app.post("/api/recommendations/{rec_id}/acknowledge")
+async def api_recommendation_ack(rec_id: str, req: RecommendationNoteRequest, _: None = Depends(require_local_control),
+                                 __: None = Depends(require_autonomy_write)):
+    return await _rec_status(rec_id, "ACKNOWLEDGED", req.operator, reason=req.note)
+
+
+@app.post("/api/recommendations/{rec_id}/approve")
+async def api_recommendation_approve(rec_id: str, req: RecommendationNoteRequest, _: None = Depends(require_local_control),
+                                     __: None = Depends(require_autonomy_write)):
+    """Records the operator's agreement with the suggestion. Nothing is executed."""
+    return await _rec_status(rec_id, "APPROVED", req.operator, reason=req.note)
+
+
+@app.post("/api/recommendations/{rec_id}/reject")
+async def api_recommendation_reject(rec_id: str, req: RecommendationRejectRequest, _: None = Depends(require_local_control),
+                                    __: None = Depends(require_autonomy_write)):
+    return await _rec_status(rec_id, "REJECTED", req.operator, reason=req.reason)
+
+
+@app.post("/api/recommendations/{rec_id}/resolve")
+async def api_recommendation_resolve(rec_id: str, req: RecommendationResolveRequest, _: None = Depends(require_local_control),
+                                     __: None = Depends(require_autonomy_write)):
+    return await _rec_status(rec_id, "RESOLVED", req.operator, evidence=req.evidence)
+
+
 @app.get("/api/youtube/quota")
 async def api_youtube_quota(_: None = Depends(require_local_control)):
     """Per-bucket YouTube Data API usage (Stage 3.30): local estimate from sent requests, never Google-reported."""

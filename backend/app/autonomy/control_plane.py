@@ -54,7 +54,7 @@ TRANSITIONS: Dict[str, Tuple[str, ...]] = {
     REJECTED: (), EXPIRED: (), COMPLETED: (), FAILED: (), CANCELLED: (),
 }
 
-RESERVED_ACTOR_PREFIXES = ("autonomy", "standing-approval", "system", "engine", "control-plane")
+RESERVED_ACTOR_PREFIXES = ("autonomy", "standing-approval", "system", "engine", "control-plane", "recommendation")
 OPERATOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,63}$")
 MAX_EVIDENCE_BYTES = 8000
 MAX_REASON = 500
