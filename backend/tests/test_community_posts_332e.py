@@ -389,6 +389,30 @@ def test_image_validation_checks(tmp_path, case, check, severity, monkeypatch):
     assert check in failed and failed[check]["severity"] == severity, failed
 
 
+def test_image_not_blank_wording_matches_outcome(tmp_path):
+    assert V.MIN_IMAGE_STDDEV == 8                                     # threshold unchanged
+    rec, path, root = _image_record(tmp_path)                          # random noise: high detail
+    chk = next(c for c in V.validate_image(rec, path, images_root=root, text="t") if c["check"] == "image_not_blank")
+    assert chk["ok"] is True and chk["severity"] == "warning"
+    assert "low" not in chk["detail"].lower() and "blank" not in chk["detail"].lower() and "(minimum 8)" in chk["detail"]
+    flat = tmp_path / "flat" / "cdraft_0000000000000002" / "cimg_0000000000000002.jpg"
+    flat.parent.mkdir(parents=True)
+    Image.new("RGB", (1080, 1080), (40, 40, 40)).save(flat, "JPEG", quality=90)
+    rec2 = {**rec, "sha256": I.sha256_file(flat)}
+    checks = V.validate_image(rec2, flat, images_root=tmp_path / "flat", text="t")
+    bad = next(c for c in checks if c["check"] == "image_not_blank")
+    assert bad["ok"] is False and bad["severity"] == "warning"
+    assert "almost blank" in bad["detail"] and "below the minimum 8" in bad["detail"]
+    assert V.outcome(checks) == S.VALID_WITH_WARNINGS                    # still a warning, nothing stricter
+    # the boundary is unchanged: exactly the threshold passes
+    for sd, ok in ((8.0, True), (7.99, False)):
+        import unittest.mock as um
+        with um.patch.object(I, "image_stats", return_value={"format": "JPEG", "width": 1080, "height": 1080,
+                                                               "stddev": sd, "dhash": "0" * 16}):
+            c = next(x for x in V.validate_image(rec, path, images_root=root, text="t") if x["check"] == "image_not_blank")
+        assert c["ok"] is ok, sd
+
+
 def test_valid_image_and_credit_present(tmp_path):
     rec, path, root = _image_record(tmp_path, licence="CC BY", attribution="Image: X by Y (CC BY)")
     checks = V.validate_image(rec, path, images_root=root, text="Post.\n\nImage: X by Y (CC BY)")

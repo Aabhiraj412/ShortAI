@@ -22,6 +22,7 @@ MIN_CHARS = 40
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MIN_IMAGE_BYTES = 8 * 1024
 MIN_IMAGE_SIDE = 600
+MIN_IMAGE_STDDEV = 8          # grey-level standard deviation below this reads as an almost blank image
 MAX_IMAGE_SIDE = 4096
 DUPLICATE_DAYS = 180
 NEAR_DUPLICATE = 0.6
@@ -193,7 +194,10 @@ def validate_image(record: Optional[Dict[str, Any]], path: Optional[Path], *, im
     checks.append(_c("image_dimensions", MIN_IMAGE_SIDE <= min(w, h) and max(w, h) <= MAX_IMAGE_SIDE, "error", f"{w}x{h}"))
     checks.append(_c("image_aspect_ratio", abs(w / h - 1.0) <= 0.01 if h else False, "error",
                      f"{w}x{h}; Community images use 1:1"))
-    checks.append(_c("image_not_blank", st["stddev"] >= 8, "warning", f"low detail (stddev {st['stddev']})"))
+    detailed = st["stddev"] >= MIN_IMAGE_STDDEV
+    checks.append(_c("image_not_blank", detailed, "warning",
+                     f"detail level {st['stddev']} (minimum {MIN_IMAGE_STDDEV})" if detailed else
+                     f"image looks almost blank: detail level {st['stddev']} is below the minimum {MIN_IMAGE_STDDEV}"))
     sha = I.sha256_file(path)
     checks.append(_c("image_integrity", sha == record.get("sha256"), "error",
                      "" if sha == record.get("sha256") else "file changed after it was recorded"))
