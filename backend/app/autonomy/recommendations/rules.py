@@ -881,6 +881,114 @@ def rule_engagement_data(sig: Signals, out: RuleOutput) -> None:
              "YouTube Analytics engagement, retention and hook-quality data are not available; no recommendation is made")
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# G. Stage 3.32D self-healing outcomes (learning). Read-only: outcome data recorded by the self-healing engine.
+# ---------------------------------------------------------------------------------------------------------------
+SELFHEAL_DIAG = "selfheal.diagnostic.run"
+
+
+def _selfheal(sig: Signals, out: RuleOutput, rid: str) -> Optional[Dict[str, Any]]:
+    data = sig.self_healing
+    if not data:
+        out.skip(rid, "no self-healing outcome data (self-healing has not run, or its data is unavailable)")
+        return None
+    return data
+
+
+def rule_selfheal_success_pattern(sig: Signals, out: RuleOutput) -> None:
+    rid = "recovery.selfheal_success_pattern"
+    data = _selfheal(sig, out, rid)
+    if data is None:
+        return
+    found = False
+    for row in data.get("learning") or []:
+        ok, rec = int(row.get("succeeded") or 0), int(row.get("recurred_after_success") or 0)
+        if row.get("action_type") == SELFHEAL_DIAG or ok < 2 or rec > 0:
+            continue
+        found = True
+        out.findings.append(Finding(
+            rid, "recovery", f"{row['signature']}:{row['action_type']}",
+            f"Recovery pattern works: {row['action_type']} ({ok}x verified)",
+            f"{row['action_type']} was executed and independently verified {ok} times for "
+            f"\"{str(row.get('template') or '')[:120]}\" and the failure has not recurred since.",
+            "A recurring failure has a recovery action that has worked every time it was approved.",
+            [_ev("Verified recoveries", ok, "selfheal_outcomes"), _ev("Attempts", row.get("attempts"), "selfheal_outcomes"),
+             _ev("Recurred after success", rec, "selfheal_outcomes")],
+            "The failure is temporary and this action confirms recovery reliably.", "STRONG",
+            "Keep approving this action for this failure signature when it is proposed. Nothing changes automatically.",
+            "Faster, evidence-based recovery decisions.", severity="low", occurrences=ok,
+            sample_size=int(row.get("attempts") or ok), min_sample=2, consistency=1.0, impact=0.3,
+            last_seen=row.get("last_finished")))
+    if not found:
+        out.skip(rid, "no recovery action has >=2 verified, non-recurring successes for one signature")
+
+
+def rule_selfheal_ineffective(sig: Signals, out: RuleOutput) -> None:
+    rid = "recovery.selfheal_ineffective"
+    data = _selfheal(sig, out, rid)
+    if data is None:
+        return
+    found = False
+    for row in data.get("learning") or []:
+        attempts, ok = int(row.get("attempts") or 0), int(row.get("succeeded") or 0)
+        failed, unverified = int(row.get("failed") or 0), int(row.get("unverified") or 0)
+        rec = int(row.get("recurred_after_success") or 0)
+        never_works = attempts >= 2 and ok == 0 and failed >= 2
+        does_not_last = row.get("action_type") != SELFHEAL_DIAG and ok >= 2 and rec >= ok
+        if not (never_works or does_not_last):
+            continue
+        found = True
+        if never_works:
+            what = f"failed on all {failed} attempts" + (f" ({unverified} could not be verified)" if unverified else "")
+        else:
+            what = f"was verified {ok} times but the failure returned after each one"
+        out.findings.append(Finding(
+            rid, "recovery", f"{row['signature']}:{row['action_type']}",
+            f"Ineffective recovery strategy: {row['action_type']}",
+            f"{row['action_type']} {what} for \"{str(row.get('template') or '')[:120]}\".",
+            "A recovery action keeps being approved without fixing the failure.",
+            [_ev("Attempts", attempts, "selfheal_outcomes"), _ev("Verified", ok, "selfheal_outcomes"),
+             _ev("Failed", failed, "selfheal_outcomes"), _ev("Recurred after success", rec, "selfheal_outcomes")],
+            ("The action cannot address this failure; the cause is elsewhere." if never_works else
+             "The action treats a symptom; the underlying cause persists."), "STRONG",
+            "Stop approving this action for this signature (the self-healing planner already no longer proposes it) and "
+            "investigate the underlying cause. Production retry policies are not changed.",
+            "Less time spent approving actions that do not help.", severity="medium", occurrences=attempts,
+            sample_size=attempts, min_sample=2, consistency=1.0, impact=0.5, last_seen=row.get("last_finished")))
+    if not found:
+        out.skip(rid, "no recovery action has >=2 outcomes showing it is ineffective")
+
+
+def rule_selfheal_deterministic_defect(sig: Signals, out: RuleOutput) -> None:
+    rid = "recovery.repeated_deterministic_defect"
+    data = _selfheal(sig, out, rid)
+    if data is None:
+        return
+    rows = [r for r in data.get("deterministic") or [] if int(r.get("occurrences") or 0) >= 3]
+    if not rows:
+        out.skip(rid, "no deterministic failure signature with >=3 occurrences in self-healing incidents")
+        return
+    for r in rows:
+        n, jobs = int(r["occurrences"]), int(r.get("jobs") or 0)
+        confirmed = r.get("certainty") == "CONFIRMED"
+        out.findings.append(Finding(
+            rid, "recovery", str(r["signature"]),
+            f"Repeated deterministic defect ({n}x across {jobs} job{'s' if jobs != 1 else ''})",
+            f"Self-healing classified \"{str(r.get('template') or '')[:160]}\" as deterministic; it occurred {n} times "
+            f"across {jobs} job(s) at stage(s) {r.get('stages') or 'not recorded'}.",
+            "The same defect keeps failing productions; retries cannot fix it.",
+            [_ev("Occurrences", n, "selfheal_incidents"), _ev("Jobs", jobs, "selfheal_incidents"),
+             _ev("Classification certainty", r.get("certainty"), "selfheal_incidents")],
+            ("The error text states the mechanism; the code or inputs that produce it need a change." if confirmed else
+             "Recurrence without any successful retry suggests a deterministic defect."),
+            "CONFIRMED" if confirmed else "WEAK",
+            "Fix the defect in code or inputs (operator / developer). Do not retry affected jobs unchanged. Retry policies "
+            "are not changed automatically.", "Stops repeated lost productions from one defect.",
+            severity="high" if n >= 5 or jobs >= 3 else "medium", occurrences=n, sample_size=n, min_sample=3,
+            consistency=1.0, impact=0.9, affected_jobs=[j for j in str(r.get("job_ids") or "").split(",") if j],
+            last_seen=r.get("last_seen")))
+
+
 RULES: Tuple[Callable[[Signals, RuleOutput], None], ...] = (
     rule_failure_rate_rising, rule_recovery_expirations, rule_stage_failures, rule_abnormal_duration, rule_near_deadline,
     rule_renderer_patterns, rule_render_duration, rule_media_acquisition,
@@ -889,6 +997,7 @@ RULES: Tuple[Callable[[Signals, RuleOutput], None], ...] = (
     rule_youtube_errors, rule_quota, rule_provider_errors,
     rule_window_consumed_by_cycle, rule_ineffective_retries, rule_long_recovery,
     rule_qc_failures, rule_script_source, rule_category_repetition, rule_engagement_data,
+    rule_selfheal_success_pattern, rule_selfheal_ineffective, rule_selfheal_deterministic_defect,
 )
 
 

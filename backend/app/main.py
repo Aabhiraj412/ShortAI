@@ -2369,6 +2369,87 @@ async def api_recommendation_resolve(rec_id: str, req: RecommendationResolveRequ
     return await _rec_status(rec_id, "RESOLVED", req.operator, evidence=req.evidence)
 
 
+# -- Stage 3.32D self-healing operations ------------------------------------------------------------------------
+# Every write is local-only, CSRF-protected (require_autonomy_write) and passes the 3.32B control plane: approvals,
+# rejections and executions are ControlPlane.approve / reject / execute with a validated human operator identity.
+
+def _self_healing():
+    from backend.app.autonomy.self_healing import engine as _sh_engine
+    return _sh_engine.get_engine()
+
+
+class SelfHealingScanRequest(_AutonomyBody):
+    force: bool = False
+
+
+@app.get("/api/self-healing")
+async def api_self_healing(limit: int = 50, _: None = Depends(require_local_control)):
+    if not 1 <= limit <= 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    return await _autonomy_call(lambda: _self_healing().overview(limit=limit))
+
+
+@app.get("/api/self-healing/incidents")
+async def api_self_healing_incidents(status: str = "open", limit: int = 100, _: None = Depends(require_local_control)):
+    from backend.app.autonomy.self_healing.store import STATUSES
+    if status not in ("open", "all") + STATUSES:
+        raise HTTPException(status_code=400, detail="status must be open, all or a self-healing status")
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return await _autonomy_call(lambda: {"incidents": _self_healing().store.list_incidents(status=status, limit=limit)})
+
+
+@app.get("/api/self-healing/incidents/{incident_id}")
+async def api_self_healing_incident(incident_id: str, _: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _self_healing().incident_detail(incident_id))
+
+
+@app.get("/api/self-healing/history")
+async def api_self_healing_history(limit: int = 100, _: None = Depends(require_local_control)):
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+
+    def _hist():
+        eng = _self_healing()
+        eng.sync()
+        return {"recoveries": eng.store.list_recoveries("history", limit), "stats": eng.store.stats(),
+                "learning": eng.store.learning(100)}
+    return await _autonomy_call(_hist)
+
+
+@app.post("/api/self-healing/scan")
+async def api_self_healing_scan(req: SelfHealingScanRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    """Detect / classify / diagnose now. Gated by the control plane: OFF -> nothing; OBSERVE -> incidents only;
+    RECOMMEND -> proposals into the approval queue; any kill switch -> blocked. No background loop."""
+    from backend.app.autonomy.control_plane import validate_operator
+
+    def _scan():
+        op = validate_operator(req.operator)
+        return _self_healing().scan(triggered_by=f"operator:{op}", force=req.force)
+    return await _autonomy_call(_scan)
+
+
+@app.post("/api/self-healing/recoveries/{recovery_id}/approve")
+async def api_self_healing_approve(recovery_id: str, req: AutonomyApproveRequest, _: None = Depends(require_local_control),
+                                   __: None = Depends(require_autonomy_write)):
+    return await _autonomy_call(lambda: _self_healing().approve(recovery_id, req.operator, req.payload_hash, req.reason))
+
+
+@app.post("/api/self-healing/recoveries/{recovery_id}/reject")
+async def api_self_healing_reject(recovery_id: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
+                                  __: None = Depends(require_autonomy_write)):
+    return await _autonomy_call(lambda: _self_healing().reject(recovery_id, req.operator, req.reason))
+
+
+@app.post("/api/self-healing/recoveries/{recovery_id}/execute")
+async def api_self_healing_execute(recovery_id: str, req: _AutonomyBody, _: None = Depends(require_local_control),
+                                   __: None = Depends(require_autonomy_write)):
+    """Runs one APPROVED recovery through ControlPlane.execute (every 3.32B gate) after re-checking job and resource
+    preconditions. Blocked while any kill switch is active or the self_healing level is below APPROVED_EXECUTION."""
+    return await _autonomy_call(lambda: _self_healing().execute(recovery_id, req.operator))
+
+
 @app.get("/api/youtube/quota")
 async def api_youtube_quota(_: None = Depends(require_local_control)):
     """Per-bucket YouTube Data API usage (Stage 3.30): local estimate from sent requests, never Google-reported."""

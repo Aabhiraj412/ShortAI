@@ -24,6 +24,8 @@ class Signals:
     failures: List[Dict[str, Any]]
     recovery_minutes_by_cycle: Dict[str, int] = field(default_factory=dict)
     errors: Dict[str, str] = field(default_factory=dict)
+    # Stage 3.32D outcome data (read-only): {"learning": [...], "deterministic": [...]}; None when unavailable.
+    self_healing: Optional[Dict[str, Any]] = None
 
     def metrics(self, name: str) -> Dict[str, Any]:
         return (self.sections.get(name) or {}).get("metrics") or {}
@@ -55,7 +57,8 @@ def _default_recovery_minutes() -> Dict[str, int]:
 
 
 def collect(intelligence: Any, days: int = 7, now: Optional[datetime] = None,
-            schedule_provider: Optional[Callable[[], Dict[str, int]]] = None) -> Signals:
+            schedule_provider: Optional[Callable[[], Dict[str, int]]] = None,
+            learning_provider: Optional[Callable[[], Dict[str, Any]]] = None) -> Signals:
     now = now or datetime.now(timezone.utc)
     errors: Dict[str, str] = {}
     sections: Dict[str, Dict[str, Any]] = {}
@@ -76,5 +79,11 @@ def collect(intelligence: Any, days: int = 7, now: Optional[datetime] = None,
     except Exception as exc:
         recovery = {}
         errors["schedule"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    learning = None
+    if learning_provider is not None:
+        try:
+            learning = learning_provider()
+        except Exception as exc:
+            errors["self_healing"] = f"{type(exc).__name__}: {str(exc)[:200]}"
     return Signals(window_days=days, now=now, sections=sections, bundle=bundle, failures=failures,
-                   recovery_minutes_by_cycle=recovery, errors=errors)
+                   recovery_minutes_by_cycle=recovery, errors=errors, self_healing=learning)

@@ -182,6 +182,11 @@ HANDLERS: Dict[str, Any] = {
     "community.draft.prepare": CommunityDraftHandler(),
 }
 
+# Stage 3.32D self-healing handlers (same contract; they run only through ControlPlane.execute).
+from backend.app.autonomy.self_healing.handlers import SELF_HEALING_HANDLERS  # noqa: E402
+
+HANDLERS.update(SELF_HEALING_HANDLERS)
+
 # Import-time guard: a handler can never exist for an unknown or prohibited action type.
 for _action_type in HANDLERS:
     registry.require_permitted(_action_type)

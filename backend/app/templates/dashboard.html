@@ -360,6 +360,7 @@
     <button class="tab-btn" data-tab="queue" onclick="switchTab('queue', this)">Publishing Queue</button>
     <button class="tab-btn" data-tab="ops" onclick="switchTab('ops', this)">Operations</button>
     <button class="tab-btn" data-tab="recs" onclick="switchTab('recs', this)">Recommendations</button>
+    <button class="tab-btn" data-tab="heal" onclick="switchTab('heal', this)">Self-Healing</button>
     <span style="align-self:center;color:var(--muted);font-size:12px;margin:0 6px 0 14px;">Technical:</span>
     <button class="tab-btn" data-tab="controls" onclick="switchTab('controls', this)">Mode &amp; Policy</button>
     <button class="tab-btn" data-tab="autonomy" onclick="switchTab('autonomy', this)">Autonomy Control</button>
@@ -948,6 +949,48 @@
     </div>
   </section>
 
+  <!-- STAGE 3.32D: SELF-HEALING OPERATIONS -->
+  <section id="tab-heal" class="tab-panel">
+    <div class="card" style="padding:12px 16px;">
+      <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Self-Healing Operations</h2>
+        <p class="card-desc">Detects failures, classifies them (transient, deterministic, resource, configuration, data, unknown), diagnoses them from recorded evidence and proposes <strong>allow-listed</strong> recovery actions for your approval. Job retries, re-renders, restarts and configuration stay with the scheduler and you. Every action passes the Autonomy Control gates and is verified before it counts as recovered.</p></div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <label for="healOperator" style="font-size:12px;color:var(--muted);">Operator</label>
+          <input id="healOperator" maxlength="64" placeholder="your name" style="width:130px;" />
+          <button class="btn sm primary" onclick="healScan()">Scan now</button>
+          <button class="btn sm" onclick="refreshSelfHealing(true)">Refresh</button></div></div>
+      <div class="meta" style="font-size:12px;" id="healMeta">Open this tab to load.</div>
+    </div>
+    <div class="overview-grid">
+      <div class="kpi-card"><div class="kpi-label">Open incidents</div><div class="kpi-val" id="healOpen">--</div><div class="kpi-sub" id="healOpenSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Deterministic (open)</div><div class="kpi-val" id="healDet" style="color:#fca5a5;">--</div><div class="kpi-sub">retrying unchanged will not help</div></div>
+      <div class="kpi-card"><div class="kpi-label">Awaiting approval</div><div class="kpi-val" id="healAwait" style="color:#fcd34d;">--</div><div class="kpi-sub">in the approval queue</div></div>
+      <div class="kpi-card"><div class="kpi-label">Recovery success</div><div class="kpi-val" id="healRate">--</div><div class="kpi-sub" id="healRateSub">verified recoveries / finished</div></div>
+      <div class="kpi-card"><div class="kpi-label">Self-healing</div><div class="kpi-val" id="healMode">--</div><div class="kpi-sub" id="healModeSub">--</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Failure classification</h2><p class="card-desc">Open incidents by class.</p></div></div>
+        <div id="healClasses" style="font-size:13px;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Recovery statistics</h2><p class="card-desc">By action type; success means executed <em>and</em> verified.</p></div></div>
+        <div id="healStats" style="font-size:13px;">--</div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Awaiting approval and execution</h2><p class="card-desc">Approval is bound to the exact payload shown. Execution needs the self_healing level APPROVED_EXECUTION and no active kill switch.</p></div></div>
+      <div id="healAwaitList" style="font-size:13px;">--</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Detected failures</h2><p class="card-desc">Each incident shows its classification, the evidence behind it, the diagnostic findings and the recovery plan. Suspected causes are never shown as facts.</p></div>
+        <select id="healFilter" onchange="refreshSelfHealing(true)"><option value="open">Open</option><option value="all">All</option><option value="RECOVERED">Recovered</option><option value="FAILED">Failed</option><option value="UNSAFE">Unsafe</option><option value="DIAGNOSED">Diagnosed</option><option value="EXPIRED">Expired</option><option value="CANCELLED">Cancelled</option></select></div>
+      <div id="healList" style="font-size:13px;">--</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2 class="card-title">Recovery history</h2><p class="card-desc">Finished recovery and diagnostic executions with their verification result.</p></div></div>
+      <div id="healHistory" style="font-size:12px;overflow-x:auto;">--</div>
+      <details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:12px;">Learning: outcomes per failure signature and action</summary>
+        <div id="healLearning" style="font-size:12px;margin-top:6px;overflow-x:auto;">--</div></details>
+    </div>
+  </section>
+
   <!-- STAGE 3.32B: AUTONOMY CONTROL PLANE -->
   <section id="tab-autonomy" class="tab-panel">
     <div class="card" style="padding:12px 16px;">
@@ -1182,6 +1225,7 @@ function switchTab(tabId, btn) {
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
   if (tabId === "recs") { refreshRecommendations(true); }
+  if (tabId === "heal") { refreshSelfHealing(true); }
 }
 
 async function refreshOverviewAndHealth() {
@@ -2731,6 +2775,201 @@ async function recAct(kind, id) {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 3.32D Self-Healing Operations. Loads only while the tab is open. Every write goes through the 3.32B
+// authorization (operator identity + per-process CSRF token) and the control plane's approval / execution gates.
+const healState = { incidents: [], open: new Set(), detail: {}, awaiting: [] };
+const HEAL_SEV = { critical: "#fca5a5", high: "#fcd34d", medium: "#93c5fd", low: "var(--muted)" };
+const HEAL_ROOT = { CONFIRMED_MECHANISM: "Confirmed mechanism (cause of the inputs not proven)", SUSPECTED: "Suspected cause", UNKNOWN: "Unknown: insufficient evidence" };
+
+function healOperator() {
+  const el = document.getElementById("healOperator");
+  let v = ((el && el.value) || "").trim();
+  if (!v) { try { v = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} if (el) el.value = v; }
+  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
+  return v;
+}
+
+async function healWrite(url, body) {
+  const op = healOperator();
+  if (!op) throw new Error("Enter your operator name first.");
+  if (!autoState.csrf) {
+    const s = await apiJson("/api/autonomy/session");
+    autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
+  }
+  try {
+    return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
+                                body: JSON.stringify({ operator: op, ...body }) });
+  } catch (err) { if (/CSRF/i.test(err.message || "")) autoState.csrf = null; throw err; }
+}
+
+function healTag(text, colour) { return `<span class="ops-tag"${colour ? ` style="color:${colour}"` : ""}>${escHtml(text)}</span>`; }
+
+function healYesNo(v) { return v === true ? "yes" : v === false ? "no" : "unknown"; }
+
+function healRecoveryRow(r, withButtons) {
+  const btns = [];
+  if (withButtons && r.status === "AWAITING_APPROVAL") {
+    btns.push(`<button class="btn sm ok" data-id="${escHtml(r.id)}" onclick="healAct('approve', this.dataset.id)">Approve…</button>`);
+    btns.push(`<button class="btn sm danger" data-id="${escHtml(r.id)}" onclick="healAct('reject', this.dataset.id)">Reject…</button>`);
+  }
+  if (withButtons && r.status === "APPROVED") {
+    btns.push(`<button class="btn sm primary" data-id="${escHtml(r.id)}" onclick="healAct('execute', this.dataset.id)">Execute…</button>`);
+    btns.push(`<button class="btn sm danger" data-id="${escHtml(r.id)}" onclick="healAct('reject', this.dataset.id)">Reject…</button>`);
+  }
+  const ver = r.verification_result ? healTag("verification " + r.verification_result, r.verification_result === "VERIFIED" ? "#86efac" : "#fca5a5") : "";
+  return `<div class="control-doc" style="margin-bottom:6px;padding-left:8px;border-left:3px solid var(--border);">`
+    + `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;"><div style="flex:1;min-width:220px;">`
+    + `<strong>${escHtml(r.action_type)}</strong> ${healTag(r.status)} ${ver} ${healTag(r.approval_requirement === "EXPLICIT_EACH" ? "explicit approval each time" : "standing or explicit approval")}`
+    + `<div style="color:var(--muted);font-size:12px;">${escHtml(r.status_reason || "")}</div>`
+    + `<div style="font-size:11px;color:var(--muted);">payload <code>${escHtml(JSON.stringify(r.payload || {}))}</code> · hash <code>${escHtml((r.payload_hash || "").slice(0, 16))}…</code> · timeout ${escHtml(r.timeout_seconds)} s · retries ${escHtml(r.retry_limit)} · attempts ${escHtml(r.attempts)} · incident ${escHtml(r.incident_id)} · ${escHtml(r.id)} · ${autoTime(r.created_at_utc)}</div>`
+    + `</div><div class="btn-row" style="gap:4px;">${btns.join("")}</div></div></div>`;
+}
+
+function healDetail(d) {
+  if (!d) return `<div style="color:var(--muted);margin-top:6px;">Loading…</div>`;
+  if (d.error) return `<div class="auto-kill" style="margin-top:6px;">${escHtml(d.error)}</div>`;
+  const inc = d.incident || {}, dg = inc.diagnosis || {}, pl = inc.plan || {}, ck = pl.checks || {}, ev = dg.evidence || {}, co = dg.correlation || {};
+  const rc = dg.root_cause || {};
+  const win = ck.inside_recovery_window || {};
+  const rows = [
+    ["Root cause", `${healTag(HEAL_ROOT[rc.status] || rc.status || "--")} ${escHtml(rc.statement || "")}`],
+    ["Classification basis", escHtml(`${(dg.classification || {}).basis || ""} · rule ${(dg.classification || {}).rule_id || "none"} · retry policy said ${(dg.classification || {}).retry_policy_class || "n/a"}`)],
+    ["Occurrences", escHtml(`${co.occurrences ?? "--"} across ${co.distinct_jobs ?? "--"} job(s); stages ${JSON.stringify(co.affected_stages || {})}`)],
+    ["Same dimensions recur", escHtml(healYesNo(co.same_dimensions_recur) + ((co.recurring_dimensions || []).length ? ` (${co.recurring_dimensions.join(", ")})` : ""))],
+    ["Earlier retries succeeded", escHtml(healYesNo(co.previous_retries_succeeded))],
+    ["Likely deterministic", escHtml(healYesNo(co.likely_deterministic))],
+    ["Recovery possible / safe", escHtml(`${healYesNo(ck.recovery_possible)} / ${healYesNo(ck.safe)}`)],
+    ["Another attempt useful", escHtml(`${healYesNo((ck.retry_useful || {}).useful)}: ${(ck.retry_useful || {}).reason || ""}`)],
+    ["Inside recovery window", escHtml(win.known ? `${healYesNo(win.inside)} (deadline ${win.deadline}, ${win.minutes_left} min)` : "unknown (deadline not recorded)")],
+    ["Worker active / already recovering", escHtml(`${healYesNo((ck.worker_active || {}).active)} / scheduler ${healYesNo((ck.already_recovering || {}).by_scheduler)}`)],
+    ["Evidence completeness", escHtml(`${Math.round(100 * (dg.completeness || 0))}%` + ((dg.missing || []).length ? ` · missing: ${dg.missing.join("; ")}` : ""))],
+  ];
+  const actions = (pl.actions || []).map(a => `<li><strong>${escHtml(a.action_type)}</strong> ${healTag(a.kind)} ${healTag("risk " + a.risk)} ${escHtml(a.purpose)}`
+    + ` <span style="color:var(--muted);font-size:11px;">(${escHtml(a.approval_note)}; cost ${escHtml(JSON.stringify(a.expected_cost || {}))})</span>`
+    + (a.blocked ? ` <span style="color:#fcd34d;">Not proposed: ${escHtml(a.blocked)}</span>` : "") + `</li>`).join("");
+  const operatorOnly = (pl.operator_only || []).map(o => `<li>${escHtml(o.suggestion)} <span style="color:var(--muted);font-size:11px;">(${escHtml(o.prohibited_action_type)}: prohibited for autonomy)</span></li>`).join("");
+  const af = Object.entries(dg.action_findings || {}).map(([k, v]) => `<li><strong>${escHtml(k)}</strong> ${autoTime(v.at)}: <code style="font-size:11px;">${escHtml(JSON.stringify(v.data || {}).slice(0, 600))}</code></li>`).join("");
+  const logs = (ev.log_context || []).map(l => `<div><span style="color:var(--muted);">${escHtml(l.source)}</span> ${escHtml(l.text)}</div>`).join("");
+  return `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">`
+    + opsKV(rows)
+    + `<div style="margin-top:6px;"><strong>Diagnostic findings</strong><ul style="margin:4px 0 0 18px;">${(dg.findings || []).map(f => `<li>${escHtml(f.text)} ${healTag(f.strength)}</li>`).join("")}</ul></div>`
+    + (inc.explanation ? `<div style="margin-top:4px;color:var(--muted);"><strong>Plain-language summary (Gemini):</strong> ${escHtml(inc.explanation)}</div>` : "")
+    + `<div style="margin-top:6px;"><strong>Recovery plan</strong> <span style="color:var(--muted);">${escHtml(pl.summary || "")}</span><ul style="margin:4px 0 0 18px;">${actions || "<li>No action.</li>"}</ul></div>`
+    + (operatorOnly ? `<div style="margin-top:4px;"><strong>Operator-only steps</strong><ul style="margin:4px 0 0 18px;">${operatorOnly}</ul></div>` : "")
+    + (af ? `<div style="margin-top:4px;"><strong>Results of approved diagnostics</strong><ul style="margin:4px 0 0 18px;">${af}</ul></div>` : "")
+    + `<details style="margin-top:6px;"><summary style="cursor:pointer;">Evidence</summary>`
+    + `<div style="font-size:12px;margin-top:4px;"><strong>Error</strong><pre style="white-space:pre-wrap;font-size:11px;max-height:180px;overflow:auto;">${escHtml(ev.error_message || "")}</pre>`
+    + `<div>Exception ${escHtml(ev.exception_type || "n/a")} · stage ${escHtml(ev.pipeline_stage || "n/a")} · attempt ${escHtml(ev.attempt_number ?? "n/a")} · job status ${escHtml(ev.job_status || "n/a")}</div>`
+    + `<div style="margin-top:4px;"><strong>Log context</strong>${logs || " none recorded"}</div>`
+    + `<div style="margin-top:4px;"><strong>Related failures</strong> ${(ev.related_failures || []).map(r => escHtml(`${r.job_id} (${r.stage})`)).join(", ") || "none"}</div>`
+    + `<div style="margin-top:4px;"><strong>Renderer</strong> <code style="font-size:11px;">${escHtml(JSON.stringify(ev.renderer || null))}</code></div>`
+    + `<div style="margin-top:4px;"><strong>Media metadata</strong> <code style="font-size:11px;">${escHtml(JSON.stringify(ev.media_metadata || null).slice(0, 500))}</code></div></div></details>`
+    + `<div style="margin-top:6px;"><strong>Recoveries</strong>${(d.recoveries || []).map(r => healRecoveryRow(r, true)).join("") || " none"}</div>`
+    + `<details style="margin-top:6px;"><summary style="cursor:pointer;">Audit trail (${(d.audit || []).length})</summary>`
+    + (d.audit || []).map(e => `<div style="font-size:11px;">${autoTime(e.ts_utc)} ${escHtml(e.event_type)} by ${escHtml(e.actor)} ${escHtml(e.previous_state || "")}→${escHtml(e.new_state || "")} ${escHtml(e.reason || "")}</div>`).join("")
+    + `</details></div>`;
+}
+
+function healCard(inc) {
+  const open = healState.open.has(inc.id);
+  const colour = HEAL_SEV[inc.severity] || "var(--muted)";
+  return `<div class="control-doc" style="border-left:3px solid ${colour};padding-left:10px;margin-bottom:8px;">`
+    + `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start;"><div style="flex:1;min-width:240px;">`
+    + `<span style="color:${colour};font-weight:600;">${escHtml((inc.severity || "").toUpperCase())}</span> ${healTag(inc.failure_class)} ${healTag(inc.certainty.toLowerCase() + " evidence")} ${healTag(inc.status)}`
+    + `<div style="margin-top:4px;"><strong>${escHtml(inc.template)}</strong></div>`
+    + `<div style="color:var(--muted);font-size:12px;">job ${escHtml(inc.job_id || "n/a")} · stage ${escHtml(inc.stage || "n/a")} · ${escHtml(inc.occurrences)} occurrence(s) · first ${autoTime(inc.first_seen_utc)} · last ${autoTime(inc.last_seen_utc)} · ${escHtml(inc.id)}</div>`
+    + `<div style="font-size:12px;">${escHtml(((inc.plan || {}).summary) || "")}</div></div>`
+    + `<div class="btn-row"><button class="btn sm" data-id="${escHtml(inc.id)}" onclick="healToggle(this.dataset.id)">${open ? "Hide" : "Diagnostics"}</button></div></div>`
+    + (open ? healDetail(healState.detail[inc.id]) : "") + `</div>`;
+}
+
+function healRenderList() {
+  document.getElementById("healList").innerHTML = healState.incidents.map(healCard).join("") || `<div style="color:var(--muted)">No incidents.</div>`;
+}
+
+async function healToggle(id) {
+  if (healState.open.has(id)) { healState.open.delete(id); healRenderList(); return; }
+  healState.open.add(id); healRenderList();
+  try { healState.detail[id] = await apiJson(`/api/self-healing/incidents/${encodeURIComponent(id)}`); }
+  catch (err) { healState.detail[id] = { error: err.message || String(err) }; }
+  healRenderList();
+}
+
+async function refreshSelfHealing(force = false) {
+  const panel = document.getElementById("tab-heal");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  healOperator();
+  const meta = document.getElementById("healMeta");
+  try {
+    const filter = document.getElementById("healFilter").value || "open";
+    const [ov, list] = await Promise.all([apiJson("/api/self-healing"), apiJson(`/api/self-healing/incidents?status=${encodeURIComponent(filter)}`)]);
+    const st = ov.state || {}, sm = ov.stats || {}, ls = ov.last_scan;
+    healState.incidents = list.incidents || [];
+    healState.awaiting = ov.awaiting || [];
+    for (const id of healState.open) { try { healState.detail[id] = await apiJson(`/api/self-healing/incidents/${encodeURIComponent(id)}`); } catch (_) {} }
+    const cls = sm.open_by_class || {};
+    document.getElementById("healOpen").textContent = sm.open_incidents ?? "--";
+    document.getElementById("healOpenSub").textContent = Object.entries(sm.incidents_by_status || {}).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(" · ") || "--";
+    document.getElementById("healDet").textContent = cls.DETERMINISTIC ?? 0;
+    document.getElementById("healAwait").textContent = sm.awaiting_approval ?? 0;
+    document.getElementById("healRate").textContent = sm.recovery_success_rate == null ? "n/a" : `${sm.recovery_success_rate}%`;
+    document.getElementById("healRateSub").textContent = `${sm.recovery_actions_finished || 0} recovery action(s) finished`;
+    const live = st.mode === "RECOMMEND" || st.mode === "APPROVED_EXECUTION";
+    document.getElementById("healMode").innerHTML = live ? `<span class="auto-on">${escHtml(st.mode === "APPROVED_EXECUTION" ? "EXECUTION" : st.mode)}</span>` : st.mode === "OBSERVE" ? "OBSERVE" : `<span class="auto-off">${escHtml(st.mode || "--")}</span>`;
+    document.getElementById("healModeSub").textContent = st.reason || "";
+    meta.innerHTML = `${escHtml(ov.note || "")} · Last scan: ${ls ? `${autoTime(ls.started_at_utc)} (${escHtml(ls.mode)})` : "never"}`
+      + (!st.enabled ? ` · <span style="color:#fcd34d;">Self-healing ${escHtml(st.mode)}: ${escHtml(st.reason)}. Levels, standing approvals and kill switches are managed in Autonomy Control.</span>` : "")
+      + (ov.database_available === false ? ` · <span class="auto-kill">database unavailable</span>` : "");
+    document.getElementById("healClasses").innerHTML = Object.keys(cls).length
+      ? opsKV(Object.entries(cls).map(([k, v]) => [k, escHtml(v)])) : `<div style="color:var(--muted)">No open incidents.</div>`;
+    const ba = sm.by_action || [];
+    document.getElementById("healStats").innerHTML = ba.length
+      ? opsKV(ba.map(a => [a.action_type, escHtml(`${a.total} total · ${a.succeeded || 0} verified · ${a.failed || 0} failed`)]).concat([["Verification results", escHtml(JSON.stringify(sm.verification || {}))]]))
+      : `<div style="color:var(--muted)">No recoveries yet.</div>`;
+    document.getElementById("healAwaitList").innerHTML = healState.awaiting.map(r => healRecoveryRow(r, true)).join("") || `<div style="color:var(--muted)">Nothing awaiting approval.</div>`;
+    healRenderList();
+    const hist = ov.history || [];
+    document.getElementById("healHistory").innerHTML = hist.length ? `<table class="ops-table"><thead><tr><th>Finished</th><th>Action</th><th>Incident</th><th>Status</th><th>Verification</th><th>Approval</th><th>Reason</th></tr></thead><tbody>`
+      + hist.map(r => `<tr><td>${autoTime(r.finished_at_utc || r.updated_at_utc)}</td><td>${escHtml(r.action_type)}</td><td>${escHtml(r.incident_id)}</td><td>${escHtml(r.status)}</td><td>${escHtml(r.verification_result || "n/a")}</td><td>${escHtml(r.approval_outcome || "n/a")}</td><td>${escHtml((r.status_reason || "").slice(0, 120))}</td></tr>`).join("")
+      + `</tbody></table>` : `<div style="color:var(--muted)">No finished recoveries.</div>`;
+    const lr = ov.learning || [];
+    document.getElementById("healLearning").innerHTML = lr.length ? `<table class="ops-table"><thead><tr><th>Signature</th><th>Action</th><th>Attempts</th><th>Succeeded</th><th>Failed</th><th>Unverified</th><th>Recurred after success</th></tr></thead><tbody>`
+      + lr.map(r => `<tr><td title="${escHtml(r.template || "")}">${escHtml((r.template || r.signature || "").slice(0, 70))}</td><td>${escHtml(r.action_type)}</td><td>${escHtml(r.attempts)}</td><td>${escHtml(r.succeeded)}</td><td>${escHtml(r.failed)}</td><td>${escHtml(r.unverified)}</td><td>${escHtml(r.recurred_after_success)}</td></tr>`).join("")
+      + `</tbody></table>` : "No outcomes recorded yet.";
+  } catch (err) {
+    if (meta) meta.innerHTML = `<span class="auto-kill">Self-Healing unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
+async function healScan() {
+  try {
+    const r = await healWrite("/api/self-healing/scan", { force: true });
+    showToast(r.ran ? `Scan finished: ${r.new_failures} failure record(s), ${r.incidents_created} new incident(s), ${r.proposals} proposal(s).` : `Not run: ${r.reason}`, !r.ran);
+  } catch (err) { showToast("Scan failed: " + err.message, true); }
+  refreshSelfHealing(true);
+}
+
+async function healAct(kind, id) {
+  let r = healState.awaiting.find(x => x.id === id);
+  if (!r) { for (const d of Object.values(healState.detail)) { const f = ((d || {}).recoveries || []).find(x => x.id === id); if (f) { r = f; break; } } }
+  if (!r) return;
+  let body = {};
+  if (kind === "approve") {
+    if (!(await askConfirm("Approve this self-healing action?", `${r.action_type}\n\nPayload: ${JSON.stringify(r.payload)}\nPayload hash: ${r.payload_hash}\n\nThe approval is bound to exactly this payload. It still runs only through Autonomy Control (level, kill switches, limits) and is verified afterwards.`))) return;
+    body = { payload_hash: r.payload_hash, reason: "approved from Self-Healing Operations" };
+  } else if (kind === "reject") {
+    const reason = prompt(`Why reject ${r.action_type}?`); if (!reason) return; body = { reason };
+  } else if (kind === "execute") {
+    if (!(await askConfirm("Execute this approved action now?", `${r.action_type}\n\nPayload: ${JSON.stringify(r.payload)}\n\nJob and resource preconditions are re-checked first; the result is verified before it counts as recovered.`))) return;
+  }
+  try {
+    const res = await healWrite(`/api/self-healing/recoveries/${encodeURIComponent(id)}/${kind}`, body);
+    showToast(kind === "execute" ? (res.executed ? "Executed and verified." : `Not executed: ${res.reason || res.status}`) : "Recovery updated.", kind === "execute" && !res.executed);
+  } catch (err) { showToast("Action failed: " + err.message, true); }
+  refreshSelfHealing(true);
+}
+
+// ---------------------------------------------------------------------------
 // Stage 3.32B Autonomy Control Plane. Reads are cheap GETs; the tab loads only when opened and the header pill
 // refreshes every 60 s. Every state change sends the per-process CSRF token and JSON, and asks for confirmation.
 // Server values are always escaped (escHtml); request ids are passed through data attributes, never inline JS.
@@ -2990,6 +3229,7 @@ refreshAutonomyPill();
 setInterval(refreshAutonomyPill, 60000);   // one small status GET
 setInterval(() => refreshAutonomy(), 60000);   // only loads while the Autonomy Control tab is open
 setInterval(() => refreshRecommendations(), 120000);   // only loads while the Recommendations tab is open
+setInterval(() => refreshSelfHealing(), 120000);   // only loads while the Self-Healing tab is open
 </script>
 </body>
 </html>

@@ -47,6 +47,8 @@ CATEGORIES: Dict[str, str] = {
     "diagnostics": "Run read-only diagnostics.",
     "notifications": "Notify the operator through the local dashboard inbox (no e-mail or external message).",
     "community_drafts": "Prepare YouTube Community post drafts locally. Never publishes.",
+    "self_healing": "Stage 3.32D: diagnose operational failures and run allow-listed, verifiable, low-impact recovery "
+                    "actions. Never retries or re-renders jobs, restarts processes or changes configuration.",
 }
 
 
@@ -107,6 +109,10 @@ COMMON_PRECONDITIONS = (
 )
 
 DIAGNOSTICS = ("ops_overview", "ops_daily_summary", "audit_chain_verify", "kill_switch_status")
+SELF_HEALING_DIAGNOSTICS = ("collect_log_context", "inspect_media_metadata", "check_disk_space", "inspect_file_locks",
+                            "validate_ffmpeg_filter", "generate_diagnostic_report")
+# Key-less, read-only providers only (no credentials are ever used by self-healing).
+SELF_HEALING_PROVIDERS = ("Openverse", "Wikimedia Commons", "NASA Image Library", "Internet Archive")
 
 PERMITTED: Tuple[ActionSpec, ...] = (
     ActionSpec(
@@ -164,6 +170,51 @@ PERMITTED: Tuple[ActionSpec, ...] = (
         payload_fields={"text": Field(str, required=True, max_len=1500), "topic": Field(str, max_len=200),
                         "source_job_id": Field(str, max_len=100, pattern=r"^[A-Za-z0-9_.:-]+$")},
         request_ttl_hours=48, daily_limit=6),
+    # -- Stage 3.32D self-healing ---------------------------------------------------------------------------------
+    # Low-risk, read-only diagnostics. The handler reads only; files it writes go to data/autonomy/self_healing.
+    ActionSpec(
+        action_type="selfheal.diagnostic.run", category="self_healing",
+        description="Run one allow-listed read-only diagnostic for a self-healing incident (logs, media metadata, "
+                    "disk space, file locks, FFmpeg filter parameters, diagnostic report).",
+        risk=RISK_LOW, required_permission="autonomy.self_healing.execute", approval=APPROVAL_STANDING_ALLOWED,
+        preconditions=COMMON_PRECONDITIONS + ("incident_exists", "resource_lock_acquired", "paths_inside_media_or_assets"),
+        timeout_seconds=60, retry_limit=1,
+        verification="The diagnostic result names the diagnostic and incident with status ok (a report file must exist "
+                     "inside data/autonomy/self_healing/reports and match its SHA-256).",
+        rollback="None needed: read-only. A diagnostic report file it created is removed if verification fails.",
+        payload_fields={"incident_id": Field(str, required=True, pattern=r"^inc_[0-9a-f]{12}$", max_len=16),
+                        "diagnostic": Field(str, required=True, choices=SELF_HEALING_DIAGNOSTICS)},
+        request_ttl_hours=24, daily_limit=96),
+    # Potentially reversible recovery actions: existing services only, explicit approval for every request.
+    ActionSpec(
+        action_type="selfheal.provider.retry_readonly", category="self_healing",
+        description="Repeat one read-only media-provider search through the existing provider client to confirm the "
+                    "provider has recovered. Nothing is downloaded, written or changed.",
+        risk=RISK_MEDIUM, required_permission="autonomy.self_healing.execute", approval=APPROVAL_EXPLICIT_EACH,
+        preconditions=COMMON_PRECONDITIONS + ("incident_exists", "resource_lock_acquired", "provider_allow_listed",
+                                              "query_from_incident_evidence"),
+        timeout_seconds=45, retry_limit=0,
+        verification="The provider answered and its response parsed into a list of media records; the record count "
+                     "is stored. A provider error is a failed verification, never a success.",
+        rollback="None needed: a read-only search.",
+        payload_fields={"incident_id": Field(str, required=True, pattern=r"^inc_[0-9a-f]{12}$", max_len=16),
+                        "provider": Field(str, required=True, choices=SELF_HEALING_PROVIDERS),
+                        "query": Field(str, required=True, max_len=100, pattern=r"^[A-Za-z0-9 ,.'()&:-]{2,100}$")},
+        request_ttl_hours=12, daily_limit=12),
+    ActionSpec(
+        action_type="selfheal.asset.reacquire_staged", category="self_healing",
+        description="Re-download one failed media asset through the existing AssetDownloader into a quarantined "
+                    "staging folder (data/autonomy/self_healing/staging). It is never placed into a production job.",
+        risk=RISK_MEDIUM, required_permission="autonomy.self_healing.execute", approval=APPROVAL_EXPLICIT_EACH,
+        preconditions=COMMON_PRECONDITIONS + ("incident_exists", "resource_lock_acquired", "url_https_allow_listed_host",
+                                              "url_recorded_in_incident_evidence", "job_not_running_or_recovering"),
+        timeout_seconds=90, retry_limit=0,
+        verification="The staged file exists inside the staging folder, passes the downloader's signature and decode "
+                     "checks, has positive dimensions and matches its SHA-256 on re-read.",
+        rollback="Compensation: delete this execution's staging folder (only that folder).",
+        payload_fields={"incident_id": Field(str, required=True, pattern=r"^inc_[0-9a-f]{12}$", max_len=16),
+                        "asset_url": Field(str, required=True, max_len=500, pattern=r"^https://[^\s<>\"']{4,490}$")},
+        request_ttl_hours=12, daily_limit=12),
 )
 
 
@@ -208,6 +259,17 @@ PROHIBITED: Tuple[ActionSpec, ...] = (
     _prohibited("git.destructive", "Perform destructive Git operations (reset, force-push, clean, rebase).", "git reset / push --force / clean"),
     _prohibited("autonomy.self_policy.change", "Let autonomy change its own levels, standing approvals or kill switches, or approve its own proposals.",
                 "ControlPlane.set_level / grant_standing_approval / kill switch (human operators only)"),
+    # Stage 3.32D: high-impact recovery stays with the existing scheduler and the operator.
+    _prohibited("recovery.job.retry", "Retry, resume or re-run an entire production job.",
+                "retry_policy re-arm; operator_retry_service.request_retry; /api/jobs/recover; scheduler dispatch"),
+    _prohibited("render.video.rerender", "Re-render a video or regenerate production media inside a job.",
+                "rendering engines; Lemo-Opuscar; explainer_animation_engine; production workspace"),
+    _prohibited("render.worker.restart", "Restart, stop or kill render workers or production jobs.",
+                "worker_registry; job_manager; process kill"),
+    _prohibited("production.asset.replace", "Place, replace or delete assets inside a production job's media folder.",
+                "media/productions/<job>/assets; asset_registry"),
+    _prohibited("autonomy.code.execute", "Run shell commands, arbitrary Python, or commands built from recommendation "
+                "or AI-generated text.", "subprocess with shell; eval / exec; command construction from free text"),
 )
 
 REGISTRY: Dict[str, ActionSpec] = {s.action_type: s for s in PERMITTED + PROHIBITED}

@@ -54,7 +54,11 @@ TRANSITIONS: Dict[str, Tuple[str, ...]] = {
     REJECTED: (), EXPIRED: (), COMPLETED: (), FAILED: (), CANCELLED: (),
 }
 
-RESERVED_ACTOR_PREFIXES = ("autonomy", "standing-approval", "system", "engine", "control-plane", "recommendation")
+RESERVED_ACTOR_PREFIXES = ("autonomy", "standing-approval", "system", "engine", "control-plane", "recommendation",
+                           "self-healing", "selfheal")
+# Separators are ignored when matching reserved identities, so "Self.Healing", "self healing" or "re-commendation"
+# cannot impersonate a machine identity.
+_RESERVED_NORMALIZED = tuple(sorted({re.sub(r"[ ._@-]", "", p) for p in RESERVED_ACTOR_PREFIXES}))
 OPERATOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,63}$")
 MAX_EVIDENCE_BYTES = 8000
 MAX_REASON = 500
@@ -218,7 +222,7 @@ def validate_operator(operator: Any) -> str:
     if not isinstance(operator, str) or not OPERATOR_RE.match(operator.strip()):
         raise PermissionDenied("operator must be 1-64 characters: letters, digits, space, . _ @ -")
     op = operator.strip()
-    if op.lower().startswith(RESERVED_ACTOR_PREFIXES):
+    if op.lower().startswith(RESERVED_ACTOR_PREFIXES) or re.sub(r"[ ._@-]", "", op.lower()).startswith(_RESERVED_NORMALIZED):
         raise PermissionDenied("autonomy and system identities cannot approve actions or change permissions")
     return op
 

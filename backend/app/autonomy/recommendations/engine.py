@@ -73,11 +73,17 @@ class RecommendationEngine:
                  intelligence: Optional[Callable[[], Any]] = None,
                  schedule_provider: Optional[Callable[[], Dict[str, int]]] = None,
                  explainer: Optional[GeminiExplainer] = None, environ: Optional[Dict[str, str]] = None,
-                 clock: Optional[Callable[[], datetime]] = None):
+                 clock: Optional[Callable[[], datetime]] = None,
+                 learning_provider: Optional[Callable[[], Optional[Dict[str, Any]]]] = None):
         self.cp = control_plane
         self.store = store or RecommendationStore(control_plane.db_path)
         self.intelligence = intelligence or control_plane.intelligence
         self.schedule_provider = schedule_provider
+        # Stage 3.32D outcomes (read-only; never creates tables). Injectable for tests.
+        def _default_learning() -> Optional[Dict[str, Any]]:
+            from backend.app.autonomy.self_healing.store import read_learning
+            return read_learning(control_plane.db_path)
+        self.learning_provider = learning_provider if learning_provider is not None else _default_learning
         env = os.environ if environ is None else environ
         self.explainer_enabled = (env.get(EXPLAINER_ENV, "").strip().lower() == "gemini")
         self.explainer = explainer if explainer is not None else (GeminiExplainer() if self.explainer_enabled else None)
@@ -130,7 +136,8 @@ class RecommendationEngine:
             last = self.store.last_run()
             if last and last["started_at"] > _ts(now - timedelta(seconds=MIN_RUN_INTERVAL_SECONDS)):
                 return {"ran": False, "mode": st["mode"], "reason": "analysed less than 5 minutes ago", "last_run": last}
-        sig = signals_mod.collect(self.intelligence(), days=days, now=now, schedule_provider=self.schedule_provider)
+        sig = signals_mod.collect(self.intelligence(), days=days, now=now, schedule_provider=self.schedule_provider,
+                                  learning_provider=self.learning_provider)
         result = rules_mod.evaluate(sig)
         scored = []
         for f in result.findings:

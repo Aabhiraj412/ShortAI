@@ -667,7 +667,10 @@ def test_production_records_untouched_and_no_production_calls(tmp_path, monkeypa
             elif isinstance(node, ast.ImportFrom):
                 imported.add(node.module or "")
     allowed_app = {"backend.app.autonomy", "backend.app.autonomy.registry", "backend.app.autonomy.handlers",
-                   "backend.app.autonomy.control_plane", "backend.app.core.paths", "backend.app.services.operational_intelligence"}
+                   "backend.app.autonomy.control_plane", "backend.app.core.paths", "backend.app.services.operational_intelligence",
+                   # Stage 3.32D: handlers.py registers the self-healing handlers (same contract, same gates); that
+                   # package has its own source-safety test in test_self_healing_332d.py.
+                   "backend.app.autonomy.self_healing.handlers"}
     assert {m for m in imported if m.startswith(("backend", "app"))} <= allowed_app
     assert not imported & {"subprocess", "requests", "urllib.request", "socket", "shutil", "httpx"}
     # registry.py only *names* the guarded production functions (as data); the executable modules never mention them.
