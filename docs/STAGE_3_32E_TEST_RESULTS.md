@@ -176,3 +176,46 @@ The totals reconcile exactly (1352 = 1299 + 53). **No regressions.**
 - the future-capability publishing box.
 
 No console errors except connection refusals while the preview server restarted, and a 404 for the draft image the scratch copy does not hold.
+
+## 8. Stage 3.32F: publishing, capability audit, operator attribution (2026-11-20, night)
+
+**New suite `backend/tests/test_community_publishing_332f.py`: 36 cases, all pass.** Every YouTube call is a fake; no network.
+
+| Area | Tests |
+|---|---|
+| Capability detection (10 outcomes and error shapes) | `test_capability_detection`: available; read-only scopes; pilot 404 and 403; API not enabled; scope error; channelNotFound; channel lookup refused; quota; timeout. Only `channels.list` and `posts.list` are ever called, and the token never reaches the database |
+| Pilot denied plus missing insert scope | `test_pilot_denied_also_reports_missing_insert_scope` |
+| Not connected and unexpected errors fail closed (redacted) | `test_not_connected_and_unexpected_errors_fail_closed` |
+| Enabling needs a fresh API_AVAILABLE and confirm; the schedule path cannot enable | `test_enabling_requires_fresh_api_available` |
+| Publishing disabled by default: no calls | `test_publishing_disabled_by_default_makes_no_calls` |
+| Pilot denied blocks even a forged enable flag | `test_pilot_denied_blocks_publishing` |
+| Success: request, response, post id and URL, audit; the draft is frozen afterwards | `test_successful_publish_records_everything` |
+| Duplicate prevention and idempotency (application and DB partial unique index) | `test_duplicate_and_idempotent_publication` |
+| Invalid or stale draft, missing confirm, image and text tampering | `test_invalid_or_stale_drafts_are_refused` (5 cases): no upload or insert |
+| Timeout after a possibly successful insert | `test_timeout_after_insert_is_uncertain_and_never_retried`: UNCERTAIN, no retry, frozen draft, reconcile with no match and then a match |
+| Operator resolution, then explicit retry | `test_operator_resolution_of_uncertain` |
+| Quota exhaustion and definitive failures | `test_definitive_failures_and_quota` (4 cases) |
+| Daily API publication limit | `test_daily_api_publication_limit` |
+| Manual handoff (approval required, idempotent, URL validation, operator-reported, frozen draft) | `test_manual_handoff`, `test_handoff_refuses_changed_content_and_can_be_cancelled` |
+| Audit integrity | `test_audit_trail_is_append_only` |
+| No publishing from automation, ON or OFF | `test_automation_never_publishes` |
+| No network when unavailable | `test_no_network_when_publishing_is_unavailable` |
+| API: loopback, CSRF, confirm, 423 gates, extra fields, ids, download header; operator optional (`local-dashboard`) | `test_api_routes_security_and_operator_optional` |
+| Reads create nothing | `test_publishing_status_before_anything_creates_nothing` |
+
+**Updated 3.32E tests:**
+- `test_publishing_is_confined_to_the_gated_publishing_modules` replaces the old "no publish route" test with the new boundary: network and OAuth code only in `youtube_posts.py`, using documented endpoints only, imported only by `publishing.py`; draft generation never publishes; autonomy publishing still PROHIBITED; 27 routes.
+- `test_operator_identity_is_validated`: a blank or absent operator means `local-dashboard`.
+- `test_dashboard_community_tab`: the Publish button is rendered only behind `api_publishing_ready`, and there is no Operator field.
+
+**Full regression suite:**
+
+```
+5 failed, 1383 passed, 173 skipped, 3 warnings in 1273.13s
+```
+
+1388 tests = 1352 + 36 new. All 5 failures are the known pre-existing ones. **No regressions.**
+
+**Live read-only capability audit:** `PILOT_ACCESS_REQUIRED`, plus the missing insert scope. See `STAGE_3_32F_PUBLISHING.md` §1.
+
+**Dashboard preview** (scratch copy, port 8766): no Operator field; readiness card with the real audit result; only "Run capability check" and "Manual handoff" buttons, with no Publish button; the handoff panel shows the image, text, download, the Open YouTube link and the steps.

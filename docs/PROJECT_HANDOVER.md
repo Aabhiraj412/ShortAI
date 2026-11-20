@@ -79,7 +79,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Jobs | 45 completed, 12 failed, 40 recovery-window-expired, 1 aborted. |
 | Autonomy | All levels OFF; startup kill switch active (no `autonomy_startup.json`); 0 requests, 0 executions. |
 | Self-healing | BLOCKED (startup kill switch), level OFF; its six `selfheal_*` tables exist and are empty. |
-| Community drafts (3.32E) | Automation **OFF**, with no schedule saved. One manual draft, `cdraft_00eeba9275a0990d` (READY_FOR_REVIEW, VALID, not approved, not published). `community_config` holds only the internal `_maintenance_date`. |
+| Community drafts (3.32E) | **Automation ON**, switched on by the user in the dashboard at 19:43 IST on 2026-11-20 (`operator:Abhiraj`): daily at **20:00 Asia/Kolkata**. Today's 20:00 run is skipped because today already has a draft; the first automatic draft is due 2026-11-21 20:00 IST. `cdraft_00eeba9275a0990d` was **approved** by the user at 19:43 IST and is not published. |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
 | Latest backups | `D:\Agents\CrazzyDocs_backups\deploy_89ea49b_scheduler_20261120_173044` (before the daemon restart) and `deploy_89ea49b_dashboard_20261120_163917` |
 
@@ -103,8 +103,9 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 1. **Deploy `710b8c5` to the dashboard**: the exact next task (section 7).
 2. **Fix the FFmpeg padding defect** (bug 1). This is the largest source of lost cycles.
 3. **3.32E**: Community posts in DRAFT mode. `89ea49b` is deployed with automation OFF. The timezone-aware schedule (US presets, DST) is implemented and tested, awaiting commit authorization; deploying it needs a dashboard **and** a daemon restart. Then the operator picks a timezone and time and enables automation. See `docs/STAGE_3_32E_IMPLEMENTATION.md` §7 and `docs/STAGE_3_32E_SCHEDULING.md`.
+3a. **3.32F**: YouTube Community publishing. **Implemented in the development worktree (uncommitted).** The read-only capability audit found `PILOT_ACCESS_REQUIRED` for project `crazzydocs-youtube` (`posts.list`: 404 Method not found); in addition, the token lacks a `posts.insert` scope. API publishing stays OFF and fail-closed; the manual handoff works. See `docs/STAGE_3_32F_PUBLISHING.md`.
 4. **3.32G**: controlled autopilot rollout. Phased activation (OBSERVE, then RECOMMEND, then standing diagnostics only) with weekly reports and kill-switch drills. **Each gate needs user approval.**
-5. **3.32F**: Community API publishing. **BLOCKED** on YouTube posts API access, a separate `youtube.force-ssl` consent, and 30 clean days of 3.32E.
+5. **3.32F activation**: **BLOCKED** on Google approving the project for the posts API pilot (or general availability, planned for 2027) and on a `youtube.force-ssl` re-consent; see `docs/STAGE_3_32F_PUBLISHING.md` §9.
 
 ## 6. Critical safety constraints
 
@@ -137,21 +138,11 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-**Review, then commit and deploy the timezone-aware Community schedule.** Each step needs the user's explicit authorization.
+**Review the Stage 3.32F work** (development worktree, uncommitted, on top of `5655487`), then commit, push and deploy it. Each step needs the user's authorization.
 
-1. **Commit** the work in worktree `crazzy-docs-handover-b1a088` (on top of `97b7990`). Pushing then also publishes `97b7990`; decide that together.
-2. **Push** with a fast-forward to `main`, and verify that `ls-remote` matches.
-3. **Back up** to a new `D:\Agents\CrazzyDocs_backups\deploy_<sha>_<timestamp>` folder (studio.db via the online backup and integrity check, configuration, git bundle).
-4. **Restart the dashboard:**
-   - between :15 and :50 with no active job;
-   - stop only the verified dashboard PID;
-   - the monitor relaunches it; otherwise run `Start-ScheduledTask CrazzyDocs-Health-Dashboard`.
-5. **Restart the scheduler daemon:** call `POST /api/control-center/deployment/restart {"confirm": true, "reason": ...}` only when the API reports `safe: true`. The monitor relaunches the daemon.
-6. **Verify:**
-   - both processes are on the new revision;
-   - schedule `ccf0bd04f159` is unchanged with 24 cycles;
-   - `Community Draft Check` is registered and returns `blocked`;
-   - automation is still OFF;
-   - no new draft exists;
-   - autonomy is OFF and self-healing BLOCKED.
-7. **The user** chooses the timezone and time in the dashboard and enables automation (a separate decision). Approval and posting stay manual; publishing through the API is Stage 3.32F (blocked).
+- **Deployment:** a dashboard restart only. The daemon does not run the publishing code, although its tick picks up the operator-attribution change at its next restart.
+- **After deployment:**
+  - API publishing stays OFF;
+  - the user can use the manual handoff for approved drafts;
+  - re-running the capability check from the dashboard records the live result in production.
+- **Automation is ON** (20:00 IST daily). Approval and posting stay manual.

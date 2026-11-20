@@ -6,7 +6,7 @@ All routes are under `/api/community`. They follow the existing autonomy API con
 |---|---|
 | Reads | `require_local_control`: loopback clients only (403 otherwise) |
 | Writes | `require_autonomy_write`: loopback, same-origin (`Origin` allow-list, `Sec-Fetch-Site`), `Content-Type: application/json` (415), and the per-process CSRF header `X-CrazzyDocs-CSRF` from `GET /api/autonomy/session` (403) |
-| Bodies | Pydantic models with `extra="forbid"` (422). `operator` is a human identity validated by the Control Plane: reserved machine identities such as `system`, `autonomy` and `self-healing` give 403 |
+| Bodies | Pydantic models with `extra="forbid"` (422). `operator` is **optional** (Stage 3.32F): the dashboard sends none and actions are attributed to `local-dashboard`, an unauthenticated local request that passed the loopback, same-origin and CSRF checks. A supplied label is validated (reserved machine identities such as `system`, `autonomy` and `self-healing` give 403) and recorded as `operator:<label>`; it is not authentication |
 | Ids | `cdraft_<16 hex>` and `cimg_<16 hex>` are checked before any lookup (404 otherwise); no route takes a path or URL |
 | Errors | `{"detail": "..."}`, at most 300 characters; unexpected errors give 503 with a generic message; secrets in exception text are redacted |
 | Status codes | 400 invalid input · 403 forbidden · 404 not found · 409 conflict (stale version, invalid transition, date already has a draft, warnings not acknowledged) · 415 not JSON · 422 schema · 423 kill switch active · 429 daily limit · 503 unavailable |
@@ -41,7 +41,7 @@ There is **no publish route** and no generic execution route.
 | `POST /api/community/drafts/{id}/reject` | `operator`, `version`, `reason` (3–500) | `READY_FOR_REVIEW` → `REJECTED` |
 | `POST /api/community/drafts/{id}/archive` | `operator`, `version`, optional `reason` | From a reviewable, decided or failed state → `ARCHIVED`; frees the date |
 
-18 routes in total: 10 reads, 8 writes.
+18 draft and schedule routes (10 reads, 8 writes). Stage 3.32F adds 9 publishing routes, 27 in total; see `STAGE_3_32F_PUBLISHING.md` §8.
 
 ## Future publishing boundary (Stage 3.32F, not implemented)
 

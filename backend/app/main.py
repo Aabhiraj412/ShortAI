@@ -2480,7 +2480,15 @@ def _community_draft_id(draft_id: str) -> str:
     return draft_id
 
 
-class CommunityVersionedRequest(_AutonomyBody):
+class _CommunityBody(BaseModel):
+    """Community writes. ``operator`` is optional: the dashboard sends none, and the action is attributed to the
+    neutral identity ``local-dashboard`` (an unauthenticated local dashboard request that passed loopback,
+    same-origin and CSRF checks). A supplied label is validated and recorded, but it is not authentication."""
+    model_config = {"extra": "forbid"}
+    operator: Optional[str] = Field(default=None, max_length=64)
+
+
+class CommunityVersionedRequest(_CommunityBody):
     version: int = Field(ge=1, le=1_000_000)
 
 
@@ -2505,7 +2513,7 @@ class CommunityImageRequest(CommunityVersionedRequest):
     choice: Optional[str] = Field(default=None, max_length=40)
 
 
-class CommunityScheduleRequest(_AutonomyBody):
+class CommunityScheduleRequest(_CommunityBody):
     enabled: Optional[bool] = None
     paused: Optional[bool] = None
     kill_switch: Optional[bool] = None
@@ -2600,12 +2608,14 @@ async def api_community_image_options(draft_id: str, _: None = Depends(require_l
 
 
 @app.get("/api/community/images/{image_id}")
-async def api_community_image(image_id: str, _: None = Depends(require_local_control)):
+async def api_community_image(image_id: str, download: int = 0, _: None = Depends(require_local_control)):
     if not re.fullmatch(r"cimg_[0-9a-f]{16}", image_id or ""):
         raise HTTPException(status_code=404, detail="image not found")
     path = await _community_call(lambda: _community().image_file(image_id))
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store",
-                                                                 "X-Content-Type-Options": "nosniff"})
+    headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="crazzydocs_community_{image_id[5:]}.jpg"'
+    return FileResponse(path, media_type="image/jpeg", headers=headers)
 
 
 @app.get("/api/community/history")
@@ -2616,7 +2626,7 @@ async def api_community_history(limit: int = 50, _: None = Depends(require_local
 
 
 @app.post("/api/community/generate")
-async def api_community_generate(req: _AutonomyBody, _: None = Depends(require_local_control),
+async def api_community_generate(req: _CommunityBody, _: None = Depends(require_local_control),
                                  __: None = Depends(require_autonomy_write)):
     return await _community_call(lambda: _community().generate_manual(req.operator))
 
@@ -2663,6 +2673,104 @@ async def api_community_archive(draft_id: str, req: CommunityArchiveRequest, _: 
                                 __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
     return await _community_call(lambda: _community().archive(did, req.operator, req.version, req.reason))
+
+
+# -- Stage 3.32F Community publishing (fail closed; OFF by default) ------------------------------------------------
+# posts.insert publishes PUBLICLY and IMMEDIATELY and is a pilot API. Every publish passes all gates again
+# (enabled + fresh API_AVAILABLE capability + no kill switch + APPROVED draft whose text and image equal the approved
+# versions). An ambiguous insert is never retried. The manual handoff never claims a post was published.
+
+def _publishing():
+    from backend.app.community.publishing import PublishingService
+    return PublishingService(_community())
+
+
+_COMMUNITY_PUB_RE = re.compile(r"^cpub_[0-9a-f]{16}$")
+
+
+def _community_pub_id(pid: str) -> str:
+    if not _COMMUNITY_PUB_RE.match(pid or ""):
+        raise HTTPException(status_code=404, detail="publication not found")
+    return pid
+
+
+class CommunityPublishRequest(CommunityVersionedRequest):
+    confirm: bool = False
+
+
+class CommunityPublishingEnableRequest(_CommunityBody):
+    enabled: bool
+    confirm: bool = False
+
+
+class CommunityResolveRequest(_CommunityBody):
+    outcome: str = Field(min_length=1, max_length=20)
+    reason: str = Field(min_length=5, max_length=500)
+    post_id: Optional[str] = Field(default=None, max_length=60)
+
+
+class CommunityManualPostedRequest(_CommunityBody):
+    post_url: Optional[str] = Field(default=None, max_length=300)
+
+
+@app.get("/api/community/publishing")
+async def api_community_publishing(_: None = Depends(require_local_control)):
+    return await _community_call(lambda: _publishing().status())
+
+
+@app.post("/api/community/publishing/capability-check")
+async def api_community_capability_check(req: _CommunityBody, _: None = Depends(require_local_control),
+                                         __: None = Depends(require_autonomy_write)):
+    """Read-only YouTube probe (channels.list + posts.list, 1 quota unit each). Never uploads or posts."""
+    return await _community_call(lambda: _publishing().check_capability(req.operator))
+
+
+@app.post("/api/community/publishing/enabled")
+async def api_community_publishing_enabled(req: CommunityPublishingEnableRequest, _: None = Depends(require_local_control),
+                                           __: None = Depends(require_autonomy_write)):
+    return await _community_call(lambda: _publishing().set_enabled(req.operator, req.enabled, req.confirm))
+
+
+@app.post("/api/community/drafts/{draft_id}/publish")
+async def api_community_publish(draft_id: str, req: CommunityPublishRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _publishing().publish(did, req.operator, req.version, req.confirm))
+
+
+@app.post("/api/community/drafts/{draft_id}/handoff")
+async def api_community_handoff(draft_id: str, req: _CommunityBody, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _publishing().prepare_handoff(did, req.operator))
+
+
+@app.post("/api/community/publications/{publication_id}/reconcile")
+async def api_community_reconcile(publication_id: str, req: _CommunityBody, _: None = Depends(require_local_control),
+                                  __: None = Depends(require_autonomy_write)):
+    pid = _community_pub_id(publication_id)
+    return await _community_call(lambda: _publishing().reconcile(pid, req.operator))
+
+
+@app.post("/api/community/publications/{publication_id}/resolve")
+async def api_community_resolve(publication_id: str, req: CommunityResolveRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    pid = _community_pub_id(publication_id)
+    return await _community_call(lambda: _publishing().resolve_uncertain(pid, req.operator, req.outcome, req.reason, req.post_id))
+
+
+@app.post("/api/community/publications/{publication_id}/manual-posted")
+async def api_community_manual_posted(publication_id: str, req: CommunityManualPostedRequest,
+                                      _: None = Depends(require_local_control), __: None = Depends(require_autonomy_write)):
+    pid = _community_pub_id(publication_id)
+    return await _community_call(lambda: _publishing().report_manual_post(pid, req.operator, req.post_url))
+
+
+@app.post("/api/community/publications/{publication_id}/cancel-handoff")
+async def api_community_cancel_handoff(publication_id: str, req: _CommunityBody, _: None = Depends(require_local_control),
+                                       __: None = Depends(require_autonomy_write)):
+    pid = _community_pub_id(publication_id)
+    return await _community_call(lambda: _publishing().cancel_handoff(pid, req.operator))
 
 
 @app.get("/api/youtube/quota")

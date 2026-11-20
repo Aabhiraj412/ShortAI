@@ -844,9 +844,11 @@ def test_kill_switches_block_all_generation(world, switch):
 
 def test_operator_identity_is_validated(world):
     svc = world.svc()
-    for bad in ("system:community-scheduler", "autonomy", "Self Healing", "", "x" * 80, "evil\nname"):
+    for bad in ("system:community-scheduler", "autonomy", "Self Healing", "x" * 80, "evil\nname"):
         with pytest.raises(svc_mod.Forbidden):
             svc.generate_manual(bad)
+    d = svc.generate_manual("   ")["draft"]["draft"]          # blank or absent: the neutral identity, never a person
+    assert {e["actor"] for e in svc.detail(d["id"])["events"]} == {"local-dashboard"}
 
 
 def _client(world, monkeypatch):
@@ -958,39 +960,50 @@ def test_secrets_are_redacted_from_errors(world, monkeypatch):
     assert "AIzaSy" not in dump
 
 
-def test_publishing_is_unreachable_from_community_code():
+def test_publishing_is_confined_to_the_gated_publishing_modules():
+    """Stage 3.32F boundary: network and OAuth code live ONLY in youtube_posts.py (documented endpoints only), which
+    only publishing.py imports. Draft generation, validation, images, schedule and store never reach YouTube."""
+    import ast
     pkg = Path(svc_mod.__file__).parent
-    forbidden = ("youtube_service", "youtube_publishing_engine", "youtube_connection_service", "googleapiclient",
-                 "google_auth", "oauth", "upload_short", "videos().insert", "posts.insert", "posts().insert",
-                 "imageUpload", "publishing_ledger SET", "INSERT INTO publishing_ledger", "UPDATE persistent_jobs",
-                 "INSERT INTO persistent_jobs", "DELETE FROM", "run_cycle_generation", "reload_scheduler",
-                 "token.json", "client_secrets", "subprocess", "os.system", "eval(", "exec(", "shell=True", "urlopen",
-                 "import requests", "topic_history.json", "creative_policy_config")
+    network_or_oauth = ("youtube_service", "youtube_publishing_engine", "youtube_connection_service", "googleapiclient",
+                        "google.oauth2", "urlopen", "import requests", "token.json", "client_secrets", "secure_storage")
+    always_forbidden = ("upload_short", "videos().insert", "publishing_ledger SET", "INSERT INTO publishing_ledger",
+                        "UPDATE persistent_jobs", "INSERT INTO persistent_jobs", "run_cycle_generation", "reload_scheduler",
+                        "subprocess", "os.system", "eval(", "exec(", "shell=True", "topic_history.json",
+                        "creative_policy_config")
     for p in pkg.glob("*.py"):
         src = p.read_text(encoding="utf-8")
-        for bad in forbidden:
-            if bad == "DELETE FROM" and p.name == "store.py":
-                assert all("community_" in line for line in src.splitlines() if "DELETE FROM" in line)
-                continue
+        for bad in always_forbidden:
             assert bad not in src, f"{bad} in {p.name}"
-    import ast
-    imported = set()
-    for p in pkg.glob("*.py"):
-        for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+        for line in src.splitlines():
+            if "DELETE FROM" in line:
+                assert "community_" in line, f"DELETE outside community tables in {p.name}"
+        if p.name != "youtube_posts.py":
+            for bad in network_or_oauth:
+                assert bad not in src, f"{bad} in {p.name}"
+        imports = set()
+        for node in ast.walk(ast.parse(src)):
             if isinstance(node, ast.ImportFrom) and node.module:
-                imported.add(node.module)
+                imports.add(node.module)
             elif isinstance(node, ast.Import):
-                imported |= {a.name for a in node.names}
-    allowed_backend = {"backend.app.community", "backend.app.community.store", "backend.app.community.content",
-                       "backend.app.community.images", "backend.app.community.validation", "backend.app.community.schedule",
-                       "backend.app.autonomy.control_plane", "backend.app.autonomy.registry", "backend.app.core.paths",
-                       "backend.app.core.config", "backend.app.content.number_words", "backend.app.content.hook_evaluator"}
-    assert {m for m in imported if m.startswith("backend")} <= allowed_backend
+                imports |= {a.name for a in node.names}
+        if p.name not in ("publishing.py", "youtube_posts.py"):
+            assert "backend.app.community.youtube_posts" not in imports, p.name
+        if p.name not in ("service.py", "publishing.py"):
+            assert "backend.app.community.publishing" not in imports, p.name
+    posts_src = (pkg / "youtube_posts.py").read_text(encoding="utf-8")
+    import re as _re
+    urls = set(_re.findall(r'f?"\{(API|UPLOAD)\}(/[a-z/]+)', posts_src))
+    assert {u[1] for u in urls} <= {"/channels", "/posts", "/posts/image"}, urls
+    svc_src = (pkg / "service.py").read_text(encoding="utf-8")
+    assert "publish(" not in svc_src.replace("_assert_not_published(", "")      # generation never publishes
     from backend.app.autonomy import registry
-    assert registry.REGISTRY["youtube.community.publish"].prohibited is True
+    assert registry.REGISTRY["youtube.community.publish"].prohibited is True     # autonomy can never publish
     main_src = (Path(svc_mod.__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     routes = [ln for ln in main_src.splitlines() if ln.startswith("@app.") and "/api/community" in ln]
-    assert len(routes) == 18 and not any("publish" in r or "upload" in r for r in routes)
+    assert len(routes) == 27
+    assert [r for r in routes if "publish" in r and "/publishing" not in r] == ['@app.post("/api/community/drafts/{draft_id}/publish")']
+    assert not any("upload" in r or "delete" in r.lower() for r in routes)
 
 
 def test_scheduler_job_is_isolated_from_production(monkeypatch):
@@ -1085,7 +1098,13 @@ def test_dashboard_community_tab():
                    "/api/community/generate", "/regenerate-image", "/regenerate-text", "/approve", "/reject", "/archive",
                    "/edit", 'if (tabId === "community")', "Nothing is ever published"):
         assert needle in html, needle
-    assert "/api/community/publish" not in html and "posts.insert" not in html
+    # Stage 3.32F: the API Publish button exists only behind the server's readiness flag (all gates passed)
+    assert html.count(">Publish now via API (public, immediate)</button>") == 1
+    assert "(st.api_publishing_ready ? `<button class=\"btn sm primary\"" in html
+    assert 'id="cmOperator"' not in html                       # no operator name is asked for any more
+    for needle in ('id="cmPubCard"', "function cmCapCheck", "function cmHandoff", "/handoff", "/manual-posted",
+                   "operator-reported", "Schedule"):
+        assert needle in html, needle
     for tab in ('data-tab="ops"', 'data-tab="recs"', 'data-tab="autonomy"', 'data-tab="schedule"', 'data-tab="heal"'):
         assert tab in html
     script = html[html.rfind("<script>") + 8: html.rfind("</script>")]

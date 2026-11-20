@@ -37,6 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": False, "paused": False, "generation_time": "10:00", "timezone": "Asia/Kolkata",
     "formats": list(C.FORMATS), "kill_switch": False, "text_mode": "template", "excluded_categories": [],
     "catch_up_hours": 12, "manual_daily_limit": 3, "max_auto_attempts": 2,
+    "publishing_enabled": False,      # Stage 3.32F: only PublishingService.set_enabled changes it (fail closed)
 }
 ENABLED_SINCE_KEY = "_enabled_since"           # internal: when automation was last switched on (no retroactive runs)
 GENERATION_TIMEOUT = 120.0
@@ -93,12 +94,26 @@ def _tzdata_version() -> Optional[str]:
         return None
 
 
+LOCAL_ACTOR = "local-dashboard"
+
+
 def _validate_operator(operator: Any) -> str:
+    """The identity recorded for an action. The dashboard has no user authentication: its only boundary is
+    loopback + same-origin + the per-process CSRF token. When no operator label is supplied (the dashboard no longer
+    asks for one), the action is attributed to the neutral identity ``local-dashboard``, meaning an unauthenticated
+    request from the local dashboard, not a verified person. A label supplied through the API is validated and
+    recorded as given (still unverified); reserved machine identities are refused."""
+    if operator is None or (isinstance(operator, str) and not operator.strip()):
+        return LOCAL_ACTOR
     from backend.app.autonomy.control_plane import ControlPlaneError, validate_operator
     try:
         return validate_operator(operator)
     except ControlPlaneError as exc:
         raise Forbidden(str(exc)) from exc
+
+
+def _actor(op: str) -> str:
+    return LOCAL_ACTOR if op == LOCAL_ACTOR else f"operator:{op}"
 
 
 def _default_notifier(subject: str, message: str, severity: str) -> str:
@@ -165,7 +180,7 @@ class CommunityService:
             return "automatic generation is paused"
         return None
 
-    def update_config(self, operator: str, changes: Dict[str, Any]) -> Dict[str, Any]:
+    def update_config(self, operator: Optional[str], changes: Dict[str, Any]) -> Dict[str, Any]:
         op = _validate_operator(operator)
         clean: Dict[str, Any] = {}
         for k, v in (changes or {}).items():
@@ -222,8 +237,8 @@ class CommunityService:
             to_write[ENABLED_SINCE_KEY] = S.ts(now)          # windows that began earlier are not generated retroactively
         # Every value was validated above, so the write is all or nothing in one transaction.
         with self.store.tx() as conn:
-            self.store.set_config(conn, to_write, f"operator:{op}", now)
-            self.store.event(conn, "CONFIG_CHANGED", f"operator:{op}", now, detail={"changes": changes})
+            self.store.set_config(conn, to_write, _actor(op), now)
+            self.store.event(conn, "CONFIG_CHANGED", _actor(op), now, detail={"changes": changes})
         return self.schedule_status()
 
     # -- schedule -------------------------------------------------------------------------------------------
@@ -496,7 +511,7 @@ class CommunityService:
             self.store.set_config(conn, {"_maintenance_date": today}, SCHEDULER_ACTOR, self.clock())
 
     # -- manual generation -----------------------------------------------------------------------------------
-    def generate_manual(self, operator: str) -> Dict[str, Any]:
+    def generate_manual(self, operator: Optional[str] = None) -> Dict[str, Any]:
         op = _validate_operator(operator)
         cfg = self.config()
         blocked = self._blocked(cfg, automatic=False)
@@ -517,10 +532,10 @@ class CommunityService:
             if self.store.active_draft_for_date(conn, post_date) is not None:
                 raise Conflict("today already has an active draft; regenerate, reject or archive it first")
             run = self.store.insert_run(conn, idem_key=f"community:manual:{post_date}:{S.new_id('m')}",
-                                        post_date=post_date, trigger="manual", requested_by=f"operator:{op}", now=now,
+                                        post_date=post_date, trigger="manual", requested_by=_actor(op), now=now,
                                         lease_seconds=RUN_LEASE_SECONDS)
-            self.store.event(conn, "MANUAL_GENERATION_REQUESTED", f"operator:{op}", now, run_id=run["id"])
-        return self._run_generation(run, f"operator:{op}")
+            self.store.event(conn, "MANUAL_GENERATION_REQUESTED", _actor(op), now, run_id=run["id"])
+        return self._run_generation(run, _actor(op))
 
     # -- generation pipeline -----------------------------------------------------------------------------------
     def _recent(self, conn, now: datetime) -> List[Dict[str, Any]]:
@@ -836,6 +851,16 @@ class CommunityService:
             raise NotFound("draft not found")
         return d
 
+    def _assert_not_published(self, draft_id: str) -> None:
+        """A draft that was published, is being published, or was reported posted can no longer change."""
+        from backend.app.community import publishing as PUB
+        if not PUB.tables_exist(self.db_path):
+            return
+        with self.store.read() as conn:
+            why = PUB.lock_reason(conn, draft_id)
+        if why:
+            raise Conflict(why)
+
     def _regeneration_quota(self) -> None:
         cfg = self.config()
         tz = self._tz(cfg)
@@ -850,6 +875,7 @@ class CommunityService:
     def edit(self, draft_id: str, operator: str, version: int, text: str) -> Dict[str, Any]:
         op = _validate_operator(operator)
         self._draft(draft_id)
+        self._assert_not_published(draft_id)
         if not isinstance(text, str) or len(text) > MAX_EDIT_CHARS:
             raise BadRequest(f"text must be at most {MAX_EDIT_CHARS} characters")
         clean = V.sanitize_text(text)
@@ -864,15 +890,16 @@ class CommunityService:
                                   expect_status=(S.READY_FOR_REVIEW, S.APPROVED, S.VALIDATION_FAILED),
                                   expect_version=version, text=clean, text_fingerprint=C.fingerprint(clean),
                                   decided_by=None, decided_at_utc=None, decision_reason=None, warnings_acknowledged=0)
-            self.store.event(conn, "TEXT_EDITED", f"operator:{op}", now, draft_id=draft_id,
+            self.store.event(conn, "TEXT_EDITED", _actor(op), now, draft_id=draft_id,
                              detail={"before": cur.get("text"), "after": clean, "previous_status": cur["status"],
                                      "approval_withdrawn": cur["status"] == S.APPROVED})
-        self._validation_stage(draft_id, f"operator:{op}")
+        self._validation_stage(draft_id, _actor(op))
         return self.detail(draft_id)
 
     def regenerate_text(self, draft_id: str, operator: str, version: int) -> Dict[str, Any]:
         op = _validate_operator(operator)
         cur = self._draft(draft_id)
+        self._assert_not_published(draft_id)
         blocked = self._blocked(self.config(), automatic=False)
         if blocked:
             raise Blocked(blocked)
@@ -884,13 +911,13 @@ class CommunityService:
                                   expect_status=(S.READY_FOR_REVIEW, S.APPROVED, S.VALIDATION_FAILED, S.GENERATION_FAILED),
                                   expect_version=version, decided_by=None, decided_at_utc=None, decision_reason=None,
                                   warnings_acknowledged=0)
-            self.store.event(conn, "TEXT_REGENERATION_REQUESTED", f"operator:{op}", now, draft_id=draft_id,
+            self.store.event(conn, "TEXT_REGENERATION_REQUESTED", _actor(op), now, draft_id=draft_id,
                              detail={"previous_text": cur.get("text"), "previous_status": cur["status"]})
             attempt = conn.execute("SELECT COUNT(*) FROM community_events WHERE draft_id=? AND "
                                    "event='TEXT_REGENERATION_REQUESTED'", (draft_id,)).fetchone()[0]
         deadline = time.monotonic() + GENERATION_TIMEOUT
         metrics: Dict[str, Any] = {}
-        actor = f"operator:{op}"
+        actor = _actor(op)
         try:
             d = self._text_stage(draft_id, actor, deadline, metrics, keep_source=bool(cur.get("source_ref")), attempt=attempt)
             img = self.store.get_image(d["image_id"]) if d.get("image_id") else None
@@ -916,6 +943,7 @@ class CommunityService:
     def regenerate_image(self, draft_id: str, operator: str, version: int, choice: Optional[str] = None) -> Dict[str, Any]:
         op = _validate_operator(operator)
         cur = self._draft(draft_id)
+        self._assert_not_published(draft_id)
         if choice is not None and not (choice == "title_card" or re.fullmatch(r"asset:[0-9a-f]{16}", str(choice))):
             raise BadRequest("choice must be title_card or one of the listed asset options")
         if not cur.get("source_ref") and not cur.get("topic_title"):
@@ -938,9 +966,9 @@ class CommunityService:
                                   expect_status=(S.READY_FOR_REVIEW, S.APPROVED, S.VALIDATION_FAILED, S.IMAGE_FAILED),
                                   expect_version=version, decided_by=None, decided_at_utc=None, decision_reason=None,
                                   warnings_acknowledged=0)
-            self.store.event(conn, "IMAGE_REGENERATION_REQUESTED", f"operator:{op}", now, draft_id=draft_id,
+            self.store.event(conn, "IMAGE_REGENERATION_REQUESTED", _actor(op), now, draft_id=draft_id,
                              detail={"choice": choice, "previous_image": cur.get("image_id")})
-        actor = f"operator:{op}"
+        actor = _actor(op)
         try:
             self._image_stage(draft_id, actor, choice, time.monotonic() + GENERATION_TIMEOUT, {},
                               exclude_refs=[r for r in previous if r] if choice is None else ())
@@ -976,7 +1004,7 @@ class CommunityService:
             out = self.store.transition(conn, draft_id, S.APPROVED, now, expect_status=(S.READY_FOR_REVIEW,),
                                         expect_version=version, decided_by=op, decided_at_utc=S.ts(now),
                                         decision_reason=reason or None, warnings_acknowledged=1 if vs != S.VALID else 0)
-            self.store.event(conn, "DRAFT_APPROVED", f"operator:{op}", now, draft_id=draft_id,
+            self.store.event(conn, "DRAFT_APPROVED", _actor(op), now, draft_id=draft_id,
                              detail={"validation_status": vs, "reason": reason,
                                      "acknowledged": [c["check"] for c in (val.get("warnings") or []) + (val.get("reviews") or [])],
                                      "image_sha256": img["sha256"], "text_fingerprint": d.get("text_fingerprint"),
@@ -993,7 +1021,7 @@ class CommunityService:
         with self.store.tx() as conn:
             self.store.transition(conn, draft_id, S.REJECTED, now, expect_status=(S.READY_FOR_REVIEW,),
                                   expect_version=version, decided_by=op, decided_at_utc=S.ts(now), decision_reason=reason)
-            self.store.event(conn, "DRAFT_REJECTED", f"operator:{op}", now, draft_id=draft_id, detail={"reason": reason})
+            self.store.event(conn, "DRAFT_REJECTED", _actor(op), now, draft_id=draft_id, detail={"reason": reason})
         return self.detail(draft_id)
 
     def archive(self, draft_id: str, operator: str, version: int, reason: str = "") -> Dict[str, Any]:
@@ -1004,7 +1032,7 @@ class CommunityService:
             self.store.transition(conn, draft_id, S.ARCHIVED, now,
                                   expect_status=(S.READY_FOR_REVIEW, S.APPROVED, S.REJECTED) + S.FAILED_STATES,
                                   expect_version=version)
-            self.store.event(conn, "DRAFT_ARCHIVED", f"operator:{op}", now, draft_id=draft_id,
+            self.store.event(conn, "DRAFT_ARCHIVED", _actor(op), now, draft_id=draft_id,
                              detail={"reason": (reason or "").strip()[:500]})
         return self.detail(draft_id)
 

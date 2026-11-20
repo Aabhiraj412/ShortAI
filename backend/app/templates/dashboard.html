@@ -1010,8 +1010,7 @@
       <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Community Posts</h2>
         <p class="card-desc">One Community post <strong>draft</strong> a day, built from our own research and licensed images, validated and kept here for your review. <strong>Nothing is ever published</strong>: approving a draft only marks it ready for you to post by hand in YouTube Studio. Generation is independent of video production.</p></div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <label for="cmOperator" style="font-size:12px;color:var(--muted);">Operator</label>
-          <input id="cmOperator" maxlength="64" placeholder="your name" style="width:130px;" />
+          <span style="font-size:11px;color:var(--muted);" title="The dashboard has no user login. Actions are recorded as local-dashboard: an unauthenticated request from this computer that passed the local, same-origin and CSRF checks.">actions recorded as <strong>local-dashboard</strong></span>
           <button class="btn sm primary" id="cmGenerateBtn" onclick="cmGenerate()">Generate now</button>
           <button class="btn sm" onclick="refreshCommunity(true)">Refresh</button></div></div>
       <div class="meta" style="font-size:12px;" id="cmMeta">Open this tab to load.</div>
@@ -1061,6 +1060,17 @@
           </div>
         </div>
       </div>
+    </div>
+    <div class="card" id="cmPubCard">
+      <div class="card-head"><div><h2 class="card-title">Publishing readiness</h2>
+        <p class="card-desc">Whether this channel and Google Cloud project can publish Community posts through the official YouTube API, and the manual handoff that works today. API publishing is <strong>off</strong> and fails closed: it needs pilot access to the YouTube posts API, a broader OAuth permission, and your explicit approval of each post. The API can only publish immediately; scheduling a post is done in the YouTube interface.</p></div>
+        <div class="btn-row"><button class="btn sm" onclick="cmCapCheck()">Run capability check (read-only)</button></div></div>
+      <div id="cmPubStatus" style="font-size:13px;">--</div>
+      <h3 style="font-size:14px;margin:12px 0 6px;">Approved drafts awaiting publication</h3>
+      <div id="cmPubAwaiting" style="font-size:13px;">--</div>
+      <div id="cmHandoff" style="margin-top:10px;"></div>
+      <h3 style="font-size:14px;margin:12px 0 6px;">Publications and handoffs</h3>
+      <div id="cmPubList" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
     <div class="card">
       <div class="card-head"><div><h2 class="card-title">Notifications</h2><p class="card-desc">Draft ready and generation failures. Also sent to the operator inbox when Autonomy Control allows notifications.</p></div></div>
@@ -3330,24 +3340,16 @@ const CM_VALID = { VALID: "#86efac", VALID_WITH_WARNINGS: "#fcd34d", NEEDS_OPERA
 const CM_STATUS = { READY_FOR_REVIEW: "#fcd34d", APPROVED: "#86efac", REJECTED: "#fca5a5", ARCHIVED: "var(--muted)",
   GENERATION_FAILED: "#fca5a5", IMAGE_FAILED: "#fca5a5", VALIDATION_FAILED: "#fca5a5", CANCELLED: "var(--muted)" };
 
-function cmOperator() {
-  const el = document.getElementById("cmOperator");
-  let v = ((el && el.value) || "").trim();
-  if (!v) { try { v = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} if (el) el.value = v; }
-  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
-  return v;
-}
-
+// No operator name is asked for: the dashboard has no user login, so Community actions are attributed to the neutral
+// identity "local-dashboard" (an unauthenticated local request that passed loopback, same-origin and CSRF checks).
 async function cmWrite(url, body) {
-  const op = cmOperator();
-  if (!op) throw new Error("Enter your operator name first.");
   if (!autoState.csrf) {
     const s = await apiJson("/api/autonomy/session");
     autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
   }
   try {
     return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
-                                body: JSON.stringify({ operator: op, ...body }) });
+                                body: JSON.stringify({ ...body }) });
   } catch (err) { if (/CSRF/i.test(err.message || "")) autoState.csrf = null; throw err; }
 }
 
@@ -3435,7 +3437,6 @@ async function refreshCommunity(force = false) {
   const panel = document.getElementById("tab-community");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
   if (!force && cmState.editing.size) return;            // never overwrite text the operator is editing
-  cmOperator();
   const meta = document.getElementById("cmMeta");
   try {
     const ov = await apiJson("/api/community");
@@ -3477,6 +3478,7 @@ async function refreshCommunity(force = false) {
     const notes = ov.notifications || [];
     document.getElementById("cmNotes").innerHTML = notes.length ? notes.map(n => `<div style="margin-bottom:6px;"><span class="ops-tag">${escHtml(n.severity)}</span> <strong>${escHtml(n.subject)}</strong> · ${cmLocal(n.created_at_utc)} · ${escHtml(n.delivery)}<div style="color:var(--muted)">${escHtml(n.message)}</div></div>`).join("") : `<div style="color:var(--muted)">No notifications.</div>`;
     await cmRenderDrafts(ov.active_drafts || []);
+    await cmLoadPublishing();
     await cmLoadHistory();
   } catch (err) {
     if (meta) meta.innerHTML = `<span class="auto-kill">Community Posts unavailable: ${escHtml(err.message || String(err))}</span>`;
@@ -3663,6 +3665,115 @@ function cmRenderSchedStatus(s) {
   ];
   const notes = (s.dst_notes || []).slice(0, 2).map(n => `<div style="color:#fcd34d;font-size:12px;">${escHtml(n.explanation)}</div>`).join("");
   document.getElementById("cmSchedStatus").innerHTML = opsKV(rows) + notes;
+}
+
+// -- Stage 3.32F Publishing readiness. The API Publish button is rendered ONLY when every server-side gate passes. --
+const CM_CAP = { API_AVAILABLE: ["#86efac", "The posts API is available to this project"],
+  API_NOT_ENABLED: ["#fca5a5", "The YouTube Data API is not enabled for this Google Cloud project"],
+  PILOT_ACCESS_REQUIRED: ["#fcd34d", "This Google Cloud project is not in the posts API pilot"],
+  OAUTH_SCOPE_INSUFFICIENT: ["#fcd34d", "The connected account did not grant a permission that can publish posts"],
+  CHANNEL_PERMISSION_INSUFFICIENT: ["#fca5a5", "The connected account cannot manage posts for this channel"],
+  UNKNOWN: ["var(--muted)", "Not determined; publishing stays off"] };
+const CM_SHORT = s => (s || "").replace("https://www.googleapis.com/auth/", "");
+
+async function cmLoadPublishing() {
+  let st;
+  try { st = await apiJson("/api/community/publishing"); } catch (err) { document.getElementById("cmPubStatus").innerHTML = `<span class="auto-kill">${escHtml(err.message || String(err))}</span>`; return; }
+  cmState.pub = st;
+  const cap = st.capability, d = (cap || {}).details || {};
+  const capRow = cap ? `<span style="color:${(CM_CAP[cap.outcome] || [])[0] || "inherit"};font-weight:600;">${escHtml(cap.outcome)}</span> · ${escHtml((CM_CAP[cap.outcome] || [])[1] || "")}${d.inferred ? " (inferred)" : ""}<div style="color:var(--muted);font-size:12px;">${escHtml(d.basis || "")}</div>`
+                     : `<span style="color:var(--muted)">never checked</span>`;
+  const blockers = (d.additional_blockers || []).map(b => `<div style="font-size:12px;color:#fcd34d;">also: ${escHtml(b.outcome)} · ${escHtml(b.basis)}</div>`).join("");
+  const rows = [
+    ["API eligibility", capRow + blockers],
+    ["OAuth scopes granted", cap ? escHtml((d.granted_scopes || []).map(CM_SHORT).join(", ") || "none") + `<div style="color:var(--muted);font-size:12px;">publishing needs one of: ${escHtml(((d.required_scopes || {})["posts.insert"] || []).map(CM_SHORT).join(", "))}</div>` : "--"],
+    ["Channel permission", cap ? (d.channel_id ? "channel resolved for the connected account" : "not resolved") : "--"],
+    ["Google Cloud project", escHtml(d.project_id || "--")],
+    ["Last check", cap ? escHtml(`${cmLocal(cap.checked_at_utc)} by ${cap.checked_by}${cap.fresh ? "" : " · older than 7 days"}`) : "never"],
+    ["API publishing", st.api_publishing_ready ? `<span class="auto-on">READY</span>` : `<span class="auto-off">${st.publishing_enabled ? "ON but blocked" : "OFF"}</span> · ${escHtml((st.gates || []).filter(g => !g.ok).map(g => g.gate).join(", ") || "")}`],
+    ["Scheduling", escHtml((st.scheduling || {}).note || "")],
+  ];
+  document.getElementById("cmPubStatus").innerHTML = opsKV(rows)
+    + (cap && cap.outcome === "API_AVAILABLE" && cap.fresh && !st.publishing_enabled ? `<div class="btn-row" style="margin-top:6px;"><button class="btn sm" onclick="cmPubEnable(true)">Enable API publishing</button></div>` : "")
+    + (st.publishing_enabled ? `<div class="btn-row" style="margin-top:6px;"><button class="btn sm" onclick="cmPubEnable(false)">Disable API publishing</button></div>` : "");
+  const aw = st.approved_awaiting || [];
+  document.getElementById("cmPubAwaiting").innerHTML = aw.length ? aw.map(a => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">`
+      + `<span>${escHtml(a.post_date)} · ${escHtml(a.format_label || "")} · ${escHtml((a.topic_title || "").slice(0, 60))}</span>`
+      + `<button class="btn sm" data-id="${escHtml(a.id)}" onclick="cmHandoff(this.dataset.id)">Manual handoff</button>`
+      + (st.api_publishing_ready ? `<button class="btn sm primary" data-id="${escHtml(a.id)}" data-ver="${escHtml(a.version)}" onclick="cmPublish(this.dataset.id, Number(this.dataset.ver))">Publish now via API (public, immediate)</button>` : "")
+      + `</div>`).join("") : `<div style="color:var(--muted)">No approved drafts waiting. Approve a draft first; approval never publishes.</div>`;
+  const pubs = [...(st.attention || []), ...(st.published || []), ...(st.handoffs || [])].filter((p, i, a) => a.findIndex(x => x.id === p.id) === i);
+  document.getElementById("cmPubList").innerHTML = pubs.length ? `<table class="ops-table"><thead><tr><th>Updated</th><th>Draft</th><th>Mode</th><th>Status</th><th>Post</th><th>Attempts</th><th>Detail</th><th></th></tr></thead><tbody>`
+    + pubs.map(p => {
+        const acts = p.status === "UNCERTAIN" ? `<button class="btn sm" data-id="${escHtml(p.id)}" onclick="cmReconcile(this.dataset.id)">Reconcile</button> <button class="btn sm" data-id="${escHtml(p.id)}" onclick="cmResolve(this.dataset.id)">Resolve...</button>`
+          : p.status === "HANDOFF_PREPARED" ? `<button class="btn sm" data-id="${escHtml(p.draft_id)}" onclick="cmHandoff(this.dataset.id)">Open handoff</button>` : "";
+        const status = p.status === "MANUAL_REPORTED_POSTED" ? "posted manually (operator-reported, not verified)" : p.status;
+        return `<tr><td>${cmLocal(p.updated_at_utc)}</td><td>${escHtml(p.draft_id)}</td><td>${escHtml(p.mode)}</td><td>${escHtml(status)}</td>`
+          + `<td>${p.post_url ? `<a href="${escHtml(p.post_url)}" target="_blank" rel="noopener noreferrer">${escHtml(p.youtube_post_id || "link")}</a>` : ""}</td>`
+          + `<td>${escHtml(p.attempts)}</td><td style="max-width:280px;overflow-wrap:anywhere;">${escHtml((p.error || "").slice(0, 160))}</td><td>${acts}</td></tr>`; }).join("")
+    + `</tbody></table>` : `<div style="color:var(--muted)">Nothing published or handed off yet.</div>`;
+}
+
+async function cmCapCheck() {
+  if (!(await askConfirm("Run the YouTube capability check?", "Read-only: reads the granted OAuth scopes and makes two read-only YouTube calls (channels.list and posts.list, 1 quota unit each, separate post quota). Nothing is uploaded, posted, changed or deleted, and no new permission is requested."))) return;
+  await cmAct("Capability check finished", () => cmWrite("/api/community/publishing/capability-check", {}));
+}
+
+async function cmPubEnable(on) {
+  if (on && !(await askConfirm("Enable API publishing?", "Allows the 'Publish now via API' action for approved drafts. Each publication still needs its own confirmation, is PUBLIC and IMMEDIATE, and is refused if any check fails."))) return;
+  await cmAct(on ? "API publishing enabled" : "API publishing disabled", () => cmWrite("/api/community/publishing/enabled", { enabled: on, confirm: on }));
+}
+
+async function cmPublish(id, ver) {
+  if (!(await askConfirm("Publish this post on YouTube now?", "This is PUBLIC and IMMEDIATE (the API cannot schedule). The text and image must still match what you approved. If YouTube does not answer, the attempt is marked UNCERTAIN and is never retried automatically."))) return;
+  await cmAct("Publish request finished", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/publish`, { version: ver, confirm: true }));
+}
+
+async function cmHandoff(id) {
+  let h;
+  try { h = await cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/handoff`, {}); } catch (err) { showToast(err.message || String(err), true); return; }
+  const x = h.handoff || {};
+  document.getElementById("cmHandoff").innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;">`
+    + `<div style="font-weight:600;margin-bottom:6px;">Manual handoff · ${escHtml(h.id)} · <span style="color:var(--muted)">nothing has been published</span></div>`
+    + `<div class="cm-draft" style="border:0;padding:0;"><img src="${escHtml(x.image_url)}" alt="Approved image" /><div>`
+    + `<textarea id="cmHandoffText" readonly>${escHtml(x.text || "")}</textarea>`
+    + `<div class="btn-row" style="margin-top:6px;"><button class="btn sm" onclick="cmCopyHandoff()">Copy text</button>`
+    + `<a class="btn sm" href="${escHtml(x.image_download_url)}" download>Download image</a>`
+    + `<a class="btn sm" href="${escHtml(x.open_url)}" target="_blank" rel="noopener noreferrer">Open YouTube</a></div>`
+    + `<ol style="font-size:12px;margin:8px 0 0 18px;">${(x.steps || []).map(s => `<li>${escHtml(s)}</li>`).join("")}</ol>`
+    + `<div style="font-size:12px;color:var(--muted);margin-top:4px;">${escHtml(x.note || "")}</div>`
+    + (h.status === "HANDOFF_PREPARED" ? `<div class="btn-row" style="margin-top:8px;"><input id="cmPostedUrl" maxlength="300" placeholder="optional: link to the post (https://www.youtube.com/post/...)" style="flex:1;min-width:220px;" />`
+        + `<button class="btn sm primary" data-id="${escHtml(h.id)}" onclick="cmManualPosted(this.dataset.id)">I posted it manually</button>`
+        + `<button class="btn sm" data-id="${escHtml(h.id)}" onclick="cmCancelHandoff(this.dataset.id)">Cancel handoff</button></div>` : `<div style="margin-top:6px;">Status: ${escHtml(h.status)}</div>`)
+    + `</div></div></div>`;
+  cmLoadPublishing();
+}
+
+async function cmCopyHandoff() {
+  const t = document.getElementById("cmHandoffText");
+  try { await navigator.clipboard.writeText(t.value); showToast("Text copied"); } catch (_) { t.select(); showToast("Select-all done; press Ctrl+C to copy"); }
+}
+
+async function cmManualPosted(pid) {
+  const url = (document.getElementById("cmPostedUrl") || {}).value || "";
+  if (!(await askConfirm("Record that you posted this manually?", "This is recorded as operator-reported. CrazzyDocs cannot verify it."))) return;
+  await cmAct("Recorded as posted manually (not verified)", () => cmWrite(`/api/community/publications/${encodeURIComponent(pid)}/manual-posted`, url.trim() ? { post_url: url.trim() } : {}));
+  document.getElementById("cmHandoff").innerHTML = "";
+}
+
+async function cmCancelHandoff(pid) {
+  await cmAct("Handoff cancelled", () => cmWrite(`/api/community/publications/${encodeURIComponent(pid)}/cancel-handoff`, {}));
+  document.getElementById("cmHandoff").innerHTML = "";
+}
+
+async function cmReconcile(pid) {
+  await cmAct("Reconciliation finished", () => cmWrite(`/api/community/publications/${encodeURIComponent(pid)}/reconcile`, {}));
+}
+
+async function cmResolve(pid) {
+  const published = await askConfirm("Did the post appear on YouTube?", "Check the channel's Posts tab first. Confirm = it IS published. Cancel = it is NOT published (a new attempt then becomes possible).");
+  const reason = published ? "operator confirmed the post is visible on YouTube" : "operator confirmed no post exists on YouTube";
+  await cmAct("Outcome recorded", () => cmWrite(`/api/community/publications/${encodeURIComponent(pid)}/resolve`, { outcome: published ? "published" : "not_published", reason }));
 }
 
 async function cmSaveSchedule() {
