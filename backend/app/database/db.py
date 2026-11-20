@@ -133,6 +133,22 @@ class StudioSettingModel(Base):
     key = Column(String(100), primary_key=True)
     value = Column(Text, nullable=False)
 
+
+class ProductionScheduleProfileModel(Base):
+    """Named, saved production schedule profiles (operator library). Never the active schedule itself:
+    the active schedule stays in studio_settings['control_center.schedule.active']; loading a profile
+    goes through the normal validate + activate path (backend/app/services/schedule_profile_library.py)."""
+    __tablename__ = "production_schedule_profiles"
+    id = Column(String(40), primary_key=True)                      # sp_<hex>
+    name = Column(String(80), nullable=False)
+    name_key = Column(String(80), nullable=False, unique=True, index=True)   # case/space-normalised for uniqueness
+    description = Column(Text, nullable=True)
+    config_json = Column(Text, nullable=False)                     # {profile_name, timezone_name, cycles}
+    checksum = Column(String(64), nullable=False)                  # SHA-256 of the canonical configuration
+    schema_version = Column(Integer, nullable=False, default=1)
+    created_at_utc = Column(String(40), nullable=False)
+    updated_at_utc = Column(String(40), nullable=False)
+
 class ResearchRecordModel(Base):
     __tablename__ = "research_records"
     id = Column(Integer, primary_key=True, index=True)

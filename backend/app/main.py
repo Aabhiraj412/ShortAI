@@ -2427,6 +2427,105 @@ async def api_schedule_activate(req: ScheduleActivateRequest, _: None = Depends(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Named Production Schedule Profiles (a saved-profile library over the existing schedule system). Reads are
+# localhost-only; every change also needs a same-origin request. Loading goes through schedule_service.activate.
+# ---------------------------------------------------------------------------------------------------------------
+class ScheduleProfileSaveRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+
+class ScheduleProfileNameRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+
+class ScheduleProfileDeleteRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    confirm: bool = False
+
+
+class ScheduleProfileLoadRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    confirm: bool = False
+    expected_checksum: str = Field(min_length=64, max_length=64)
+
+
+async def _profile_call(fn, *args, **kwargs):
+    from backend.app.services import schedule_profile_library as spl
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except spl.ActivationUnsafe as exc:
+        raise HTTPException(status_code=409, detail={"message": "Schedule activation refused because it is unsafe right now.",
+                                                     "reasons": exc.reasons})
+    except spl.ProfileError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/schedule/profiles")
+async def api_schedule_profiles(_: None = Depends(require_local_control)):
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.list_profiles)
+
+
+@app.get("/api/schedule/profiles/{profile_id}")
+async def api_schedule_profile(profile_id: str, _: None = Depends(require_local_control)):
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.get_profile, profile_id)
+
+
+@app.get("/api/schedule/profiles/{profile_id}/preview")
+async def api_schedule_profile_preview(profile_id: str, _: None = Depends(require_local_control)):
+    """Validation, differences from the active schedule, upcoming cycles and safety blockers. Changes nothing."""
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.preview, profile_id)
+
+
+@app.post("/api/schedule/profiles")
+async def api_schedule_profile_save(req: ScheduleProfileSaveRequest, _: None = Depends(require_local_control),
+                                    __: None = Depends(require_same_origin)):
+    """Save the ACTIVE production schedule as a named profile. The active schedule is not changed."""
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.save_current, req.name, req.description)
+
+
+@app.post("/api/schedule/profiles/{profile_id}/rename")
+async def api_schedule_profile_rename(profile_id: str, req: ScheduleProfileNameRequest, _: None = Depends(require_local_control),
+                                      __: None = Depends(require_same_origin)):
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.rename, profile_id, req.name)
+
+
+@app.post("/api/schedule/profiles/{profile_id}/duplicate")
+async def api_schedule_profile_duplicate(profile_id: str, req: ScheduleProfileNameRequest, _: None = Depends(require_local_control),
+                                         __: None = Depends(require_same_origin)):
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.duplicate, profile_id, req.name, req.description)
+
+
+@app.post("/api/schedule/profiles/{profile_id}/delete")
+async def api_schedule_profile_delete(profile_id: str, req: ScheduleProfileDeleteRequest, _: None = Depends(require_local_control),
+                                      __: None = Depends(require_same_origin)):
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.delete, profile_id, req.confirm)
+
+
+@app.post("/api/schedule/profiles/{profile_id}/load")
+async def api_schedule_profile_load(profile_id: str, req: ScheduleProfileLoadRequest, _: None = Depends(require_local_control),
+                                    __: None = Depends(require_same_origin)):
+    """Activate a saved profile via the existing activation path. Refused while a production job is active or
+    when it would remove / shorten the open recovery window. The YouTube publication schedule is not touched."""
+    from backend.app.services import schedule_profile_library as spl
+    return await _profile_call(spl.load, profile_id, req.confirm, req.expected_checksum)
+
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     """Redirects root browser access directly to the Production Health Dashboard."""

@@ -643,6 +643,7 @@
         <div>
           <h2 class="card-title">Production Schedule — Asia/Kolkata <span class="pill" id="schedSyncBadge">--</span></h2>
           <p class="card-desc">Each cycle starts production at its start time and may keep recovering for its recovery duration. When the video passes QC it is uploaded privately and YouTube publishes it at the target publish time. The target time never changes when production starts or how long it may recover.</p>
+          <div id="schedProfileIndicator" style="margin-top:6px;font-size:13px;"></div>
         </div>
         <div class="btn-row">
           <select id="schedPresetSelect" style="width:200px;">
@@ -666,7 +667,24 @@
         <button class="btn primary" onclick="validateSchedule()">Validate</button>
         <button class="btn ok" id="schedActivateBtn" onclick="activateSchedule()">Activate Schedule</button>
         <button class="btn sm" onclick="discardScheduleEdits()">Discard changes</button>
+        <button class="btn sm" onclick="schedProfileSave()" title="Save the ACTIVE schedule under a name. Does not change the active schedule.">Save Current Schedule</button>
       </div>
+    </div>
+
+    <div class="card" id="schedProfilesCard">
+      <div class="card-head">
+        <div><h2 class="card-title">Saved Production Schedules</h2>
+          <p class="card-desc">Named copies of a production schedule. Saving never changes the active schedule. Loading shows a preview and the differences first, needs confirmation, and goes through the normal validation and activation. It never changes the YouTube publication schedule and is refused while a production job is running.</p></div>
+        <div class="btn-row"><button class="btn sm" onclick="refreshScheduleProfiles()">Refresh</button></div>
+      </div>
+      <div id="schedProfilesMsg" style="font-size:13px;margin-bottom:8px;"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Profile</th><th>Created</th><th>Last modified</th><th>Cycles</th><th>Timezone</th><th>Recovery window</th><th>Status</th><th></th></tr></thead>
+          <tbody id="schedProfilesBody"><tr><td colspan="8" style="color:var(--muted)">Open this tab to load.</td></tr></tbody>
+        </table>
+      </div>
+      <div id="schedProfilePreview" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px;"></div>
     </div>
 
     <div class="card">
@@ -1124,6 +1142,7 @@ function switchTab(tabId, btn) {
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
   if (tabId === "queue") { refreshPublishing(); }
   if (tabId === "ops") { refreshOps(); }
+  if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
 }
 
@@ -1625,7 +1644,167 @@ async function activateSchedule() {
     schedState.dirty = false;
     showToast("Schedule activated.");
     refreshSchedule();
+    refreshScheduleProfiles();
   } catch (err) { showToast("Activation failed: " + err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Named Production Schedule Profiles. Saving reads the ACTIVE schedule only; loading previews the differences,
+// asks for confirmation and uses the normal activation path. Server values are escaped; ids go through data-*.
+// ---------------------------------------------------------------------------
+const profState = { list: [], active: null, preview: null };
+
+async function profApi(url, opts = {}) {
+  const res = await fetch(url, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (_) { data = { raw: text }; }
+  if (!res.ok) {
+    const d = data.detail;
+    const msg = d && typeof d === "object" ? [d.message].concat(d.reasons || []).filter(Boolean).join(" ") : (d || `HTTP ${res.status}`);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function profTime(ts) {
+  if (!ts) return "--";
+  const d = new Date(String(ts));
+  return isNaN(d.getTime()) ? escHtml(ts) : escHtml(d.toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }));
+}
+
+function renderProfileIndicator(a) {
+  const el = document.getElementById("schedProfileIndicator");
+  if (!el || !a) return;
+  const colour = a.state === "PROFILE_ACTIVE" || a.state === "MATCHES_PROFILE" ? "#86efac" : (a.has_active_schedule ? "#fcd34d" : "var(--muted)");
+  const label = a.profile_name ? `Active profile: <strong>${escHtml(a.profile_name)}</strong>` : "Active profile: <strong>unnamed</strong>";
+  const extra = a.unsaved_changes ? ` <span class="pill warn" title="${escHtml(a.message)}">unsaved changes</span>` : "";
+  el.innerHTML = `<span style="color:${colour}">${label}</span>${extra} <span style="color:var(--muted);font-size:12px;">${escHtml(a.message || "")}</span>`;
+}
+
+async function refreshScheduleProfiles() {
+  const body = document.getElementById("schedProfilesBody");
+  try {
+    const data = await profApi("/api/schedule/profiles");
+    profState.list = data.profiles || [];
+    profState.active = data.active;
+    renderProfileIndicator(data.active);
+    if (!body) return;
+    body.innerHTML = profState.list.length ? profState.list.map(p => {
+      const status = p.status === "ACTIVE" ? `<span class="pill ok">Active</span>`
+        : p.status === "ACTIVE_MODIFIED" ? `<span class="pill warn" title="Loaded, then the active schedule was changed">Active · modified</span>`
+        : `<span style="color:var(--muted)">Inactive</span>`;
+      const bad = p.valid_data ? "" : `<div style="color:#fca5a5;font-size:11px;">${escHtml(p.data_error)}</div>`;
+      return `<tr><td><strong>${escHtml(p.name)}</strong>${p.description ? `<div style="color:var(--muted);font-size:11px;">${escHtml(p.description)}</div>` : ""}${bad}</td>`
+        + `<td>${profTime(p.created_at_utc)}</td><td>${profTime(p.updated_at_utc)}</td>`
+        + `<td>${p.cycles_enabled ?? "--"}${p.cycles_total != null && p.cycles_total !== p.cycles_enabled ? ` <span style="color:var(--muted)">(of ${escHtml(p.cycles_total)})</span>` : ""}</td>`
+        + `<td>${escHtml(p.timezone || "--")}</td><td>${escHtml(p.recovery_window || "--")}</td><td>${status}</td>`
+        + `<td class="btn-row" style="flex-wrap:wrap;gap:4px;">`
+        + `<button class="btn sm primary" data-id="${escHtml(p.id)}" onclick="schedProfilePreview(this.dataset.id)"${p.valid_data ? "" : " disabled"}>Preview &amp; load</button>`
+        + `<button class="btn sm" data-id="${escHtml(p.id)}" onclick="schedProfileRename(this.dataset.id)">Rename</button>`
+        + `<button class="btn sm" data-id="${escHtml(p.id)}" onclick="schedProfileDuplicate(this.dataset.id)">Duplicate</button>`
+        + `<button class="btn sm danger" data-id="${escHtml(p.id)}" onclick="schedProfileDelete(this.dataset.id)"${p.is_active ? ' disabled title="Activate another schedule before deleting the active one"' : ""}>Delete</button></td></tr>`;
+    }).join("") : `<tr><td colspan="8" style="color:var(--muted)">No saved schedules yet. Use “Save Current Schedule” to save the active one.</td></tr>`;
+  } catch (err) {
+    if (body) body.innerHTML = `<tr><td colspan="8" style="color:#fca5a5">Saved schedules unavailable: ${escHtml(err.message || err)}</td></tr>`;
+  }
+}
+
+function profById(id) { return profState.list.find(p => p.id === id); }
+
+async function schedProfileSave() {
+  if (schedState.dirty && !(await askConfirm("Editor has unsaved edits", "“Save Current Schedule” saves the ACTIVE schedule, not the unsaved edits in the editor. Continue?"))) return;
+  const name = prompt("Name for the current production schedule:");
+  if (name === null) return;
+  const description = prompt("Optional description (leave empty for none):", "") || null;
+  try {
+    const p = await profApi("/api/schedule/profiles", { method: "POST", body: JSON.stringify({ name, description }) });
+    showToast(`Saved “${p.name}”. The active schedule was not changed.`);
+  } catch (err) { showToast("Save failed: " + err.message, true); }
+  refreshScheduleProfiles();
+}
+
+async function schedProfileRename(id) {
+  const p = profById(id); if (!p) return;
+  const name = prompt(`New name for “${p.name}” (the schedule itself is not changed):`, p.name);
+  if (name === null || name.trim() === p.name) return;
+  try { await profApi(`/api/schedule/profiles/${encodeURIComponent(id)}/rename`, { method: "POST", body: JSON.stringify({ name }) }); showToast("Profile renamed."); }
+  catch (err) { showToast("Rename failed: " + err.message, true); }
+  refreshScheduleProfiles();
+}
+
+async function schedProfileDuplicate(id) {
+  const p = profById(id); if (!p) return;
+  const name = prompt(`Name for the copy of “${p.name}”:`, `${p.name} (copy)`);
+  if (name === null) return;
+  try { await profApi(`/api/schedule/profiles/${encodeURIComponent(id)}/duplicate`, { method: "POST", body: JSON.stringify({ name }) }); showToast("Profile duplicated."); }
+  catch (err) { showToast("Duplicate failed: " + err.message, true); }
+  refreshScheduleProfiles();
+}
+
+async function schedProfileDelete(id) {
+  const p = profById(id); if (!p) return;
+  const ok = await askConfirm("Delete saved schedule?", `“${p.name}” will be deleted permanently. The active production schedule is not affected.`);
+  if (!ok) return;
+  try { await profApi(`/api/schedule/profiles/${encodeURIComponent(id)}/delete`, { method: "POST", body: JSON.stringify({ confirm: true }) }); showToast("Profile deleted."); }
+  catch (err) { showToast("Delete failed: " + err.message, true); }
+  const box = document.getElementById("schedProfilePreview");
+  if (box && profState.preview && profState.preview.profile_id === id) { box.style.display = "none"; profState.preview = null; }
+  refreshScheduleProfiles();
+}
+
+function profCycleLine(c) {
+  return `${escHtml(c.name)} (${escHtml(c.cycle_id)}) · ${escHtml(c.start_time)} · ${escHtml(c.recovery_duration_minutes)} min${c.target_publish_time ? " · publish " + escHtml(c.target_publish_time) : ""}${c.enabled ? "" : " · disabled"}`;
+}
+
+async function schedProfilePreview(id) {
+  const box = document.getElementById("schedProfilePreview");
+  if (!box) return;
+  box.style.display = "block";
+  box.innerHTML = `<div style="color:var(--muted)">Loading preview…</div>`;
+  try {
+    const pv = await profApi(`/api/schedule/profiles/${encodeURIComponent(id)}/preview`);
+    profState.preview = pv;
+    const d = pv.differences || {};
+    const list = (items, colour) => items.map(c => `<div style="color:${colour}">${profCycleLine(c)}</div>`).join("");
+    const changed = (d.changed || []).map(ch => `<div style="color:#fcd34d">${escHtml(ch.name)} (${escHtml(ch.cycle_id)}): `
+      + Object.entries(ch.fields).map(([f, v]) => `${escHtml(f)} ${escHtml(JSON.stringify(v.from))} → ${escHtml(JSON.stringify(v.to))}`).join("; ")
+      + (ch.recovery_shortened ? ` <strong>(recovery shortened)</strong>` : "") + `</div>`).join("");
+    const errs = (pv.validation.errors || []).map(e => `<div style="color:#fca5a5;">✗ ${escHtml(e)}</div>`).join("");
+    const warns = (pv.validation.warnings || []).map(w => `<div style="color:#fcd34d;">! ${escHtml(w)}</div>`).join("");
+    const blocks = (pv.blocked_reasons || []).map(r => `<div style="color:#fca5a5;">⛔ ${escHtml(r)}</div>`).join("");
+    const up = (pv.upcoming || []).map(u => `<tr><td>${escHtml(u.name)}</td><td>${escHtml(u.production_start_ist)}</td><td>${escHtml(u.recovery_deadline_ist)}</td><td>${escHtml(u.target_publish_ist || "Not set")}</td></tr>`).join("");
+    box.innerHTML = `<h3 style="font-size:14px;margin:0 0 6px;">Preview: ${escHtml(pv.name)}</h3>`
+      + `<div style="font-size:13px;margin-bottom:6px;">${escHtml(pv.summary.cycles_enabled)} enabled cycle(s) · ${escHtml(pv.summary.timezone)} · recovery ${escHtml(pv.summary.recovery_window)}</div>`
+      + `<div style="font-size:13px;margin-bottom:6px;"><strong>Differences from the active schedule:</strong> ${escHtml(d.summary || "")}</div>`
+      + `<div style="font-size:12px;">${list(d.added || [], "#86efac")}${list(d.removed || [], "#fca5a5")}${changed}</div>`
+      + (d.unchanged ? `<div style="color:var(--muted);font-size:12px;">${escHtml(d.unchanged)} cycle(s) unchanged.</div>` : "")
+      + `<div style="margin-top:6px;font-size:13px;">${errs}${warns}${blocks}</div>`
+      + `<details style="margin-top:8px;"><summary style="cursor:pointer;color:var(--muted);">Next production cycles with this profile</summary>`
+      + `<div class="table-wrap"><table><thead><tr><th>Cycle</th><th>Production start</th><th>Recovers until</th><th>Target publish</th></tr></thead><tbody>${up || `<tr><td colspan="4" style="color:var(--muted)">--</td></tr>`}</tbody></table></div></details>`
+      + `<div style="color:var(--muted);font-size:12px;margin-top:6px;">${escHtml(pv.publication_schedule_note)}</div>`
+      + `<div class="btn-row" style="margin-top:10px;">`
+      + `<button class="btn ok" data-id="${escHtml(pv.profile_id)}" onclick="schedProfileLoad(this.dataset.id)"${pv.can_activate && !d.identical ? "" : " disabled"}>${d.identical ? "Already active" : "Load this schedule"}</button>`
+      + `<button class="btn sm" onclick="document.getElementById('schedProfilePreview').style.display='none'">Close</button></div>`;
+  } catch (err) {
+    box.innerHTML = `<div style="color:#fca5a5">Preview failed: ${escHtml(err.message || err)}</div>`;
+  }
+}
+
+async function schedProfileLoad(id) {
+  const pv = profState.preview;
+  if (!pv || pv.profile_id !== id) return;
+  const ok = await askConfirm(`Load “${pv.name}”?`,
+    `${pv.differences.summary}\n\nThis replaces the active production schedule through the normal validation and activation. The scheduler picks it up within a minute; nothing is restarted, no cycle is created and the YouTube publication schedule is not changed.`);
+  if (!ok) return;
+  try {
+    const r = await profApi(`/api/schedule/profiles/${encodeURIComponent(id)}/load`, { method: "POST", body: JSON.stringify({ confirm: true, expected_checksum: pv.checksum }) });
+    showToast(r.status === "ALREADY_ACTIVE" ? `“${pv.name}” is already the active schedule.` : `Loaded “${pv.name}”.`);
+    document.getElementById("schedProfilePreview").style.display = "none";
+    schedState.dirty = false;
+    refreshSchedule();
+  } catch (err) { showToast("Load refused: " + err.message, true); schedProfilePreview(id); }
+  refreshScheduleProfiles();
 }
 
 // ---------------------------------------------------------------------------
@@ -2625,6 +2804,7 @@ setInterval(refreshCreativeEngine, 60000);
 refreshCreativeEngine();
 refreshYouTubeConnection();
 setInterval(() => { refreshSchedule(); refreshMonitor(); }, 15000);
+setInterval(() => { const t = document.getElementById("tab-schedule"); if (t && t.classList.contains("active")) refreshScheduleProfiles(); }, 60000);
 setInterval(() => refreshOps(), 120000);   // only loads while the Operations tab is open
 refreshAutonomyPill();
 setInterval(refreshAutonomyPill, 60000);   // one small status GET
