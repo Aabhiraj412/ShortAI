@@ -2660,7 +2660,46 @@ def _intelligence_view() -> Dict[str, Any]:
         bench = json.loads(bench_path.read_text(encoding="utf-8"))
     except Exception:
         bench = None
+    # Stage 3.35: analytics, learning, providers and visual composition (persisted data; no provider is called)
+    analytics: Dict[str, Any] = {}
+    try:
+        import backend.app.services.youtube_analytics as ya
+        from backend.app.services.youtube_publishing_engine import YouTubeOAuthManager
+        from backend.app.creative_intel import learning
+        analytics = {"auth": ya.auth_status(YouTubeOAuthManager()), "sync": ya._read_state(ya.SYNC_STATE_KEY)}
+        run = learning.latest_run()
+        if run:
+            a = run.get("analysis") or {}
+            analytics["learning"] = {"created_at_utc": run.get("created_at_utc"), "input_hash": run.get("input_hash"),
+                                     **{k: a.get(k) for k in ("videos", "videos_with_data", "videos_first_7_days",
+                                                              "basis", "sufficiency", "needed_for_claims", "overall")},
+                                     "groups": {g: {k: {"n": v.get("n"), "median_views": (v.get("views") or {}).get("median"),
+                                                        "median_avp": (v.get("averageViewPercentage") or {}).get("median")}
+                                                    for k, v in grp.items()} for g, grp in (a.get("groups") or {}).items()},
+                                     "correlations": {k: v for k, v in (a.get("correlations") or {}).items() if v.get("rho") is not None},
+                                     "recommendations": run.get("recommendations") or []}
+    except Exception as exc:
+        analytics["error"] = f"{type(exc).__name__}"
+    providers: Dict[str, Any] = {}
+    visual: Dict[str, Any] = {}
+    try:
+        import sqlite3 as _sq
+        from backend.app.services import provider_audit
+        from backend.app.media.footage import provider_status
+        from backend.app.rendering.pop_info.asset_manifest import audit_recent
+        from backend.app.core.paths import MEDIA_PRODUCTIONS_DIR
+        providers = {"inventory": provider_audit.summary(), "footage": provider_status()}
+        c = _sq.connect(Path(DATABASE_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            jobs = [r[0] for r in c.execute("SELECT id FROM persistent_jobs WHERE status='COMPLETED' ORDER BY created_at DESC LIMIT 20")]
+        finally:
+            c.close()
+        visual = audit_recent(Path(MEDIA_PRODUCTIONS_DIR), jobs)
+        visual.pop("per_video", None)
+    except Exception as exc:
+        providers.setdefault("error", type(exc).__name__)
     return {
+        "analytics": analytics, "providers": providers, "visual": visual,
         "topic": {"flags": flags, "demand_signals_48h": len(signals),
                   "last_signal_at_utc": signals[0]["fetched_at_utc"] if signals else None, "top_demand": top},
         "creative": {"summary": store.summary(), "records": store.list_records(15), "experiments": store.list_experiments()},

@@ -675,6 +675,67 @@ def invalidate_auth_status_cache() -> None:
         _auth_status_cache.update(at=0.0, key=None, value=None)
 
 
+# Stage 3.35: google_auth_oauthlib logs the local redirect request line at INFO, which contains the one-time
+# authorization code. Never log it.
+logging.getLogger("google_auth_oauthlib.flow").setLevel(logging.WARNING)
+
+
+class _TokenFileLock:
+    """Cross-process lock for read-modify-write of the token file (dashboard and scheduler both refresh)."""
+
+    def __init__(self, token_file: str, timeout_sec: float = 10.0):
+        self.path = token_file + ".lock"
+        self.timeout_sec = timeout_sec
+        self._fh = None
+
+    def __enter__(self):
+        import time as _t
+        deadline = _t.monotonic() + self.timeout_sec
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self._fh = open(self.path, "a+b")
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    self._fh.seek(0)
+                    msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if _t.monotonic() > deadline:
+                    self._fh.close()
+                    self._fh = None
+                    raise TimeoutError("token file is locked by another process")
+                _t.sleep(0.05)
+
+    def __exit__(self, *exc):
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fh.close()
+            self._fh = None
+        return False
+
+
+def merge_token_scopes(previous: Optional[List[str]], current: Optional[List[str]], *, authoritative: bool) -> List[str]:
+    """Stage 3.35 root-cause fix. The upload client loads the shared token with its OWN two scopes, so every routine
+    refresh used to rewrite the stored scope list with just those two - erasing yt-analytics.readonly about an hour
+    after each consent (4 consents on 2026-11-20/21, each lost). The stored list is the set of GRANTED scopes: a
+    refresh only ever adds to it; only a completed consent (authoritative) may replace it."""
+    cur = [s for s in (current or []) if s]
+    if authoritative:
+        return sorted(set(cur))
+    return sorted(set(previous or []) | set(cur))
+
+
 def _record_connection_event(kind: str, **fields) -> None:
     """Persists non-secret connection history (verification, refresh, connect); never raises."""
     try:
@@ -1035,18 +1096,37 @@ class YouTubeOAuthManager:
         refresh or a repeat consent; the stored one is then kept, never erased.
         """
         data = json.loads(creds.to_json())
-        if not data.get("refresh_token"):
+        with _TokenFileLock(self.token_file):
             try:
                 existing = read_protected_file(self.token_file)
-                previous = json.loads(existing.decode("utf-8")).get("refresh_token") if existing else None
+                prev = json.loads(existing.decode("utf-8")) if existing else {}
             except Exception:
-                previous = None
-            if previous:
-                data["refresh_token"] = previous
-        write_protected_file(self.token_file, json.dumps(data).encode("utf-8"))
+                prev = {}
+            if not data.get("refresh_token") and prev.get("refresh_token"):
+                data["refresh_token"] = prev["refresh_token"]
+            # A consent returns the full granted set (include_granted_scopes); a refresh may be narrower.
+            granted = list(getattr(creds, "granted_scopes", None) or []) or data.get("scopes") or []
+            data["scopes"] = merge_token_scopes(prev.get("scopes"), granted if event == "connect" else data.get("scopes"),
+                                                authoritative=(event == "connect"))
+            write_protected_file(self.token_file, json.dumps(data).encode("utf-8"))
         logger.info("Saved protected OAuth credentials (%s).", event)
         if event in ("refresh", "connect"):
             _record_connection_event("token_saved", event=event)
+
+    def record_granted_scope(self, scope: str) -> bool:
+        """Adds a scope that Google has just confirmed as granted (e.g. a successful analytics refresh) to the stored
+        scope list without touching the access token. Returns True when it was added."""
+        with _TokenFileLock(self.token_file):
+            raw = read_protected_file(self.token_file)
+            if raw is None:
+                return False
+            data = json.loads(raw.decode("utf-8"))
+            if scope in (data.get("scopes") or []):
+                return False
+            data["scopes"] = merge_token_scopes(data.get("scopes"), [scope], authoritative=False)
+            write_protected_file(self.token_file, json.dumps(data).encode("utf-8"))
+        logger.info("Recorded granted OAuth scope (%s).", scope.rsplit("/", 1)[-1])
+        return True
 
     def disconnect_channel(self) -> bool:
         """Revokes and safely removes the local token.json file."""

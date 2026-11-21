@@ -319,6 +319,7 @@ function photoInto(c, img, x, y, w, h, u, d, ph) {
     case 'pan_left': z = 1.14; ox = lerp(0.05, -0.05, e); break;
     case 'pan_right': z = 1.14; ox = lerp(-0.05, 0.05, e); break;
     case 'rise': z = 1.12; oy = lerp(0.045, -0.045, e); break;
+    case 'still': z = 1.03; break;
   }
   const iw = img.naturalWidth, ih = img.naturalHeight, s = Math.max(w / iw, h / ih) * z, dw = iw * s, dh = ih * s;
   let dx = x + w / 2 - f.x * dw + ox * w, dy = y + h / 2 - f.y * dh + oy * h;
@@ -652,7 +653,22 @@ async function loadImages() {
 }
 window.ASSET_FALLBACKS = [];
 window.DUR = DUR;
-window.render = t => render(t);
+// Stage 3.35: real footage. A footage scene is a full-bleed photo scene whose image is the clip frame for the
+// current time; the frame is loaded and decoded BEFORE the frame is drawn (the renderer awaits render()), so the
+// capture is deterministic and only the current frame is held in memory.
+const FRAMES = {};
+async function ensureFootage(t) {
+  t = clamp(t, 0, DUR - 1e-6);
+  const i = sceneAt(t), want = [SCENES[i]];
+  if (i > 0 && t - SCENES[i].start_sec < TR) want.push(SCENES[i - 1]);
+  await Promise.all(want.filter(s => s.photo && s.photo.footage && s.photo.footage.dir).map(async s => {
+    const fp = s.photo.footage, k = Math.max(0, Math.min(fp.count - 1, Math.floor((t - s.start_sec) * (fp.fps || 30))));
+    if (FRAMES[s.scene_id] && FRAMES[s.scene_id].k === k) return;
+    const im = new Image(); im.src = `${fp.dir}/f_${String(k + 1).padStart(4, '0')}.jpg`;
+    try { await im.decode(); FRAMES[s.scene_id] = { k, im }; IMAGES[s.scene_id] = im; } catch (e) { /* keep the last good frame */ }
+  }));
+}
+window.render = async t => { await ensureFootage(t); render(t); };
 window.layoutAudit = t => {
   AUDIT = []; render(t); const boxes = AUDIT; AUDIT = null;
   const out = boxes.filter(b => b.x0 < SAFE.x0 - 1 || b.x1 > SAFE.x1 + 1 || b.y0 < SAFE.y0 - 1 || b.y1 > SAFE.y1 + 1);

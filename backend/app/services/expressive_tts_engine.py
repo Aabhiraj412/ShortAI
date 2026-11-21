@@ -45,6 +45,7 @@ class NarrationSegment:
     delivery_note: str = ""
     audio_path: Optional[str] = None
     duration_sec: float = 0.0
+    voice_fallback: bool = False          # Stage 3.35: set when the optional local fallback voice was used
     file_size_bytes: int = 0
     synthesis_time_sec: float = 0.0
 
@@ -187,11 +188,22 @@ class ExpressiveTTSEngine:
                     attempt + 1, self.max_retries, seg.id, e
                 )
                 if attempt < self.max_retries:
-                    await asyncio.sleep(1.0 * (attempt + 1))
+                    # Stage 3.35: the only observed final failure was a short network outage; connection errors
+                    # get a longer backoff (2 s, 5 s) than other errors.
+                    conn = "connect" in str(e).lower() or isinstance(e, (ConnectionError, OSError))
+                    await asyncio.sleep((2.0, 5.0, 10.0)[min(attempt, 2)] if conn else 1.0 * (attempt + 1))
                 else:
                     logger.error("[TTS FATAL] %s failed after %d retries: %s", seg.id, self.max_retries, e)
                     from backend.app.core.fs_utils import remove_with_retry   # Stage 3.34: no partial audio left behind
                     remove_with_retry(raw_mp3)
+                    from backend.app.services import tts_fallback
+                    if tts_fallback.enabled():
+                        wav = tts_fallback.synthesize(seg.text, raw_mp3[:-4] + "_fallback.wav")
+                        if wav:
+                            logger.warning("[TTS FALLBACK] %s synthesised with the local SAPI voice", seg.id)
+                            seg.voice_fallback = True
+                            raw_mp3 = wav
+                            break
                     raise RuntimeError(f"TTS synthesis failed for {seg.id}: {e}")
 
         # Apply safe padding (using adelay/apad filters)

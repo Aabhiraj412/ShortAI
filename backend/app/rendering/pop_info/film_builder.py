@@ -90,7 +90,18 @@ def build_pop_info_film(*, prod_dir: Path, job_id: str, topic: str, category: st
         sha = p.get("sha256") or _sha256(src)
         name = f"photo_{sha[:16]}{src.suffix.lower() or '.jpg'}"
         shutil.copyfile(src, assets_dir / name)
-        usable_by_scene[int(idx)] = {**p, "sha256": sha, "src": f"assets/{name}"}
+        entry = {**p, "sha256": sha, "src": f"assets/{name}"}
+        fd = (p.get("footage") or {}).get("frames_dir")
+        if fd and Path(fd).is_dir():            # Stage 3.35: footage frame sequence next to the page
+            dest = assets_dir / "footage" / f"scene_{int(idx) + 1:02d}"
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(fd, dest)
+            entry["footage"] = {**p["footage"], "dir": f"assets/footage/{dest.name}",
+                                "count": len(list(dest.glob("f_*.jpg"))), "frames_dir": None}
+        elif p.get("footage"):
+            entry.pop("footage", None)           # frames missing: the poster frame is used as a still photo
+        usable_by_scene[int(idx)] = entry
     plan = plan_scenes(job_id=job_id, topic_title=topic, category=category,
                        sections=script_data.get("sections") or [], timings=section_timings,
                        total_duration=float(duration_sec), photos=usable, scene_photos=usable_by_scene or None)
@@ -109,7 +120,11 @@ def build_pop_info_film(*, prod_dir: Path, job_id: str, topic: str, category: st
             keep = ("asset_id", "provider", "source_url", "download_url", "creator", "title", "license", "license_url",
                     "attribution", "attribution_required", "downloaded_at", "original_sha256", "format", "resolution",
                     "search_query", "topic", "job_id", "relevance", "final_score", "cache_hit", "treatment", "motion")
-            asset_provenance.append({"scene": sc["scene_id"], "kind": "downloaded_photo", "sha256": ph["sha256"],
+            asset_provenance.append({"scene": sc["scene_id"],
+                                     "kind": "video_footage" if ph.get("footage") else "downloaded_photo",
+                                     "sha256": ph["sha256"], **({"duration": ph.get("duration"),
+                                                                "frames": (ph.get("footage") or {}).get("count")}
+                                                               if ph.get("footage") else {}),
                                      **{k: ph.get(k) for k in keep if k in ph},
                                      "attribution_required": ph.get("attribution_required", True)})
         asset_provenance.append({"scene": sc["scene_id"], "kind": "procedural_vector",

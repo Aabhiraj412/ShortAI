@@ -287,3 +287,20 @@ Stage 3.33 benchmarks: `docs/benchmarks/stage_3_33_render_benchmarks.json` (run 
 | **Full suite** | **1594 passed, 4 failed, 173 skipped** (18 min 20 s) |
 
 The 4 failures are the known baseline (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, both `test_youtube_branding`). No new failures, none resolved, no flaky tests observed. No lint, type-check or dependency-audit tool is configured in this repository; the changed modules compile, and no dependency was added. Tests use temporary databases; the production database is refused under pytest (existing guard).
+
+## 13. Stage 3.35: analytics, learning, providers and footage (2026-11-21)
+
+| Suite | Result |
+|---|---|
+| `test_analytics_learning_footage_335.py` (OAuth scope merge, lock, rotation, revocation, expiry, concurrency and restart; analytics statuses, first-7-days window, idempotency, budget; learning thresholds, outliers, Spearman, proposals; footage providers, licences, relevance with wind-turbine and abstract-query regressions, validation, extraction, end to end, fallback; manifest; provider states; TTS backoff and fallback) | 56 passed |
+| Related suites (Pop Info, render, footage, photos, media, Lemo, analytics, creative intelligence, providers, orchestrator, TTS, YouTube) | 339 passed, 14 skipped, 2 known failures (`test_youtube_branding`) |
+| **Full suite, first run** (before the footage relevance iteration) | **1646 passed, 4 failed, 173 skipped** (19 min 38 s) |
+| **Full suite, final** | **1649 passed, 5 failed, 173 skipped** (19 min 1 s) |
+
+**Final-run failures:** the 4 known baseline failures (`test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, both `test_youtube_branding`) and the known timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests`. The latter passed 3 of 3 runs on its own and had passed in the first full run.
+
+**Existing tests changed:**
+- `test_youtube_analytics_330.py`: analytics now verifies the grant instead of trusting the stored scope list. The no-request guarantee without a usable grant is still asserted.
+- `test_creative_intel_332.py`: the API key set gained `analytics`, `providers` and `visual`.
+
+No test was weakened.

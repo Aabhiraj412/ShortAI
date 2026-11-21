@@ -81,11 +81,12 @@ def render_pop_info(*, workspace_root: Path, prod_dir: Path, job_id: str, topic:
                     script_data: Dict[str, Any], section_timings: Sequence[Dict[str, Any]], voice_path: str,
                     duration_sec: float, output_path: Path, photos: Sequence[Dict[str, Any]] = (),
                     run_quality_gate: bool = True, identity_check=None, select_photos: bool = False,
-                    key_entities: Sequence[str] = (), asset_cache_root: Optional[Path] = None) -> Dict[str, Any]:
+                    key_entities: Sequence[str] = (), asset_cache_root: Optional[Path] = None,
+                    select_footage: bool = False) -> Dict[str, Any]:
     from backend.app.services import visual_quality_gate as vqg
 
     t0 = time.perf_counter()
-    scene_photos, photo_report = None, None
+    scene_photos, photo_report, draft = None, None, None
     if select_photos:
         # draft plan -> scene-level photo selection -> final plan with each photo on its own scene.
         # Any failure keeps the all-vector film: photos are an enhancement, never a dependency.
@@ -102,6 +103,29 @@ def render_pop_info(*, workspace_root: Path, prod_dir: Path, job_id: str, topic:
             photo_report = {"error": f"{type(exc).__name__}: {str(exc)[:300]}", "fallback": "all-vector film"}
         Path(prod_dir).mkdir(parents=True, exist_ok=True)
         (Path(prod_dir) / "photo_selection.json").write_text(json.dumps(photo_report, indent=2, default=str), encoding="utf-8")
+    footage_report = None
+    if select_footage:
+        # Stage 3.35: real footage for suitable scenes that have no scene-specific photo. An enhancement, never a
+        # dependency: any failure keeps the photo/vector film.
+        from backend.app.core.paths import MEDIA_DIR
+        from backend.app.rendering.pop_info import scene_footage
+        from backend.app.rendering.pop_info.scene_photos import topic_anchor
+        try:
+            draft = draft or plan_scenes(job_id=job_id, topic_title=topic, category=category,
+                                         sections=script_data.get("sections") or [], timings=section_timings,
+                                         total_duration=float(duration_sec))
+            script_text = " ".join(s.get("narration", "") for s in draft.get("scenes", []))
+            anchor = (photo_report or {}).get("anchor") or topic_anchor(topic, script_text, key_entities)
+            chosen, footage_report = scene_footage.select_scene_footage(
+                plan=draft, anchor=anchor, job_id=job_id, ffmpeg=get_ffmpeg_path(),
+                cache_root=Path(asset_cache_root or (Path(MEDIA_DIR) / "asset_cache")),
+                exclude=list((scene_photos or {}).keys()))
+            if chosen:
+                scene_photos = {**(scene_photos or {}), **chosen}
+        except Exception as exc:
+            footage_report = {"error": f"{type(exc).__name__}: {str(exc)[:300]}", "fallback": "photo/vector film"}
+        Path(prod_dir).mkdir(parents=True, exist_ok=True)
+        (Path(prod_dir) / "footage_selection.json").write_text(json.dumps(footage_report, indent=2, default=str), encoding="utf-8")
     t_photos = time.perf_counter()
     film = build_pop_info_film(prod_dir=prod_dir, job_id=job_id, topic=topic, category=category,
                                script_data=script_data, section_timings=section_timings,
@@ -124,7 +148,12 @@ def render_pop_info(*, workspace_root: Path, prod_dir: Path, job_id: str, topic:
                               "audio": audio, "video_path": str(output_path),
                               "timing_sec": {"photo_selection": round(t_photos - t0, 1),
                                              "build_and_render": round(t_render - t_photos, 1), "total": None},
-                              "photo_selection": photo_report}
+                              "photo_selection": photo_report, "footage_selection": footage_report}
+    try:   # Stage 3.35: exactly which external assets are in this video
+        from backend.app.rendering.pop_info.asset_manifest import write_manifest
+        result["asset_manifest_path"] = str(write_manifest(Path(prod_dir), job_id, film["plan"]))
+    except Exception as exc:
+        result["asset_manifest_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
     if run_quality_gate:
         scenes = film["plan"]["scenes"]
         times = sorted({round(s["start_sec"] + min(2.4, (s["end_sec"] - s["start_sec"]) * 0.7), 2) for s in scenes})

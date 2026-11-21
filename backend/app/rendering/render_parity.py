@@ -28,7 +28,14 @@ from typing import Any, Dict, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 # Options passed to render_pop_info by BOTH the approved test renders and the production branch.
-APPROVED_RENDER_OPTIONS: Dict[str, Any] = {"select_photos": True, "run_quality_gate": True}
+def footage_enabled() -> bool:
+    """Stage 3.35: scene-level real footage. On by default; CRAZZYDOCS_FOOTAGE=off disables it (rollback switch)."""
+    import os
+    return os.environ.get("CRAZZYDOCS_FOOTAGE", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+APPROVED_RENDER_OPTIONS: Dict[str, Any] = {"select_photos": True, "run_quality_gate": True,
+                                           "select_footage": footage_enabled()}
 
 
 def approved_config() -> Dict[str, Any]:
@@ -39,6 +46,7 @@ def approved_config() -> Dict[str, Any]:
         "visual_engine": ENGINE_VERSION,
         "engine_revision": ENGINE_REVISION,
         "scene_photo_selection": True,
+        "scene_footage_selection": footage_enabled(),
         "illustrated_environments": True,
         "visual_quality_gate": True,
         "resolution": "1080x1920",
@@ -61,6 +69,7 @@ def production_config() -> Dict[str, Any]:
         "visual_engine": engine,
         "engine_revision": ENGINE_REVISION if pop else "legacy_film_builder",
         "scene_photo_selection": pop and bool(APPROVED_RENDER_OPTIONS["select_photos"]),
+        "scene_footage_selection": pop and bool(APPROVED_RENDER_OPTIONS.get("select_footage")),
         "illustrated_environments": pop,
         "visual_quality_gate": pop,
         "resolution": "1080x1920",

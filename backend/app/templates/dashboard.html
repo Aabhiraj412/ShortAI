@@ -941,6 +941,15 @@
           <input id="intelHypothesis" maxlength="500" placeholder="hypothesis" style="width:260px;" />
           <button class="btn sm" onclick="intelCreateExperiment()">Create draft</button></div>
         <div id="intelExperiments" style="margin-top:6px;"></div></div></div>
+    <!-- Roadmap 3.35: audience analytics, learning, providers, visual composition -->
+    <div class="card"><div class="card-head"><div><h2 class="card-title">YouTube Analytics and learning</h2><p class="card-desc">Read-only Analytics API data per published video. A fixed first-7-days window makes videos comparable. Learning findings stay <em>preliminary</em> until at least 30 videos have first-7-days metrics, and every recommendation is a proposal that is never applied automatically. "not yet" means YouTube has not reported data, which is different from zero.</p></div></div>
+      <div id="intelAnalytics" style="font-size:12px;overflow-x:auto;">--</div></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Content providers</h2><p class="card-desc">Configured is not healthy, and healthy is not used: <em>rendered</em> counts assets actually drawn in the last 20 videos, split into photographs and footage.</p></div></div>
+        <div id="intelProviders" style="font-size:12px;overflow-x:auto;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Visual composition</h2><p class="card-desc">Screen time by on-screen content in the last 20 rendered videos, from their rendered scene plans. Creative target for suitable subjects: footage 40-60 %, photos 20-30 %, graphics and text 20-30 %; relevance comes first.</p></div></div>
+        <div id="intelVisual" style="font-size:12px;">--</div></div>
+    </div>
   </section>
 
   <!-- STAGE 3.32C: RECOMMENDATION CENTER -->
@@ -2827,6 +2836,38 @@ async function refreshIntel() {
       ["Weakest dimensions (mean)", escHtml(Object.entries(dm).sort((a, b) => a[1] - b[1]).slice(0, 4).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(" · "))],
       ["By hook type (craft score)", escHtml(Object.entries(s.by_hook_type || {}).map(([k, v]) => `${k.replace(/_/g, " ")} ${v.mean_craft_score} (n=${v.n})`).join(" · "))],
     ]) + apTable(["Job", "Video", "Hook", "Overall", "Plan", "Render", "Weakest"], (c.records || []).map(r => `<tr><td>${escHtml(r.job_id)}</td><td>${escHtml(r.youtube_video_id || "--")}</td><td>${escHtml(r.hook_type || "--")}</td><td>${r.overall_score ?? "--"}</td><td>${r.plan_score ?? "--"}</td><td>${r.render_score ?? "--"}</td><td>${escHtml((r.weakest || []).map(w => `${w.dimension} ${w.score}`).join(", "))}</td></tr>`));
+  // Stage 3.35
+  const an = d.analytics || {}, au = an.auth || {}, sy = an.sync || {}, ln = an.learning || {};
+  const AUTH_COLOR = { CONNECTED: "#86efac", REFRESHING: "#93c5fd", EXPIRED: "#fcd34d", REVOKED: "#fca5a5", AUTHENTICATION_REQUIRED: "#fca5a5", ERROR: "#fca5a5" };
+  const lnOverall = ln.overall || {};
+  document.getElementById("intelAnalytics").innerHTML = opsKV([
+    ["Connection", `<strong style="color:${AUTH_COLOR[au.state] || "inherit"}">${escHtml(au.state || "unknown")}</strong> ${escHtml(au.reason || "")}${au.last_success_utc ? " · last success " + autoTime(au.last_success_utc) : ""}${au.action ? `<div style="color:#fcd34d">${escHtml(au.action)}</div>` : ""}`],
+    ["Last sync", sy.last_success_utc ? `${autoTime(sy.last_success_utc)} · ${escHtml(JSON.stringify(sy.last_counts || {}))}` : `<span class="ops-tag">not yet</span>`],
+    ["Last sync error", escHtml(sy.last_error || "none")],
+    ["Coverage", ln.videos != null ? escHtml(`${ln.videos} published videos tracked · ${ln.videos_with_data} with data · ${ln.videos_first_7_days} with first-7-days metrics`) : `<span class="ops-tag">no learning run yet</span>`],
+    ["Data sufficiency", ln.sufficiency ? `<strong style="color:${ln.sufficiency === "sufficient" ? "#86efac" : "#fcd34d"}">${escHtml(ln.sufficiency.toUpperCase())}</strong>${ln.needed_for_claims ? escHtml(` · ${ln.needed_for_claims} more first-7-days videos needed for learning claims`) : ""}` : "--"],
+    ["Views (median, basis " + escHtml(ln.basis || "-") + ")", (lnOverall.views || {}).n ? escHtml(`${lnOverall.views.median} (n=${lnOverall.views.n}, ${lnOverall.views.confidence} confidence)`) : `<span class="ops-tag">not yet</span>`],
+    ["Average % viewed (median)", (lnOverall.averageViewPercentage || {}).n ? escHtml(`${lnOverall.averageViewPercentage.median}% (n=${lnOverall.averageViewPercentage.n})`) : `<span class="ops-tag">not yet</span>`],
+  ]) + ["category", "hook_type", "duration", "publish_hour_ist", "has_footage"].map(g => {
+      const grp = (ln.groups || {})[g] || {}; const ks = Object.keys(grp); if (!ks.length) return "";
+      return `<div style="margin-top:6px;"><strong>${escHtml(g.replace(/_/g, " "))}</strong>: ` + ks.map(k => `${escHtml(k)} <span style="color:var(--muted)">n=${grp[k].n}, views ${grp[k].median_views ?? "-"}, viewed ${grp[k].median_avp ?? "-"}%</span>`).join(" · ") + `</div>`;
+    }).join("")
+    + ((ln.recommendations || []).length ? `<div style="margin-top:8px;"><strong>Recommendations</strong> (proposals; never applied automatically)</div>` + apTable(["Area", "Status", "Detail", "Confidence"], ln.recommendations.map(r => `<tr><td>${escHtml(r.area)}</td><td>${escHtml(r.status)}</td><td>${escHtml(r.recommendation || r.needs || "")}${r.expected_benefit ? " · " + escHtml(r.expected_benefit) : ""}</td><td>${escHtml(r.confidence)}</td></tr>`)) : "");
+  const pv = (d.providers || {}).inventory || {}, fp = (d.providers || {}).footage || [];
+  const STATE_COLOR = { HEALTHY: "#86efac", CONFIGURED: "#93c5fd", NOT_USED: "#fcd34d", DEGRADED: "#fcd34d", RATE_LIMITED: "#fcd34d", KEY_MISSING: "#fca5a5", AUTHENTICATION_REQUIRED: "#fca5a5", DISABLED: "var(--muted)" };
+  document.getElementById("intelProviders").innerHTML = apTable(["Provider", "State", "Requests ok/failed", "Rendered (last 20)"], (pv.providers || []).map(r => {
+      const h = r.recent_health || {}; const u = r.rendered_usage_last_20;
+      return `<tr><td>${escHtml(r.name)}</td><td style="color:${STATE_COLOR[r.state] || "inherit"}">${escHtml(r.state || r.status)}</td><td>${h.ok != null ? escHtml(`${h.ok}/${h.failed}`) : "--"}${r.error_category ? ` <span style="color:var(--muted)">${escHtml(r.error_category)}</span>` : ""}</td><td>${u == null ? "n/a" : (Object.keys(u).length ? escHtml(Object.entries(u).map(([k, v]) => `${k.replace("video_footage", "footage")} ${v}`).join(", ")) : "0")}</td></tr>`;
+    })) + `<div style="margin-top:6px;"><strong>Footage providers</strong>: ${fp.map(p => `${escHtml(p.provider)} ${p.configured ? '<span class="auto-on">configured</span>' : '<span style="color:#fca5a5">key missing</span>'}`).join(" · ")}</div>`;
+  const vs = d.visual || {}, sh = vs.share_pct || {};
+  document.getElementById("intelVisual").innerHTML = vs.videos ? opsKV([
+    ["Videos analysed", escHtml(vs.videos)],
+    ["Real-world footage", escHtml(`${sh.video_footage ?? 0}%`)],
+    ["Photographs", escHtml(`${sh.photograph ?? 0}%`)],
+    ["Motion graphics", escHtml(`${sh.motion_graphic ?? 0}%`)],
+    ["Text-led scenes", escHtml(`${sh.text_led ?? 0}%`)],
+    ["Rendered assets by provider", escHtml(Object.entries(vs.providers || {}).map(([k, v]) => `${k.replace(":video_footage", " footage").replace(":photograph", " photo")} ${v}`).join(", ") || "none")],
+  ]) : `<span class="ops-tag">unavailable</span>`;
   const ex = c.experiments || [];
   document.getElementById("intelExperiments").innerHTML = ex.length ? apTable(["Experiment", "Arms (productions)", "Status", "Hypothesis", ""], ex.map(e => `<tr><td>${escHtml(e.id)}</td><td>${escHtml(Object.entries(e.productions_per_arm || {}).map(([a, n]) => `${a} (${n})`).join(", "))}</td><td>${escHtml(e.status)}</td><td>${escHtml(e.hypothesis)}</td><td>${e.status === "ACTIVE" ? `<button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'PAUSED')">Pause</button>` : (e.status !== "COMPLETED" ? `<button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'ACTIVE')">Activate</button>` : "")}${e.status !== "COMPLETED" ? ` <button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'COMPLETED')">Complete</button>` : ""}</td></tr>`))
     : `<div style="color:var(--muted)">No experiments. Hook styles rotate across all five by job (the default).</div>`;

@@ -1,6 +1,14 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
-**As of:** 2026-11-21 IST. Stage 3.34 (controlled production validation and reliability) is implemented and deployed in the commit that contains this file: process-liveness fix for worker recovery, WinError 32 root cause in asset downloads, live stage display, persisted shadow topic evidence, and limited-range BT.709 delivery. See `docs/STAGE_3_34_IMPLEMENTATION_REPORT.md`, `STAGE_3_34_VALIDATION_REPORT.md` and `STAGE_3_34_KNOWN_ISSUES.md`. Autopilot stays in OBSERVE; topic intelligence stays in shadow; public publishing unchanged.
+**As of:** 2026-11-21 IST. Stage 3.35 (YouTube Analytics, autonomous learning and visual asset intelligence) is implemented and deployed in the commit that contains this file:
+- the root cause of the repeated Analytics "disconnections" is fixed (an upload-client refresh erased the analytics scope from the shared token);
+- analytics ingestion with a first-7-days window;
+- a learning engine with proposals only;
+- the provider audit by rendered usage;
+- scene-level real-world footage with per-video asset manifests;
+- a longer Edge TTS backoff.
+
+See `docs/STAGE_3_35_IMPLEMENTATION_REPORT.md` and the other `STAGE_3_35_*` reports. Autopilot stays in OBSERVE; topic intelligence stays in shadow; public publishing is unchanged.
 
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
@@ -36,6 +44,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3.32B | `autonomy/control_plane.py`, `registry.py`, `handlers.py` | The **only** path to any autonomous action: closed action registry (8 permitted, 26 prohibited); levels OFF / OBSERVE / RECOMMEND / APPROVED_EXECUTION (global × category); signed, hash-bound approvals; 3 kill switches; hash-chained append-only audit. |
 | 3.32C | `autonomy/recommendations/` | Rule-based recommendations (28 rules), advice only. |
 | 3.34 | `core/process_utils.py`, `core/fs_utils.py`, `media/downloader.py`, `services/deployment_diagnostics.py`, `rendering/ffmpeg_geometry.py` | **Controlled production validation and reliability.** Exited processes are no longer counted as alive (worker stall recovery, daemon status); oversize/retry/temp-file defects behind WinError 32 in downloads; bounded retries for transient file locks; live worker stage instead of the coarse checkpoint; shadow topic evidence persisted; final videos delivered as limited-range BT.709. One live scheduled cycle observed (heartbeat at most 27 s, peak about 2.9 GB). |
+| 3.35 | `services/youtube_analytics.py`, `services/youtube_publishing_engine.py`, `creative_intel/learning.py`, `media/footage.py`, `rendering/pop_info/scene_footage.py`, `asset_manifest.py`, `services/tts_fallback.py` | **Analytics, learning and footage.**<br>- **OAuth:** the shared token's scope list only grows on refresh; analytics refreshes in memory with only `yt-analytics.readonly`; cross-process token lock; persisted auth states.<br>- **Ingestion:** lifetime-to-date and first-7-days metrics (retention, traffic sources).<br>- **Learning:** `learning_records` / `learning_runs`; claims need at least 30 first-7-days videos; proposals are never applied.<br>- **Footage:** Pixabay / Wikimedia / NASA (+ Pexels with a key) scene footage, gated on licence and relevance, with a qualifier-conflict check; per-video `manifests/asset_manifest_<job>.json`; `CRAZZYDOCS_FOOTAGE=off` disables it.<br>- **Providers:** states by rendered usage.<br>- **TTS:** SAPI voice fallback, off by default. |
 | 3.31K | `content/demand_signals.py`, `topic_scoring_v2.py`, `expanded_categories.py` | **Demand-led topic intelligence.** Wikimedia most-read + pageview velocity and Google Trends daily searches (provenance in `topic_demand_signals`); eight-signal scoring v2 with historical performance as one bounded signal (5 %, neutral until analytics exist); Cinema & Entertainment, Media & Internet Culture, Sports & Major Events (politics stays out of scope). Flags `demand_signals`, `scoring_v2` (off/shadow/on), `expanded_categories` (off/on). Details: `docs/STAGE_3_31K_DEMAND_LED_TOPIC_INTELLIGENCE.md`. |
 | 3.32 (roadmap) | `creative_intel/` | **Video creative intelligence.** 14 craft dimensions from the script, rendered Pop Info plan, subtitles and the rendered MP4; one `creative_records` row per job linked to its YouTube video ID (for 3.35); controlled `hook_type` experiments. Hourly `creative_evaluation_tick` (skips while a job is active). Details: `docs/STAGE_3_32_CREATIVE_INTELLIGENCE.md`. |
 | 3.33 | `scripts/benchmark_renderers_333.py`, `docs/benchmarks/` | **Rendering architecture decision:** keep Lemo-Opuscar + Pop Info; no migration. Details: `docs/STAGE_3_33_RENDERING_ARCHITECTURE_DECISION.md`. |
@@ -114,7 +123,8 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 3a. **3.32F**: YouTube Community publishing. **Committed (`16b8628`) and deployed.** The read-only capability audit found `PILOT_ACCESS_REQUIRED` for project `crazzydocs-youtube` (`posts.list`: 404 Method not found); in addition, the token lacks a `posts.insert` scope. API publishing stays OFF and fail-closed; the manual handoff works. See `docs/STAGE_3_32F_PUBLISHING.md`.
 4. **3.32G**: Controlled Autopilot. **Deployed.**
 5. **3.32H/I/J**: reliability fixes, phased activation, operational reports. **Implemented and deployed.** Activation beyond OBSERVE needs explicit authorization (see section 7).
-5. **3.32F activation**: **BLOCKED** on Google approving the project for the posts API pilot (or general availability, planned for 2027) and on a `youtube.force-ssl` re-consent; see `docs/STAGE_3_32F_PUBLISHING.md` §9.
+6. **3.35**: Analytics OAuth fix, analytics ingestion, learning (proposals only), provider audit and scene footage. **Implemented and deployed.** Next: **3.36** (not started). Learning claims unlock at 30 first-7-days videos.
+7. **3.32F activation**: **BLOCKED** on Google approving the project for the posts API pilot (or general availability, planned for 2027) and on a `youtube.force-ssl` re-consent; see `docs/STAGE_3_32F_PUBLISHING.md` §9.
 
 ## 6. Critical safety constraints
 
@@ -147,17 +157,19 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 ## 7. Exact next task
 
-**Stage 3.34 is complete. Recommended next milestone: Stage 3.35, YouTube Analytics and Autonomous Learning** (prerequisites in `docs/STAGE_3_34_KNOWN_ISSUES.md`). Inputs now available:
-- per-video creative records keyed by `job_id` and YouTube ID;
-- demand signals with provenance;
-- the rendering decision (no renderer migration pending).
+**Stage 3.35 is complete. Next milestone: Stage 3.36** (not started). Readiness:
+- Analytics ingestion runs daily at 07:15 IST.
+- Learning claims unlock when 30 videos have first-7-days metrics (expected around 2026-11-28).
+- Footage composition is measured per video (Ops → *Visual composition*).
+- Open items are in `docs/STAGE_3_35_KNOWN_ISSUES.md`.
 
 **Decisions waiting for the operator (each needs explicit approval):**
 
 1. **Topic intelligence.** After about 48 h of `demand_signals: shadow` / `scoring_v2: shadow` (enabled at this deployment), review Ops → *Topic intelligence*. Then decide on `expanded_categories: on`, `demand_signals: on` and `scoring_v2: on`, in that order.
 2. **Creative experiments.** Optionally run a `hook_type` experiment. The craft data shows the hook is the weakest dimension (mean about 45/100).
 3. **Autopilot.** It is in OBSERVE since 2026-11-21 01:23 IST. RECOMMEND needs `AUTHORIZE RECOMMEND` once readiness passes (no earlier than about 2026-11-23 01:23 IST).
-4. **Stage 3.35 analytics.** Audience learning needs YouTube Analytics data. `video_performance` has 0 rows today.
+4. **Learning proposals (3.35).** Review Ops → *YouTube Analytics and learning* once the data is sufficient. Every proposal needs explicit authorization; none is applied automatically.
+5. **Optional:** add `PEXELS_API_KEY` for a second footage library. Enable the SAPI voice fallback (`CRAZZYDOCS_TTS_FALLBACK=sapi`) only if a robotic voice is preferable to a skipped cycle.
 
 Never authorized by any of this: public YouTube publishing, external communications, OAuth changes, destructive operations, financial actions and destructive git operations.
 

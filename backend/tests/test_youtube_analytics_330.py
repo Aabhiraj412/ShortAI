@@ -78,7 +78,11 @@ def _collector(tmp_path, scopes, service, rows=None, today=date(2026, 11, 20)):
 def test_without_analytics_scope_no_request_is_made(tmp_path, monkeypatch):
     service = MagicMock()
     col = _collector(tmp_path, YOUTUBE_SCOPES, service)
-    assert col.collect() == {"state": "reauthorization_required", "collected": 0, "api_calls": 0}
+    # Stage 3.35: the grant is verified with Google instead of trusting the stored scope list (the list was being
+    # erased by upload refreshes). Without a valid grant no report request is made and the auth state is explicit.
+    res = col.collect()
+    assert res["state"] == "auth_failed" and res["auth_state"] in ("AUTHENTICATION_REQUIRED", "REVOKED", "ERROR")
+    assert res["collected"] == 0 and res["api_calls"] == 0
     service.reports.assert_not_called()
 
 

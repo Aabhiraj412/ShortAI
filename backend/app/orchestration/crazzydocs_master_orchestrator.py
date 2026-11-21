@@ -1104,6 +1104,7 @@ class CrazzyDocsMasterOrchestrator:
                             # (topic-level photos only when scene selection is switched off)
                             photos=[] if _approved["select_photos"] else photos_from_media_assets(acquired_assets),
                             select_photos=_approved["select_photos"],
+                            select_footage=_approved.get("select_footage", False),
                             run_quality_gate=_approved["run_quality_gate"],
                             key_entities=list(getattr(selected_topic, "key_entities", None) or []),
                             identity_check=(None if identity_registry is None else

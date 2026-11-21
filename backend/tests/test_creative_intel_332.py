@@ -262,7 +262,7 @@ def test_intelligence_and_experiment_api(tmp_path, monkeypatch):
     h = {"X-CrazzyDocs-CSRF": local.get("/api/autonomy/session").json()["csrf_token"]}
     assert remote.get("/api/intelligence/topic-creative-rendering").status_code == 403
     view = local.get("/api/intelligence/topic-creative-rendering").json()
-    assert set(view) == {"topic", "creative", "rendering"} and "demand_signals" in view["topic"]["flags"]
+    assert set(view) == {"topic", "creative", "rendering", "analytics", "providers", "visual"} and "demand_signals" in view["topic"]["flags"]
     body = {"operator": "abhi", "dimension": "hook_type", "arms": ["contradiction", "scale"], "hypothesis": "numbers win"}
     assert local.post("/api/creative/experiments", json=body).status_code == 403                    # no CSRF
     assert local.post("/api/creative/experiments", json=body | {"dimension": "music"}, headers=h).status_code == 422

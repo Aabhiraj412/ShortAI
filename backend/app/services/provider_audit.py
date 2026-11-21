@@ -308,8 +308,64 @@ def inventory(probe_path: Optional[Path] = None) -> List[Dict[str, Any]]:
     return out
 
 
+MEDIA_PROVIDER_NAMES = ("Pixabay", "Pexels", "Openverse", "Wikimedia Commons", "Internet Archive", "NASA")
+
+
+def state_335(row: Dict[str, Any], rendered: Optional[int]) -> str:
+    """Stage 3.35 provider state. A key being set is not health; reachability is not usage."""
+    st = row.get("status")
+    if st == KEY_MISSING:
+        return "KEY_MISSING"
+    if st in (CONFIGURED_INVALID, AUTHORIZATION_REQUIRED):
+        return "AUTHENTICATION_REQUIRED"
+    if st == NOT_IMPLEMENTED:
+        return "DISABLED"
+    if row.get("rate_limited"):
+        return "RATE_LIMITED"
+    if st in (INTERMITTENT, UNAVAILABLE):
+        return "DEGRADED"
+    if st == NOT_REQUIRED_LOCAL:
+        return "HEALTHY"
+    if st in (CONFIGURED_HEALTHY, NO_KEY_NEEDED):
+        ok = (row.get("recent_health") or {}).get("ok", 0) if row.get("recent_health") else 0
+        if rendered == 0 and ok:
+            return "NOT_USED"
+        return "HEALTHY" if ok or (row.get("probe") or {}).get("last_success_utc") else "CONFIGURED"
+    if st == UNVERIFIED:
+        return "CONFIGURED"
+    return "UNKNOWN"
+
+
+def rendered_usage(limit: int = 20) -> Dict[str, Dict[str, int]]:
+    """Assets actually drawn in the last ``limit`` rendered videos, per provider and kind (from the rendered plans)."""
+    try:
+        import sqlite3
+        from backend.app.core.paths import DATABASE_PATH, MEDIA_PRODUCTIONS_DIR
+        from backend.app.rendering.pop_info.asset_manifest import audit_recent
+        c = sqlite3.connect(Path(DATABASE_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            jobs = [r[0] for r in c.execute("SELECT id FROM persistent_jobs WHERE status='COMPLETED' ORDER BY created_at DESC LIMIT ?", (limit,))]
+        finally:
+            c.close()
+        out: Dict[str, Dict[str, int]] = {}
+        for key, n in audit_recent(Path(MEDIA_PRODUCTIONS_DIR), jobs)["providers"].items():
+            prov, kind = key.rsplit(":", 1)
+            out.setdefault(prov, {})[kind] = out.setdefault(prov, {}).get(kind, 0) + n
+        return out
+    except Exception:
+        return {}
+
+
 def summary() -> Dict[str, Any]:
     rows = inventory()
+    usage = rendered_usage()
+    for r in rows:
+        name = str(r.get("name") or "")
+        is_media = any(m.lower() in name.lower() for m in MEDIA_PROVIDER_NAMES)
+        used = {k: v for prov, kinds in usage.items() for k, v in kinds.items()
+                if prov.lower().startswith(name.lower().split(" (")[0].split(" api")[0].strip())} if is_media else None
+        r["rendered_usage_last_20"] = used
+        r["state"] = state_335(r, (sum(used.values()) if used is not None else None))
     counts: Dict[str, int] = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1

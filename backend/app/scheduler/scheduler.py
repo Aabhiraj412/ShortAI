@@ -903,10 +903,17 @@ def reconcile_youtube_publications() -> Dict:
 def run_youtube_analytics_collection() -> Dict:
     try:
         from backend.app.services.youtube_analytics import AnalyticsCollector
-        return AnalyticsCollector().collect()
+        res = AnalyticsCollector().collect()
     except Exception as exc:
         logger.warning("[SCHEDULER] YouTube Analytics collection failed: %s", type(exc).__name__)
         return {"state": "failed", "error": type(exc).__name__}
+    try:   # Stage 3.35: refresh learning records and proposals (never applied) after each sync
+        from backend.app.creative_intel import learning
+        out = learning.run()
+        res["learning"] = {k: out["analysis"].get(k) for k in ("videos", "videos_first_7_days", "sufficiency")}
+    except Exception as exc:
+        logger.warning("[SCHEDULER] Learning refresh failed: %s", type(exc).__name__)
+    return res
 
 
 def run_junk_cleaner_dry_run() -> Dict:

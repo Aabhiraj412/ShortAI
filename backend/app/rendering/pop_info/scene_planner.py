@@ -560,6 +560,8 @@ def plan_scenes(*, job_id: str, topic_title: str, category: str, sections: Seque
             photo["treatment"] = next(t for t in wanted if t != prev_photo.get("treatment"))
             moves = [PHOTO_MOTIONS[(seed // 11 + i + k) % len(PHOTO_MOTIONS)] for k in range(len(PHOTO_MOTIONS))]
             photo["motion"] = next(m for m in moves if m != prev_photo.get("motion"))
+            if photo.get("footage"):     # Stage 3.35: real footage fills the frame; the clip itself is the motion
+                photo["treatment"], photo["motion"] = "full_bleed", "still"
         if is_first:
             transition = "iris_open"
         else:
