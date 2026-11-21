@@ -337,8 +337,9 @@ class CommunityService:
                              "start_local": d.start_utc.astimezone(tz).isoformat(), "end_utc": S.ts(d.end_utc),
                              "dst_note": d.note} for d in decisions],
                 "tick_interval_minutes": 5, "configured": configured,
-                "youtube_publishing": {"available": False, "note": "Publishing time is a future capability "
-                                       "(Stage 3.32F). Approved drafts are posted manually in YouTube Studio."}}
+                "youtube_publishing": {"available": False, "note": "This schedule only generates drafts. "
+                                       "Publishing is separate: an approved draft is published only after its own "
+                                       "authorization (API, when available) or through the manual handoff."}}
 
     def preview(self, timezone_name: str, generation_time: str, catch_up_hours: int = 12) -> Dict[str, Any]:
         """What a schedule WOULD do, without saving anything: next three target instants and DST notes."""
@@ -435,9 +436,16 @@ class CommunityService:
         """Called every 5 minutes by the existing scheduler daemon. Cheap when nothing is due; never raises.
         Before an operator has configured Stage 3.32E it does not touch the database at all."""
         try:
-            return self._tick()
+            out = self._tick()
         except Exception as exc:            # noqa: BLE001 - must never disturb the production scheduler
-            return {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+            out = {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        try:                                # Stage 3.32F: operator-authorized publications only; all gates re-checked
+            from backend.app.community import publishing as PUB
+            if PUB.tables_exist(self.db_path):
+                out["publishing_queue"] = PUB.PublishingService(self).process_queue()
+        except Exception as exc:            # noqa: BLE001
+            out["publishing_queue"] = {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        return out
 
     def _tick(self) -> Dict[str, Any]:
         if not self.store.tables_exist():
@@ -861,6 +869,13 @@ class CommunityService:
         if why:
             raise Conflict(why)
 
+    def _cancel_authorizations(self, draft_id: str, actor: str, why: str, version: Optional[int] = None) -> None:
+        from backend.app.community import publishing as PUB
+        if version is not None and int((self.store.get_draft(draft_id) or {}).get("version", -1)) != int(version):
+            return                          # a stale request fails its own version check and changes nothing
+        if PUB.tables_exist(self.db_path):
+            PUB.PublishingService(self).cancel_pending_for_draft(draft_id, actor, why)
+
     def _regeneration_quota(self) -> None:
         cfg = self.config()
         tz = self._tz(cfg)
@@ -881,6 +896,9 @@ class CommunityService:
         clean = V.sanitize_text(text)
         if not clean:
             raise BadRequest("text must not be empty")
+        if clean == (self.store.get_draft(draft_id) or {}).get("text"):
+            raise BadRequest("the text is unchanged")
+        self._cancel_authorizations(draft_id, _actor(op), "the text was edited; approval withdrawn", version)
         now = self.clock()
         with self.store.tx() as conn:
             cur = self.store.get_draft(draft_id, conn)
@@ -904,6 +922,7 @@ class CommunityService:
         if blocked:
             raise Blocked(blocked)
         self._regeneration_quota()
+        self._cancel_authorizations(draft_id, _actor(op), "the text is being regenerated; approval withdrawn", version)
         import time
         now = self.clock()
         with self.store.tx() as conn:
@@ -952,6 +971,7 @@ class CommunityService:
         if blocked:
             raise Blocked(blocked)
         self._regeneration_quota()
+        self._cancel_authorizations(draft_id, _actor(op), "the image is being regenerated; approval withdrawn", version)
         import time
         now = self.clock()
         previous = [i.get("source_ref") for i in self.store.images_for_draft(draft_id)]
@@ -1008,7 +1028,13 @@ class CommunityService:
                              detail={"validation_status": vs, "reason": reason,
                                      "acknowledged": [c["check"] for c in (val.get("warnings") or []) + (val.get("reviews") or [])],
                                      "image_sha256": img["sha256"], "text_fingerprint": d.get("text_fingerprint"),
-                                     "publishing": "none: Stage 3.32E approves drafts only and never publishes"})
+                                     "publishing": "none: approval never publishes; publication needs a separate "
+                                                   "authorization (Stage 3.32F)"})
+        try:
+            from backend.app.community import publishing as PUB
+            PUB.PublishingService(self).notify_after_approval(out["id"])
+        except Exception:                                    # noqa: BLE001 - never breaks the approval
+            pass
         return self.detail(out["id"])
 
     def reject(self, draft_id: str, operator: str, version: int, reason: str) -> Dict[str, Any]:
@@ -1034,6 +1060,7 @@ class CommunityService:
                                   expect_version=version)
             self.store.event(conn, "DRAFT_ARCHIVED", _actor(op), now, draft_id=draft_id,
                              detail={"reason": (reason or "").strip()[:500]})
+        self._cancel_authorizations(draft_id, _actor(op), "the draft was archived")
         return self.detail(draft_id)
 
     # -- reads ----------------------------------------------------------------------------------------------------
@@ -1047,7 +1074,16 @@ class CommunityService:
         out["approvable"] = d["status"] == S.READY_FOR_REVIEW and d.get("validation_status") in (
             S.VALID, S.VALID_WITH_WARNINGS, S.NEEDS_OPERATOR_REVIEW)
         out["needs_acknowledgement"] = d.get("validation_status") in (S.VALID_WITH_WARNINGS, S.NEEDS_OPERATOR_REVIEW)
+        out["lifecycle"] = self._lifecycle(d)
         return out
+
+    def _lifecycle(self, d: Dict[str, Any]) -> Dict[str, Any]:
+        from backend.app.community import publishing as PUB
+        pub = None
+        if d.get("status") == S.APPROVED and PUB.tables_exist(self.db_path):
+            with self.store.read() as conn:
+                pub = PUB.latest_publication(conn, d["id"])
+        return PUB.lifecycle(d, pub)
 
     def detail(self, draft_id: str) -> Dict[str, Any]:
         d = self._draft(draft_id)
@@ -1074,8 +1110,9 @@ class CommunityService:
                 "active_drafts": active, "notifications": self.store.notifications(10),
                 "formats": [{"id": f, "label": C.FORMAT_LABELS[f]} for f in C.FORMATS],
                 "publishing": {"available": False,
-                               "note": "Stage 3.32E never publishes. Approved drafts are posted manually in YouTube "
-                                       "Studio; API publishing is Stage 3.32F (blocked on posts API access)."}}
+                               "note": "Draft generation and approval never publish. Publishing is a separate, "
+                                       "explicitly authorized step (Publishing readiness below); while the YouTube "
+                                       "posts API is unavailable, approved drafts use the manual handoff."}}
 
     def history(self, limit: int = 50) -> Dict[str, Any]:
         return {"runs": self.store.list_runs(limit=limit), "events": self.store.events(None, limit)}

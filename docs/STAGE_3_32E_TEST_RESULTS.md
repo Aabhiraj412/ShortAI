@@ -314,3 +314,17 @@ No test was weakened.
 | **Full suite** | **1668 passed, 5 failed, 173 skipped** (26 min 49 s, under concurrent production load) |
 
 **Failures:** the same 5 as §13: 4 baseline plus the timing-sensitive dashboard test. Discovery tests take the same time on the old and new code (31.2 s against 31.2 s for the slowest), so the pacing does not slow the suite.
+
+## 15. Stage 3.32F completion: Community publishing workflow (2026-11-22)
+
+| Suite | Result |
+|---|---|
+| `test_community_publishing_queue_332f.py` (new) | 39 passed |
+| Community and dashboard suites (3.32E, 3.32F, schedule, dashboard, autonomy) | 327 passed and 6 skipped before the allowlist fix; then both corrected tests passed |
+| **Full suite** | **1707 passed, 5 failed, 173 skipped** (28 min 57 s) |
+
+**Failures:** the same 5 known failures as §13 and §14.
+
+**Existing tests changed:**
+- `test_community_publishing_332f.py::test_definitive_failures_and_quota`: quota and timeout now expect `RETRY_PENDING` with a next attempt time, because the milestone requires bounded automatic retries. Definitive errors still expect `FAILED`.
+- `test_community_posts_332e.py`: the route allowlist grows from 27 to 29 with exactly the two new routes. The publish route list and the no-upload/no-delete checks are unchanged.

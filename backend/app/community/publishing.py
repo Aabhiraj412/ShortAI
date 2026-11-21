@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -40,8 +40,31 @@ MAX_IMAGE_BYTES = 16 * 1024 * 1024
 REQUESTED, IMAGE_UPLOADED, INSERTING = "REQUESTED", "IMAGE_UPLOADED", "INSERTING"
 PUBLISHED, FAILED, UNCERTAIN = "PUBLISHED", "FAILED", "UNCERTAIN"
 HANDOFF_PREPARED, MANUAL_REPORTED, HANDOFF_CANCELLED = "HANDOFF_PREPARED", "MANUAL_REPORTED_POSTED", "HANDOFF_CANCELLED"
+# Stage 3.32F completion: local publishing queue, bounded automatic retries, reauthorization, cancellation
+QUEUED, RETRY_PENDING, REQUIRES_REAUTH, CANCELLED = "QUEUED", "RETRY_PENDING", "REQUIRES_REAUTHORIZATION", "CANCELLED"
+IN_FLIGHT = (REQUESTED, IMAGE_UPLOADED, INSERTING)
 LIVE = (REQUESTED, IMAGE_UPLOADED, INSERTING, UNCERTAIN, PUBLISHED)     # an API publication occupies the draft
+PENDING = (QUEUED, RETRY_PENDING, REQUIRES_REAUTH)                    # authorized, not yet sent; cancelled by edits
+ACTIVE_API = PENDING + LIVE                                           # at most one per draft (unique index)
 LOCKS_DRAFT = (REQUESTED, IMAGE_UPLOADED, INSERTING, UNCERTAIN, PUBLISHED, MANUAL_REPORTED)
+RESTARTABLE = (FAILED, RETRY_PENDING, REQUIRES_REAUTH, CANCELLED, QUEUED)   # explicit "publish now" may reuse the row
+MAX_ATTEMPTS = 3                                                      # executions per authorization (1 + 2 retries)
+RETRY_BACKOFF = (timedelta(minutes=5), timedelta(minutes=30), timedelta(hours=2))
+STALE_AFTER = timedelta(minutes=15)                                   # an in-flight row older than this was interrupted
+MAX_SCHEDULE_AHEAD = timedelta(days=30)
+QUEUE_ACTOR = "system:community-publish-queue"
+AUTH_REASONS = {"authRequired", "notConnected", "invalid_grant", "unauthorized", "authError",
+                "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficientPermissions"}
+RETRY_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "backendError", "internalError",
+                 "timeout", "network", "RESOURCE_EXHAUSTED"}
+
+# Workflow (lifecycle) states shown to the operator: one per draft, derived from the draft and its latest publication.
+LC_DRAFT, LC_VALIDATED, LC_APPROVED, LC_QUEUED, LC_PUBLISHING, LC_PUBLISHED = (
+    "DRAFT", "VALIDATED", "APPROVED", "QUEUED", "PUBLISHING", "PUBLISHED")
+LC_FAILED, LC_RETRY, LC_CANCELLED, LC_REAUTH, LC_MANUAL, LC_REJECTED = (
+    "FAILED", "RETRY_PENDING", "CANCELLED", "REQUIRES_REAUTHORIZATION", "MANUAL_HANDOFF", "REJECTED")
+LIFECYCLE_STATES = (LC_DRAFT, LC_VALIDATED, LC_APPROVED, LC_QUEUED, LC_PUBLISHING, LC_PUBLISHED, LC_FAILED, LC_RETRY,
+                    LC_CANCELLED, LC_REAUTH, LC_MANUAL, LC_REJECTED)
 
 MANUAL_STEPS = [
     "Download the image and copy the text below.",
@@ -80,12 +103,19 @@ CREATE TABLE IF NOT EXISTS community_publications (
     error TEXT,
     requested_by TEXT NOT NULL,
     created_at_utc TEXT NOT NULL,
-    updated_at_utc TEXT NOT NULL
+    updated_at_utc TEXT NOT NULL,
+    publish_at_utc TEXT,
+    next_attempt_at_utc TEXT,
+    blocked_reason TEXT,
+    authorized_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_community_pub_draft ON community_publications (draft_id, status);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_community_pub_live_api ON community_publications (draft_id)
-    WHERE mode = 'api' AND status IN ('REQUESTED','IMAGE_UPLOADED','INSERTING','UNCERTAIN','PUBLISHED');
 """
+NEW_COLUMNS = ("publish_at_utc", "next_attempt_at_utc", "blocked_reason", "authorized_by")
+ACTIVE_INDEX = ("CREATE UNIQUE INDEX IF NOT EXISTS uq_community_pub_active_api ON community_publications (draft_id) "
+                "WHERE mode = 'api' AND status IN (%s)" % ",".join(f"'{s}'" for s in (
+                    "QUEUED", "RETRY_PENDING", "REQUIRES_REAUTHORIZATION", "REQUESTED", "IMAGE_UPLOADED", "INSERTING",
+                    "UNCERTAIN", "PUBLISHED")))
 TABLES = ("community_capability_checks", "community_publications")
 
 
@@ -121,6 +151,69 @@ def tables_exist(db_path: str) -> bool:
         return False
     finally:
         conn.close()
+
+
+def failure_status(exc: Any, stage: str) -> str:
+    """Where a failed attempt goes. Authentication problems stop and ask for reauthorization; an insert whose outcome
+    is unknown is UNCERTAIN and never retried; quota, rate limits, 5xx and network trouble are retried with backoff;
+    anything else is a definitive failure."""
+    status, reason = getattr(exc, "status", None), getattr(exc, "reason", "") or ""
+    if status == 401 or reason in AUTH_REASONS:
+        return REQUIRES_REAUTH
+    if stage == "insert" and getattr(exc, "ambiguous", False):
+        return UNCERTAIN
+    if reason in RETRY_REASONS or status == 429 or (status or 0) >= 500:
+        return RETRY_PENDING
+    return FAILED
+
+
+def lifecycle(draft: Optional[Dict[str, Any]], pub: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The single workflow state of a draft: DRAFT > VALIDATED > APPROVED > QUEUED > PUBLISHING > PUBLISHED, or
+    FAILED / RETRY_PENDING / CANCELLED / REQUIRES_REAUTHORIZATION / MANUAL_HANDOFF / REJECTED. A manual handoff is
+    never reported as PUBLISHED: an operator-reported post stays MANUAL_HANDOFF with ``handoff_completed``."""
+    if not draft:
+        return {"state": LC_DRAFT}
+    st = draft.get("status")
+    if st in S.IN_PROGRESS or st in S.FAILED_STATES:
+        return {"state": LC_DRAFT, "detail": st}
+    if st == S.READY_FOR_REVIEW:
+        return {"state": LC_VALIDATED, "detail": draft.get("validation_status")}
+    if st == S.REJECTED:
+        return {"state": LC_REJECTED}
+    if st in (S.ARCHIVED, S.CANCELLED):
+        return {"state": LC_CANCELLED, "detail": st}
+    ps = (pub or {}).get("status")
+    if not pub or ps in (HANDOFF_CANCELLED, CANCELLED):
+        return {"state": LC_APPROVED, "detail": "approved; not queued or published"}
+    if ps == QUEUED:
+        return {"state": LC_QUEUED, "publish_at_utc": pub.get("publish_at_utc"), "blocked_reason": pub.get("blocked_reason")}
+    if ps in IN_FLIGHT:
+        return {"state": LC_PUBLISHING, "detail": ps}
+    if ps == UNCERTAIN:
+        return {"state": LC_PUBLISHING, "detail": "outcome uncertain: reconcile before anything else", "uncertain": True}
+    if ps == PUBLISHED:
+        return {"state": LC_PUBLISHED, "post_url": pub.get("post_url"), "verified": True}
+    if ps == RETRY_PENDING:
+        return {"state": LC_RETRY, "next_attempt_at_utc": pub.get("next_attempt_at_utc")}
+    if ps == REQUIRES_REAUTH:
+        return {"state": LC_REAUTH}
+    if ps == FAILED:
+        return {"state": LC_FAILED}
+    if ps == HANDOFF_PREPARED:
+        return {"state": LC_MANUAL, "handoff_completed": False}
+    if ps == MANUAL_REPORTED:
+        return {"state": LC_MANUAL, "handoff_completed": True, "verified": False}
+    return {"state": LC_APPROVED}
+
+
+def latest_publication(conn: sqlite3.Connection, draft_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        conn.row_factory = sqlite3.Row
+        r = conn.execute("SELECT * FROM community_publications WHERE draft_id=? ORDER BY updated_at_utc DESC, "
+                         "created_at_utc DESC LIMIT 1", (draft_id,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return dict(r) if r else None
 
 
 def lock_reason(conn: sqlite3.Connection, draft_id: str) -> Optional[str]:
@@ -189,6 +282,13 @@ class PublishingService:
         conn = sqlite3.connect(Path(self.db_path).resolve().as_uri() + "?mode=rw", uri=True, timeout=5.0)
         try:
             conn.executescript(SCHEMA)
+            have = {r[1] for r in conn.execute("PRAGMA table_info(community_publications)")}
+            for col in NEW_COLUMNS:                                   # additive: rows and history are untouched
+                if col not in have:
+                    conn.execute(f"ALTER TABLE community_publications ADD COLUMN {col} TEXT")
+            conn.execute("DROP INDEX IF EXISTS uq_community_pub_live_api")   # superseded: also covers queued rows
+            conn.execute(ACTIVE_INDEX)
+            conn.commit()
         finally:
             conn.close()
 
@@ -398,18 +498,20 @@ class PublishingService:
             if n >= DAILY_API_PUBLISH_LIMIT:
                 raise S.Conflict(f"daily API publication limit reached ({DAILY_API_PUBLISH_LIMIT})")
             existing = conn.execute("SELECT id, status FROM community_publications WHERE idem_key=?", (key,)).fetchone()
-            if existing and existing[1] != FAILED:
+            if existing and existing[1] not in RESTARTABLE:
                 raise S.Conflict(f"this approved draft already has publication {existing[0]} ({existing[1]})")
             pid = existing[0] if existing else S.new_id("cpub")
             try:
-                if existing:
-                    self._update(conn, pid, now, expect=(FAILED,), status=REQUESTED, error=None)   # explicit retry
+                if existing:                                            # explicit "publish now" by the operator
+                    self._update(conn, pid, now, expect=RESTARTABLE, status=REQUESTED, error=None,
+                                 next_attempt_at_utc=None, blocked_reason=None, authorized_by=_actor(op),
+                                 **({"attempts": 0} if existing[1] in (CANCELLED, QUEUED, REQUIRES_REAUTH) else {}))
                 else:
                     conn.execute("INSERT INTO community_publications (id, draft_id, mode, idem_key, status, text_fingerprint, "
-                                 "image_sha256, image_id, attempts, requested_by, created_at_utc, updated_at_utc) "
-                                 "VALUES (?,?,?,?,?,?,?,?,0,?,?,?)", (pid, draft_id, "api", key, REQUESTED,
-                                                                      d["text_fingerprint"], img["sha256"], img["id"],
-                                                                      _actor(op), S.ts(now), S.ts(now)))
+                                 "image_sha256, image_id, attempts, requested_by, created_at_utc, updated_at_utc, "
+                                 "authorized_by) VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?)",
+                                 (pid, draft_id, "api", key, REQUESTED, d["text_fingerprint"], img["sha256"], img["id"],
+                                  _actor(op), S.ts(now), S.ts(now), _actor(op)))
             except sqlite3.IntegrityError as exc:
                 raise S.Conflict("another API publication for this draft is in progress or done") from exc
             self.store.event(conn, "PUBLISH_REQUESTED", _actor(op), now, draft_id=draft_id,
@@ -418,40 +520,64 @@ class PublishingService:
         return self._run_publication(pid, d, img, _actor(op))
 
     def _run_publication(self, pid: str, d: Dict[str, Any], img: Dict[str, Any], actor: str) -> Dict[str, Any]:
-        from backend.app.community.youtube_posts import ApiError
-        api = self._api(self._credentials())
+        from backend.app.community.youtube_posts import ApiError, NotConnected
+        with self.store.tx() as conn:                            # one attempt per execution (bounded retries)
+            self._update(conn, pid, self.c.clock(), expect=(REQUESTED,),
+                         attempts=int(conn.execute("SELECT attempts FROM community_publications WHERE id=?",
+                                                   (pid,)).fetchone()[0]) + 1)
         cap = self.latest_capability() or {}
         channel = (cap.get("details") or {}).get("channel_id")
-        now = self.c.clock()
         try:
+            api = self._api(self._credentials())
             if not channel:
                 raise ApiError(None, "noChannel", "the capability check recorded no channel id")
             token = api.image_upload(channel, self.c._image_path(img), "image/jpeg")
             with self.store.tx() as conn:
                 self._update(conn, pid, self.c.clock(), expect=(REQUESTED,), status=IMAGE_UPLOADED)
-        except ApiError as exc:                                  # nothing was posted: a definitive failure
-            return self._finish(pid, d["id"], FAILED, actor, error=exc.public(), stage="image_upload")
+        except ApiError as exc:                                  # nothing was posted
+            return self._failed(pid, d["id"], actor, exc, "image_upload")
+        except NotConnected as exc:
+            return self._failed(pid, d["id"], actor, ApiError(None, "notConnected", str(exc)), "image_upload")
+        except Exception as exc:                                 # noqa: BLE001 - never leave a row stuck mid-flight
+            return self._finish(pid, d["id"], FAILED, actor, stage="image_upload",
+                                error={"http_status": None, "reason": "internal", "message": type(exc).__name__,
+                                       "ambiguous": False})
         with self.store.tx() as conn:
             self._update(conn, pid, self.c.clock(), expect=(IMAGE_UPLOADED,), status=INSERTING,
-                         attempts=int(conn.execute("SELECT attempts FROM community_publications WHERE id=?",
-                                                   (pid,)).fetchone()[0]) + 1,
                          request={"channel_id": channel, "text_fingerprint": d["text_fingerprint"],
                                   "image_sha256": img["sha256"], "images": 1, "sent_at_utc": S.ts(self.c.clock())})
         try:
             post = api.insert(channel, d["text"], [token])
         except ApiError as exc:
-            return self._finish(pid, d["id"], UNCERTAIN if exc.ambiguous else FAILED, actor, error=exc.public(),
-                                stage="insert")
+            return self._failed(pid, d["id"], actor, exc, "insert")
+        except Exception as exc:                                 # noqa: BLE001 - the request may have been sent
+            return self._finish(pid, d["id"], UNCERTAIN, actor, stage="insert",
+                                error={"http_status": None, "reason": "internal", "message": type(exc).__name__,
+                                       "ambiguous": True})
         post_id = str(post.get("id"))
         return self._finish(pid, d["id"], PUBLISHED, actor, response={"id": post_id, "status": post.get("status"),
                                                                      "publishTime": (post.get("snippet") or {}).get("publishTime")},
                             post_id=post_id)
 
+    def _failed(self, pid: str, draft_id: str, actor: str, exc: Any, stage: str) -> Dict[str, Any]:
+        status = failure_status(exc, stage)
+        extra: Dict[str, Any] = {}
+        if status == RETRY_PENDING:
+            with self.store.read() as conn:
+                attempts = int(conn.execute("SELECT attempts FROM community_publications WHERE id=?", (pid,)).fetchone()[0])
+            if attempts >= MAX_ATTEMPTS:
+                status, extra = FAILED, {"retries_exhausted": True}
+            else:
+                extra = {"next_attempt_at_utc": S.ts(self.c.clock() + RETRY_BACKOFF[min(attempts, len(RETRY_BACKOFF)) - 1])}
+        return self._finish(pid, draft_id, status, actor, error={**exc.public(), **({"retries_exhausted": True}
+                                                                                    if extra.get("retries_exhausted") else {})},
+                            stage=stage, next_attempt_at_utc=extra.get("next_attempt_at_utc"))
+
     def _finish(self, pid: str, draft_id: str, status: str, actor: str, *, error: Optional[Dict[str, Any]] = None,
                 response: Optional[Dict[str, Any]] = None, post_id: Optional[str] = None,
-                stage: Optional[str] = None) -> Dict[str, Any]:
+                stage: Optional[str] = None, next_attempt_at_utc: Optional[str] = None) -> Dict[str, Any]:
         now = self.c.clock()
-        fields: Dict[str, Any] = {"status": status}
+        fields: Dict[str, Any] = {"status": status, "next_attempt_at_utc": next_attempt_at_utc, "blocked_reason": None}
         if error is not None:
             fields["error"] = _dumps({**error, "stage": stage})
         if response is not None:
@@ -461,13 +587,230 @@ class PublishingService:
         with self.store.tx() as conn:
             self._update(conn, pid, now, **fields)
             self.store.event(conn, {PUBLISHED: "PUBLISH_SUCCEEDED", FAILED: "PUBLISH_FAILED",
-                                    UNCERTAIN: "PUBLISH_UNCERTAIN"}[status], actor, now, draft_id=draft_id,
-                             detail={"publication_id": pid, "post_id": post_id, "error": error, "stage": stage})
+                                    UNCERTAIN: "PUBLISH_UNCERTAIN", RETRY_PENDING: "PUBLISH_RETRY_SCHEDULED",
+                                    REQUIRES_REAUTH: "PUBLISH_REAUTHORIZATION_REQUIRED"}[status], actor, now,
+                             draft_id=draft_id, detail={"publication_id": pid, "post_id": post_id, "error": error,
+                                                        "stage": stage, "next_attempt_at_utc": next_attempt_at_utc})
+        reason = (error or {}).get("reason")
         if status == UNCERTAIN:
             self.c._notify("publish_uncertain", "Community post outcome unknown",
                            "The publish request may have reached YouTube but no answer arrived. It will not be retried; "
                            "reconcile it in the dashboard before doing anything else.", "high", draft_id)
+        elif status == PUBLISHED:
+            self.c._notify("publish_succeeded", "Community post published",
+                           f"The approved Community post was published on YouTube (post {post_id}).", "info", draft_id)
+        elif status == RETRY_PENDING:
+            self.c._notify("publish_failed", "Community post publishing failed; will retry",
+                           f"YouTube refused or did not answer ({reason}). A bounded automatic retry is scheduled for "
+                           f"{next_attempt_at_utc} (UTC); every check is repeated first.", "medium", draft_id)
+        elif status == REQUIRES_REAUTH:
+            self.c._notify("auth_failure", "YouTube authorization needed for Community publishing",
+                           f"Publishing stopped: the YouTube credentials were refused ({reason}). Nothing is retried "
+                           "until the account is reauthorized; the approved post stays available for the manual handoff.",
+                           "high", draft_id)
+        elif status == FAILED:
+            self.c._notify("publish_failed", "Community post publishing failed",
+                           f"The post was not published ({reason}). It stays approved: retry explicitly or use the "
+                           "manual handoff.", "high", draft_id)
         return self.publication(pid)
+
+    # -- local publishing queue (Stage 3.32F completion) ------------------------------------------------------------
+    def authorize(self, draft_id: str, operator: Optional[str], version: int, confirm: bool = False,
+                  publish_at: Optional[str] = None) -> Dict[str, Any]:
+        """Publication authorization, separate from draft approval: queues ONE approved draft for API publication at
+        ``publish_at`` (ISO time; naive values are in the Community timezone; default: as soon as possible). The
+        official API cannot schedule posts, so the local queue sends it at that time, after re-checking every gate.
+        Refused (fail closed) unless API publishing is enabled and ready today."""
+        from backend.app.community.service import BadRequest, _actor, _validate_operator
+        op = _validate_operator(operator)
+        if confirm is not True:
+            raise BadRequest("authorizing publication needs confirm=true: the post becomes public at the queued time")
+        d = self.c._draft(draft_id)
+        if int(d["version"]) != int(version):
+            raise S.Conflict("the draft changed since it was loaded; reload and try again")
+        failed = [g for g in self.gates(draft_id) if not g["ok"]]
+        if failed:
+            raise PublishingDisabled("queueing refused (fail closed): " +
+                                     "; ".join(f"{g['gate']} ({g['detail']})" for g in failed) +
+                                     ". Use the manual handoff while API publishing is unavailable.")
+        now = self.c.clock()
+        when = now
+        if publish_at not in (None, ""):
+            try:
+                when = datetime.fromisoformat(str(publish_at).replace("Z", "+00:00"))
+            except ValueError:
+                raise BadRequest("publish_at must be an ISO date-time") from None
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=self.c._tz(self.c.config()))
+            when = when.astimezone(timezone.utc)
+            if when < now - timedelta(minutes=1):
+                raise BadRequest("publish_at is in the past")
+            if when > now + MAX_SCHEDULE_AHEAD:
+                raise BadRequest(f"publish_at must be within {MAX_SCHEDULE_AHEAD.days} days")
+        img = self.store.get_image(d["image_id"])
+        key = f"api:{draft_id}:{d['text_fingerprint']}:{img['sha256']}"
+        self._ensure()
+        with self.store.tx() as conn:
+            existing = conn.execute("SELECT id, status FROM community_publications WHERE idem_key=?", (key,)).fetchone()
+            if existing and existing[1] not in (FAILED, CANCELLED):
+                raise S.Conflict(f"this approved draft already has publication {existing[0]} ({existing[1]})")
+            pid = existing[0] if existing else S.new_id("cpub")
+            try:
+                if existing:
+                    self._update(conn, pid, now, expect=(FAILED, CANCELLED), status=QUEUED, error=None, attempts=0,
+                                 publish_at_utc=S.ts(when), next_attempt_at_utc=None, blocked_reason=None,
+                                 authorized_by=_actor(op))
+                else:
+                    conn.execute("INSERT INTO community_publications (id, draft_id, mode, idem_key, status, text_fingerprint, "
+                                 "image_sha256, image_id, attempts, requested_by, created_at_utc, updated_at_utc, "
+                                 "publish_at_utc, authorized_by) VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?)",
+                                 (pid, draft_id, "api", key, QUEUED, d["text_fingerprint"], img["sha256"], img["id"],
+                                  _actor(op), S.ts(now), S.ts(now), S.ts(when), _actor(op)))
+            except sqlite3.IntegrityError as exc:
+                raise S.Conflict("another API publication for this draft is queued, in progress or done") from exc
+            self.store.event(conn, "PUBLICATION_AUTHORIZED", _actor(op), now, draft_id=draft_id,
+                             detail={"publication_id": pid, "publish_at_utc": S.ts(when),
+                                     "text_fingerprint": d["text_fingerprint"], "image_sha256": img["sha256"]})
+        return self.publication(pid)
+
+    def cancel_publication(self, pid: str, operator: Optional[str], reason: str = "") -> Dict[str, Any]:
+        from backend.app.community.service import _actor, _validate_operator
+        op = _validate_operator(operator)
+        pub = self.publication(pid)
+        if pub["mode"] != "api" or pub["status"] not in PENDING + (FAILED,):
+            raise S.Conflict(f"only a queued, retry-pending, reauthorization-pending or failed API publication can be "
+                             f"cancelled (this one is {pub['mode']} {pub['status']})")
+        now = self.c.clock()
+        with self.store.tx() as conn:
+            self._update(conn, pid, now, expect=PENDING + (FAILED,), status=CANCELLED, next_attempt_at_utc=None,
+                         blocked_reason=None)
+            self.store.event(conn, "PUBLICATION_CANCELLED", _actor(op), now, draft_id=pub["draft_id"],
+                             detail={"publication_id": pid, "previous_status": pub["status"],
+                                     "reason": (reason or "").strip()[:300]})
+        return self.publication(pid)
+
+    def cancel_pending_for_draft(self, draft_id: str, actor: str, reason: str) -> int:
+        """An edit, regeneration or archive withdraws approval, so any authorization for the old content ends."""
+        if not self._ready():
+            return 0
+        now = self.c.clock()
+        n = 0
+        with self.store.tx() as conn:
+            rows = conn.execute("SELECT id, status FROM community_publications WHERE draft_id=? AND status IN (%s)"
+                                % ",".join("?" * len(PENDING)), (draft_id, *PENDING)).fetchall()
+            for pid, st in rows:
+                self._update(conn, pid, now, expect=PENDING, status=CANCELLED, next_attempt_at_utc=None,
+                             blocked_reason=None)
+                self.store.event(conn, "PUBLICATION_CANCELLED", actor, now, draft_id=draft_id,
+                                 detail={"publication_id": pid, "previous_status": st, "reason": reason})
+                n += 1
+        return n
+
+    def recover_interrupted(self) -> Dict[str, int]:
+        """After a crash or restart: a row stuck before the insert was sent is safely retryable (an unused image
+        upload token is harmless); a row stuck while inserting may have been published and becomes UNCERTAIN."""
+        out = {"retry": 0, "uncertain": 0}
+        if not self._ready():
+            return out
+        now = self.c.clock()
+        cutoff = S.ts(now - STALE_AFTER)
+        with self.store.read() as conn:
+            rows = conn.execute("SELECT id, draft_id, status, attempts FROM community_publications WHERE mode='api' AND "
+                                "status IN (?,?,?) AND updated_at_utc < ?", (*IN_FLIGHT, cutoff)).fetchall()
+        for pid, draft_id, st, attempts in rows:
+            if st == INSERTING:
+                self._finish(pid, draft_id, UNCERTAIN, QUEUE_ACTOR, stage="insert",
+                             error={"http_status": None, "reason": "interrupted", "ambiguous": True,
+                                    "message": "the process stopped while the insert request was in flight"})
+                out["uncertain"] += 1
+            else:
+                retry = int(attempts) < MAX_ATTEMPTS
+                self._finish(pid, draft_id, RETRY_PENDING if retry else FAILED, QUEUE_ACTOR, stage="image_upload",
+                             error={"http_status": None, "reason": "interrupted", "ambiguous": False,
+                                    "message": "the process stopped before the post was sent"},
+                             next_attempt_at_utc=S.ts(now) if retry else None)
+                out["retry"] += 1
+        return out
+
+    def process_queue(self) -> Dict[str, Any]:
+        """Called by the scheduler tick. Sends at most ONE due, operator-authorized publication per tick, and only
+        when every gate passes again; otherwise records why it waits. Never creates an authorization itself."""
+        if not self._ready():
+            return {"status": "not_configured"}
+        self._ensure()
+        recovered = self.recover_interrupted()
+        now = self.c.clock()
+        with self.store.read() as conn:
+            due = conn.execute("SELECT id, draft_id, status FROM community_publications WHERE mode='api' AND ("
+                               "(status=? AND COALESCE(publish_at_utc, created_at_utc) <= ?) OR "
+                               "(status=? AND COALESCE(next_attempt_at_utc, updated_at_utc) <= ?)) "
+                               "ORDER BY COALESCE(next_attempt_at_utc, publish_at_utc, created_at_utc) LIMIT 5",
+                               (QUEUED, S.ts(now), RETRY_PENDING, S.ts(now))).fetchall()
+        if not due:
+            return {"status": "idle", "recovered": recovered}
+        waiting = []
+        for pid, draft_id, st in due:
+            pub = self.publication(pid)
+            d = self.store.get_draft(draft_id)
+            gates = self.gates(draft_id)
+            bound = bool(d) and d.get("text_fingerprint") == pub["text_fingerprint"]
+            content_bad = [g for g in gates if g["gate"] in ("draft_approved", "content_matches_approval") and not g["ok"]]
+            if content_bad or not bound:
+                why = "; ".join(f"{g['gate']} ({g['detail']})" for g in content_bad) or "text differs from the authorization"
+                self.cancel_pending_for_draft(draft_id, QUEUE_ACTOR, f"authorization no longer valid: {why}")
+                self.c._notify("publish_failed", "Queued Community post cancelled",
+                               f"The queued post no longer matches what was approved and authorized ({why}). It was "
+                               "cancelled; nothing was published.", "medium", draft_id)
+                continue
+            blocked = [g for g in gates if not g["ok"]]
+            if not blocked:
+                tz = self.c._tz(self.c.config())
+                local = now.astimezone(tz)
+                midnight = datetime(local.year, local.month, local.day, tzinfo=tz)
+                with self.store.read() as conn:
+                    n = conn.execute("SELECT COUNT(*) FROM community_publications WHERE mode='api' AND updated_at_utc >= ? "
+                                     "AND status IN ('PUBLISHED','UNCERTAIN','INSERTING')", (S.ts(midnight),)).fetchone()[0]
+                if n >= DAILY_API_PUBLISH_LIMIT:
+                    blocked = [{"gate": "daily_limit", "detail": f"{DAILY_API_PUBLISH_LIMIT} API publications per day"}]
+            if blocked:
+                why = "; ".join(f"{g['gate']} ({g['detail']})" for g in blocked)[:300]
+                if pub.get("blocked_reason") != why:
+                    with self.store.tx() as conn:
+                        self._update(conn, pid, now, expect=(st,), blocked_reason=why)
+                waiting.append({"publication_id": pid, "blocked": why})
+                continue
+            try:
+                with self.store.tx() as conn:                    # claim (compare-and-set): never sent twice
+                    self._update(conn, pid, now, expect=(st,), status=REQUESTED, blocked_reason=None,
+                                 next_attempt_at_utc=None)
+                    self.store.event(conn, "PUBLISH_REQUESTED", QUEUE_ACTOR, now, draft_id=draft_id,
+                                     detail={"publication_id": pid, "from": st, "authorized_by": pub.get("authorized_by"),
+                                             "text_fingerprint": pub["text_fingerprint"], "image_sha256": pub["image_sha256"]})
+            except PublishingError:
+                continue
+            img = self.store.get_image(d["image_id"])
+            result = self._run_publication(pid, d, img, QUEUE_ACTOR)
+            return {"status": "processed", "publication": {k: result.get(k) for k in ("id", "status", "attempts")},
+                    "recovered": recovered}
+        return {"status": "waiting", "waiting": waiting, "recovered": recovered}
+
+    def notify_after_approval(self, draft_id: str) -> None:
+        """Approval never publishes. Tell the operator what happens next: publication awaits their separate
+        authorization, or (API unavailable) the manual handoff is required."""
+        try:
+            gates = self.gates()
+            if all(g["ok"] for g in gates):
+                self.c._notify("approved_awaiting_publication", "Approved Community post awaiting publication",
+                               "The draft is approved. It is NOT published: authorize publication (now or queued for a "
+                               "time) in the Community tab.", "info", draft_id)
+            else:
+                cap = self.latest_capability()
+                self.c._notify("manual_handoff_required", "Manual handoff required for an approved Community post",
+                               "The draft is approved but API publishing is unavailable "
+                               f"({(cap or {}).get('outcome', 'never checked')}). Use Manual handoff in the Community "
+                               "tab to copy the text and image into YouTube. Nothing has been published.", "info", draft_id)
+        except Exception:                                        # noqa: BLE001 - notifications never break approval
+            pass
 
     def reconcile(self, pid: str, operator: Optional[str] = None) -> Dict[str, Any]:
         """For an UNCERTAIN insert: look for a post with the same text on the channel (posts.list, read-only)."""
@@ -612,19 +955,41 @@ class PublishingService:
     def status(self) -> Dict[str, Any]:
         cap = self.latest_capability()
         pubs = self.publications(100)
-        done = {p["draft_id"] for p in pubs if p["status"] in (PUBLISHED, MANUAL_REPORTED)}
-        approved = [d for d in self.c.list_drafts(status=S.APPROVED, limit=50) if d["id"] not in done]
+        latest: Dict[str, Dict[str, Any]] = {}
+        for p in sorted(pubs, key=lambda x: (x.get("updated_at_utc") or "", x.get("created_at_utc") or "")):
+            latest[p["draft_id"]] = p
+        approved_all = self.c.list_drafts(status=S.APPROVED, limit=50)
+        approved = [d for d in approved_all if lifecycle(d, latest.get(d["id"]))["state"] == LC_APPROVED]
         gates = self.gates()
         api_ready = all(g["ok"] for g in gates)
+        counts = {s: 0 for s in LIFECYCLE_STATES}
+        for d in approved_all:
+            counts[lifecycle(d, latest.get(d["id"]))["state"]] += 1
+        api = [p for p in pubs if p["mode"] == "api"]
         return {
             "capability": cap, "publishing_enabled": self._enabled(), "api_publishing_ready": api_ready, "gates": gates,
             "approved_awaiting": [{"id": d["id"], "post_date": d["post_date"], "topic_title": d["topic_title"],
                                    "version": d["version"], "format_label": d.get("format_label")} for d in approved],
+            "lifecycle_counts": counts,
+            "queue": {
+                "queued": [p for p in api if p["status"] == QUEUED],
+                "publishing": [p for p in api if p["status"] in IN_FLIGHT + (UNCERTAIN,)],
+                "published": [p for p in api if p["status"] == PUBLISHED],
+                "failed": [p for p in api if p["status"] == FAILED],
+                "retry_pending": [p for p in api if p["status"] == RETRY_PENDING],
+                "requires_reauthorization": [p for p in api if p["status"] == REQUIRES_REAUTH],
+                "cancelled": [p for p in api if p["status"] == CANCELLED][:10],
+                "manual_handoffs": [p for p in pubs if p["mode"] == "manual"],
+            },
+            "retry_policy": {"max_attempts": MAX_ATTEMPTS, "backoff_minutes": [int(b.total_seconds() // 60) for b in RETRY_BACKOFF],
+                             "uncertain_is_never_retried": True},
             "published": [p for p in pubs if p["status"] == PUBLISHED],
-            "attention": [p for p in pubs if p["status"] in (UNCERTAIN, FAILED)],
+            "attention": [p for p in pubs if p["status"] in (UNCERTAIN, FAILED, REQUIRES_REAUTH, RETRY_PENDING)],
             "handoffs": [p for p in pubs if p["mode"] == "manual"],
-            "scheduling": {"api_can_schedule": False,
-                           "note": "posts.insert publishes publicly and immediately; scheduled posts are only possible "
-                                   "in the YouTube interface (Create > Create post > arrow next to Post > Schedule)."},
+            "scheduling": {"api_can_schedule": False, "local_queue": True,
+                           "note": "posts.insert publishes publicly and immediately; the API cannot schedule. A post can "
+                                   "be authorized for a later time: the local queue sends it then, after re-checking every "
+                                   "gate (only while API publishing is enabled). In the YouTube interface: Create > Create "
+                                   "post > arrow next to Post > Schedule."},
             "outcomes": list(OUTCOMES),
         }

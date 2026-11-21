@@ -1075,7 +1075,7 @@
           <div id="cmPreview" style="font-size:12px;margin-top:6px;">--</div>
           <div style="margin-top:10px;font-size:12px;color:var(--muted);">Permitted formats</div>
           <div class="cm-formats" id="cmFormats"></div>
-          <div class="btn-row" style="margin-top:10px;"><button class="btn sm primary" onclick="cmSaveSchedule()">Save schedule</button><span id="cmSchedNote" style="font-size:12px;color:var(--muted);"></span></div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm primary" id="cmSaveSchedule" onclick="cmSaveSchedule()" disabled>Save schedule</button><span id="cmSchedNote" style="font-size:12px;color:var(--muted);">Loading the saved settings...</span></div>
         </div>
         <div>
           <h3 style="font-size:14px;margin:0 0 8px;">Current schedule</h3>
@@ -1095,11 +1095,14 @@
       <h3 style="font-size:14px;margin:12px 0 6px;">Approved drafts awaiting publication</h3>
       <div id="cmPubAwaiting" style="font-size:13px;">--</div>
       <div id="cmHandoff" style="margin-top:10px;"></div>
+      <h3 style="font-size:14px;margin:12px 0 6px;">Publishing queue</h3>
+      <p class="card-desc" style="margin:0 0 6px;">APPROVED is not published. QUEUED means you authorized publication and the local queue will send it at the queued time, after re-checking every gate. Only PUBLISHED means YouTube accepted the post. A manual handoff is never shown as published.</p>
+      <div id="cmPubQueue" style="font-size:12px;overflow-x:auto;">--</div>
       <h3 style="font-size:14px;margin:12px 0 6px;">Publications and handoffs</h3>
       <div id="cmPubList" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
     <div class="card">
-      <div class="card-head"><div><h2 class="card-title">Notifications</h2><p class="card-desc">Draft ready and generation failures. Also sent to the operator inbox when Autonomy Control allows notifications.</p></div></div>
+      <div class="card-head"><div><h2 class="card-title">Notifications</h2><p class="card-desc">Draft ready, generation failures, approved posts awaiting publication or a manual handoff, publishing success and failure, and YouTube authorization problems. Also sent to the operator inbox when Autonomy Control allows notifications.</p></div></div>
       <div id="cmNotes" style="font-size:12px;">--</div>
     </div>
     <div class="card">
@@ -3487,7 +3490,7 @@ setInterval(() => refreshSelfHealing(), 120000);   // only loads while the Self-
 
 // Stage 3.32E Community Posts. Loads only while the tab is open. Every write sends the operator identity, the
 // per-process CSRF token and the draft version it was shown (stale views are refused with 409). Nothing publishes.
-const cmState = { formats: [], drafts: {}, editing: new Set(), options: {}, open: null, busy: false };
+const cmState = { formats: [], drafts: {}, editing: new Set(), options: {}, open: null, busy: false, loaded: false };
 const CM_VALID = { VALID: "#86efac", VALID_WITH_WARNINGS: "#fcd34d", NEEDS_OPERATOR_REVIEW: "#fdba74", REJECTED: "#fca5a5" };
 const CM_STATUS = { READY_FOR_REVIEW: "#fcd34d", APPROVED: "#86efac", REJECTED: "#fca5a5", ARCHIVED: "var(--muted)",
   GENERATION_FAILED: "#fca5a5", IMAGE_FAILED: "#fca5a5", VALIDATION_FAILED: "#fca5a5", CANCELLED: "var(--muted)" };
@@ -3538,8 +3541,9 @@ function cmDraftCard(d, detail) {
     + (d.image_url ? `<img src="${escHtml(d.image_url)}?v=${ver}" alt="Draft image" loading="lazy" />` : `<div class="cm-noimg">${d.status === "IMAGE_FAILED" ? "Image needs attention" : "No image yet"}</div>`)
     + `<div><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">`
     + `<div><strong>${escHtml(d.post_date)}</strong> · ${escHtml(d.format_label || d.format || "no format")} · <span style="color:${CM_STATUS[d.status] || "inherit"}">${escHtml(d.status)}</span>`
-    + (d.validation_status ? ` · <span class="ops-tag" style="color:${CM_VALID[d.validation_status] || "inherit"}">${escHtml(d.validation_status)}</span>` : "") + `</div>`
-    + `<div style="color:var(--muted);font-size:12px;">${escHtml(d.char_count)} chars · v${ver} · ${cmLocal(d.created_at_utc)}</div></div>`
+    + (d.validation_status ? ` · <span class="ops-tag" style="color:${CM_VALID[d.validation_status] || "inherit"}">${escHtml(d.validation_status)}</span>` : "")
+    + (d.lifecycle ? ` · ${cmLifeBadge(d.lifecycle)}` : "") + `</div>`
+    + `<div style="color:var(--muted);font-size:12px;">${escHtml(d.char_count)} chars · v${ver} · created ${cmLocal(d.created_at_utc)} · modified ${cmLocal(d.updated_at_utc)}</div></div>`
     + `<div style="color:var(--muted);font-size:12px;">Topic: ${escHtml(d.topic_title || "n/a")} · ${escHtml(d.category || "")} · source ${escHtml(d.source_kind || "")} ${escHtml(d.source_ref || "")}${gen.answer ? ` · quiz answer: <strong>${escHtml(gen.answer)}</strong> (${escHtml(gen.answer_value)})` : ""}</div>`
     + (editing ? `<textarea id="cmEdit_${id}" maxlength="2000">${escHtml(d.text || "")}</textarea>` : `<div class="cm-text">${escHtml(d.text || "(no text)")}</div>`)
     + (d.status_reason ? `<div style="color:#fca5a5;font-size:12px;">${escHtml(d.status_reason)}</div>` : "")
@@ -3609,7 +3613,9 @@ async function refreshCommunity(force = false) {
     document.getElementById("cmFailed").textContent = c.failed_drafts ?? 0;
     document.getElementById("cmFailedSub").textContent = `${c.failed_runs || 0} failed or abandoned run(s)`;
     meta.innerHTML = `${escHtml((ov.publishing || {}).note || "")}` + (s.configured ? "" : ` · <span style="color:#fcd34d;">Not configured yet: nothing runs until you save the schedule or generate a draft.</span>`);
-    if (!document.activeElement || !document.activeElement.closest || !document.activeElement.closest(".cm-grid-settings, #cmFormats")) {
+    // First load always fills the editor from the server (before that it shows blank defaults and cannot be saved);
+    // later refreshes skip it while the operator is editing a field.
+    if (!cmState.loaded || !document.activeElement || !document.activeElement.closest || !document.activeElement.closest(".cm-grid-settings, #cmFormats")) {
       document.getElementById("cmEnabled").checked = !!cfg.enabled;
       document.getElementById("cmPaused").checked = !!cfg.paused;
       document.getElementById("cmKill").checked = !!cfg.kill_switch;
@@ -3626,7 +3632,9 @@ async function refreshCommunity(force = false) {
     }
     const hf = document.getElementById("cmHFormat");
     if (hf && hf.options.length <= 1) cmState.formats.forEach(f => { const o = document.createElement("option"); o.value = f.id; o.textContent = f.label; hf.appendChild(o); });
-    document.getElementById("cmSchedNote").textContent = ks.length ? `Kill switch: ${ks.join(", ")}` : "";
+    cmState.loaded = true;
+    document.getElementById("cmSaveSchedule").disabled = false;
+    document.getElementById("cmSchedNote").textContent = ks.length ? `Kill switch ACTIVE: ${ks.join(", ")}` : `Saved settings loaded · kill switch off${cfg.paused ? " · automation paused" : ""}`;
     const notes = ov.notifications || [];
     document.getElementById("cmNotes").innerHTML = notes.length ? notes.map(n => `<div style="margin-bottom:6px;"><span class="ops-tag">${escHtml(n.severity)}</span> <strong>${escHtml(n.subject)}</strong> · ${cmLocal(n.created_at_utc)} · ${escHtml(n.delivery)}<div style="color:var(--muted)">${escHtml(n.message)}</div></div>`).join("") : `<div style="color:var(--muted)">No notifications.</div>`;
     await cmRenderDrafts(ov.active_drafts || []);
@@ -3806,6 +3814,8 @@ function cmRenderSchedStatus(s) {
   const stateColour = { blocked: "#fca5a5", due: "#fcd34d", running: "#93c5fd", retry_pending: "#fcd34d", completed: "#86efac", waiting: "inherit", missed: "#fca5a5", not_enabled_yet: "var(--muted)" };
   const rows = [
     ["Automation", cfg.enabled ? (cfg.paused ? "ON (paused)" : "ON") : "OFF"],
+    ["Paused", cfg.paused ? `<span style="color:#fcd34d">yes</span>` : "no"],
+    ["Kill switch", (s.kill_switches || []).length ? `<span class="auto-kill">ACTIVE</span> · ${escHtml(s.kill_switches.join(", "))}` : "off (dashboard switch, sentinel files)"],
     ["Timezone", `<span>${cmTzLine(s.timezone_details)}</span>`],
     ["Daily target time", escHtml(`${cfg.generation_time} ${s.timezone_details ? s.timezone_details.abbreviation : ""} (${cfg.timezone})`)],
     ["Next generation", s.next_run_utc ? `${escHtml(cmZoned(s.next_run_utc, cfg.timezone))}<div style="color:var(--muted)">your browser: ${escHtml(cmBrowser(s.next_run_utc))}</div>`
@@ -3817,6 +3827,23 @@ function cmRenderSchedStatus(s) {
   ];
   const notes = (s.dst_notes || []).slice(0, 2).map(n => `<div style="color:#fcd34d;font-size:12px;">${escHtml(n.explanation)}</div>`).join("");
   document.getElementById("cmSchedStatus").innerHTML = opsKV(rows) + notes;
+}
+
+// -- Stage 3.32F workflow states (one per draft). APPROVED, QUEUED and PUBLISHED must never look alike. --
+const CM_LIFE = { DRAFT: ["var(--muted)", "draft"], VALIDATED: ["#93c5fd", "validated, awaiting approval"],
+  APPROVED: ["#fcd34d", "approved, NOT published"], QUEUED: ["#c4b5fd", "queued for publication"],
+  PUBLISHING: ["#93c5fd", "publishing"], PUBLISHED: ["#86efac", "PUBLISHED on YouTube"], FAILED: ["#fca5a5", "publishing failed"],
+  RETRY_PENDING: ["#fcd34d", "retry pending"], CANCELLED: ["var(--muted)", "cancelled"],
+  REQUIRES_REAUTHORIZATION: ["#fca5a5", "YouTube reauthorization required"], MANUAL_HANDOFF: ["#fdba74", "manual handoff"],
+  REJECTED: ["var(--muted)", "rejected"] };
+function cmLifeBadge(l) {
+  const [c, t] = CM_LIFE[l.state] || ["inherit", l.state];
+  let extra = "";
+  if (l.state === "MANUAL_HANDOFF") extra = l.handoff_completed ? " (operator-reported posted, not verified)" : " (prepared, not posted)";
+  if (l.state === "QUEUED" && l.publish_at_utc) extra = ` for ${cmBrowser(l.publish_at_utc)}${l.blocked_reason ? " · waiting: " + l.blocked_reason : ""}`;
+  if (l.state === "RETRY_PENDING" && l.next_attempt_at_utc) extra = ` at ${cmBrowser(l.next_attempt_at_utc)}`;
+  if (l.uncertain) extra = " (outcome uncertain: reconcile)";
+  return `<span class="ops-tag" style="color:${c};border-color:${c};font-weight:600;">${escHtml(l.state)}</span> <span style="font-size:12px;color:${c}">${escHtml(t + extra)}</span>`;
 }
 
 // -- Stage 3.32F Publishing readiness. The API Publish button is rendered ONLY when every server-side gate passes. --
@@ -3852,8 +3879,26 @@ async function cmLoadPublishing() {
   document.getElementById("cmPubAwaiting").innerHTML = aw.length ? aw.map(a => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">`
       + `<span>${escHtml(a.post_date)} · ${escHtml(a.format_label || "")} · ${escHtml((a.topic_title || "").slice(0, 60))}</span>`
       + `<button class="btn sm" data-id="${escHtml(a.id)}" onclick="cmHandoff(this.dataset.id)">Manual handoff</button>`
-      + (st.api_publishing_ready ? `<button class="btn sm primary" data-id="${escHtml(a.id)}" data-ver="${escHtml(a.version)}" onclick="cmPublish(this.dataset.id, Number(this.dataset.ver))">Publish now via API (public, immediate)</button>` : "")
+      + (st.api_publishing_ready ? `<button class="btn sm primary" data-id="${escHtml(a.id)}" data-ver="${escHtml(a.version)}" onclick="cmPublish(this.dataset.id, Number(this.dataset.ver))">Publish now via API (public, immediate)</button>`
+          + `<button class="btn sm" data-id="${escHtml(a.id)}" data-ver="${escHtml(a.version)}" onclick="cmAuthorize(this.dataset.id, Number(this.dataset.ver))">Authorize for a later time...</button>` : "")
       + `</div>`).join("") : `<div style="color:var(--muted)">No approved drafts waiting. Approve a draft first; approval never publishes.</div>`;
+  const q = st.queue || {}, lcCounts = st.lifecycle_counts || {};
+  const chips = ["APPROVED", "QUEUED", "PUBLISHING", "PUBLISHED", "RETRY_PENDING", "FAILED", "REQUIRES_REAUTHORIZATION", "MANUAL_HANDOFF"]
+    .map(k => `<span class="ops-tag" style="color:${(CM_LIFE[k] || [])[0] || "inherit"};margin:0 4px 4px 0;display:inline-block;">${k} ${lcCounts[k] ?? 0}</span>`).join("");
+  const qrows = [["queued", "QUEUED"], ["publishing", "PUBLISHING"], ["retry_pending", "RETRY_PENDING"], ["requires_reauthorization", "REQUIRES_REAUTHORIZATION"], ["failed", "FAILED"], ["published", "PUBLISHED"]]
+    .flatMap(([k, label]) => (q[k] || []).map(p => ({ ...p, _label: label })));
+  const rp = st.retry_policy || {};
+  document.getElementById("cmPubQueue").innerHTML = `<div>${chips}</div>`
+    + (qrows.length ? `<table class="ops-table"><thead><tr><th>State</th><th>Draft</th><th>Queued for / next attempt</th><th>Attempts</th><th>Waiting because / error</th><th>Post</th><th></th></tr></thead><tbody>`
+      + qrows.map(p => {
+          const when = p.status === "RETRY_PENDING" ? p.next_attempt_at_utc : p.publish_at_utc;
+          const cancel = ["QUEUED", "RETRY_PENDING", "REQUIRES_REAUTHORIZATION", "FAILED"].includes(p.status) ? `<button class="btn sm" data-id="${escHtml(p.id)}" onclick="cmCancelPub(this.dataset.id)">Cancel</button>` : "";
+          return `<tr><td>${cmLifeBadge({ state: p._label === "PUBLISHING" && p.status === "UNCERTAIN" ? "PUBLISHING" : p._label, uncertain: p.status === "UNCERTAIN" })}</td><td>${escHtml(p.draft_id)}</td>`
+            + `<td>${when ? escHtml(cmBrowser(when)) : ""}</td><td>${escHtml(p.attempts)}/${escHtml(rp.max_attempts || 3)}</td>`
+            + `<td style="max-width:280px;overflow-wrap:anywhere;">${escHtml((p.blocked_reason || p.error || "").slice(0, 200))}</td>`
+            + `<td>${p.post_url ? `<a href="${escHtml(p.post_url)}" target="_blank" rel="noopener noreferrer">${escHtml(p.youtube_post_id || "link")}</a>` : ""}</td><td>${cancel}</td></tr>`; }).join("")
+      + `</tbody></table>` : `<div style="color:var(--muted)">Nothing queued or sent through the API.</div>`)
+    + `<div style="color:var(--muted);margin-top:4px;">Retries: at most ${escHtml(rp.max_attempts || 3)} attempts, waiting ${escHtml((rp.backoff_minutes || []).join(" / "))} minutes between them; an uncertain outcome is never retried. A refused credential stops the queue until YouTube is reauthorized.</div>`;
   const pubs = [...(st.attention || []), ...(st.published || []), ...(st.handoffs || [])].filter((p, i, a) => a.findIndex(x => x.id === p.id) === i);
   document.getElementById("cmPubList").innerHTML = pubs.length ? `<table class="ops-table"><thead><tr><th>Updated</th><th>Draft</th><th>Mode</th><th>Status</th><th>Post</th><th>Attempts</th><th>Detail</th><th></th></tr></thead><tbody>`
     + pubs.map(p => {
@@ -3879,6 +3924,24 @@ async function cmPubEnable(on) {
 async function cmPublish(id, ver) {
   if (!(await askConfirm("Publish this post on YouTube now?", "This is PUBLIC and IMMEDIATE (the API cannot schedule). The text and image must still match what you approved. If YouTube does not answer, the attempt is marked UNCERTAIN and is never retried automatically."))) return;
   await cmAct("Publish request finished", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/publish`, { version: ver, confirm: true }));
+}
+
+async function cmAuthorize(id, ver) {
+  const v = prompt("Publish at (your local time, YYYY-MM-DD HH:MM). Leave empty for as soon as possible.", "");
+  if (v === null) return;
+  let when = null;
+  if (v.trim()) {
+    const dt = new Date(v.trim().replace(" ", "T"));
+    if (isNaN(dt.getTime())) { showToast("Use the format YYYY-MM-DD HH:MM.", true); return; }
+    when = dt.toISOString();
+  }
+  if (!(await askConfirm("Authorize publication of this post?", `The post becomes PUBLIC ${when ? "at " + new Date(when).toLocaleString() : "as soon as the queue runs (within 5 minutes)"}. Before sending, the queue re-checks every gate: publishing enabled, API available, no kill switch, and text and image unchanged since approval. Editing the draft cancels this authorization.`))) return;
+  await cmAct("Publication authorized", () => cmWrite(`/api/community/drafts/${encodeURIComponent(id)}/authorize-publication`, { version: ver, confirm: true, publish_at: when }));
+}
+
+async function cmCancelPub(id) {
+  if (!(await askConfirm("Cancel this publication?", "It will not be sent. The approved draft stays available for a new authorization or the manual handoff."))) return;
+  await cmAct("Publication cancelled", () => cmWrite(`/api/community/publications/${encodeURIComponent(id)}/cancel`, { reason: "cancelled in the dashboard" }));
 }
 
 async function cmHandoff(id) {
@@ -3929,6 +3992,7 @@ async function cmResolve(pid) {
 }
 
 async function cmSaveSchedule() {
+  if (!cmState.loaded) { showToast("The saved settings are still loading; nothing was saved.", true); return; }
   const formats = [...document.querySelectorAll(".cm-fmt")].filter(x => x.checked).map(x => x.value);
   if (!formats.length) { showToast("Choose at least one format.", true); return; }
   const tz = document.getElementById("cmTz").value.trim();

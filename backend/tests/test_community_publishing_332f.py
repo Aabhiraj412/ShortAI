@@ -293,17 +293,20 @@ def test_operator_resolution_of_uncertain(world):
     assert ev["detail"]["verified"] is False
 
 
-@pytest.mark.parametrize("where,error,expect_insert", [
-    ("insert", ApiError(403, "rateLimitExceeded", "quota exceeded"), True),
-    ("insert", ApiError(400, "invalidMetadata", "bad text"), True),
-    ("upload", ApiError(403, "forbidden", "not allowed"), False),
-    ("upload", ApiError(None, "timeout", "slow"), False),
+@pytest.mark.parametrize("where,error,expect_insert,expect_status", [
+    # Stage 3.32F completion: quota, rate limits and network trouble get bounded automatic retries with backoff;
+    # definitive refusals stay FAILED. Either way an explicit "publish now" can retry immediately.
+    ("insert", ApiError(403, "rateLimitExceeded", "quota exceeded"), True, PUB.RETRY_PENDING),
+    ("insert", ApiError(400, "invalidMetadata", "bad text"), True, PUB.FAILED),
+    ("upload", ApiError(403, "forbidden", "not allowed"), False, PUB.FAILED),
+    ("upload", ApiError(None, "timeout", "slow"), False, PUB.RETRY_PENDING),
 ])
-def test_definitive_failures_and_quota(world, where, error, expect_insert):
+def test_definitive_failures_and_quota(world, where, error, expect_insert, expect_status):
     svc, pub, api, d = ready(world)
     setattr(api, "insert_error" if where == "insert" else "upload_error", error)
     p = pub.publish(d["id"], None, d["version"], confirm=True)
-    assert p["status"] == PUB.FAILED and ("posts.insert" in api.calls) is expect_insert
+    assert p["status"] == expect_status and ("posts.insert" in api.calls) is expect_insert
+    assert (p["next_attempt_at_utc"] is not None) is (expect_status == PUB.RETRY_PENDING)
     assert json.loads(p["error"])["reason"] == error.reason
     api.insert_error = api.upload_error = None
     assert pub.publish(d["id"], None, d["version"], confirm=True)["status"] == PUB.PUBLISHED    # retry is explicit

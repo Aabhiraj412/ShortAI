@@ -110,9 +110,24 @@ class PostsApi:
         self.credentials = credentials
         self.opener = opener or urllib.request.urlopen
 
+    def _token(self) -> str:
+        """The access token, with credential failures as typed API errors (nothing was sent yet): a revoked or
+        expired grant is ``authRequired`` (reauthorization needed), a network failure during refresh is ``network``."""
+        try:
+            return self.credentials.access_token()
+        except NotConnected as exc:
+            raise ApiError(None, "notConnected", str(exc)) from None
+        except Exception as exc:                              # noqa: BLE001 - google-auth raises its own types
+            name = type(exc).__name__
+            if name == "TransportError" or isinstance(exc, (urllib.error.URLError, ConnectionError, socket.timeout)):
+                raise ApiError(None, "network", f"token refresh failed: {name}") from None
+            text = str(exc)
+            reason = "invalid_grant" if "invalid_grant" in text else "authRequired"
+            raise ApiError(401, reason, f"token refresh refused: {name}") from None
+
     def _call(self, method: str, url: str, *, body: Optional[bytes] = None, content_type: Optional[str] = None,
               write: bool = False) -> Dict[str, Any]:
-        headers = {"Authorization": "Bearer " + self.credentials.access_token(), "Accept": "application/json"}
+        headers = {"Authorization": "Bearer " + self._token(), "Accept": "application/json"}
         if content_type:
             headers["Content-Type"] = content_type
         req = urllib.request.Request(url, data=body, method=method, headers=headers)

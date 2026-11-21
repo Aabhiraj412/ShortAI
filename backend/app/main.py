@@ -3004,6 +3004,16 @@ class CommunityPublishRequest(CommunityVersionedRequest):
     confirm: bool = False
 
 
+class CommunityAuthorizeRequest(CommunityVersionedRequest):
+    """Stage 3.32F: publication authorization (separate from approval). ``publish_at`` queues it for a time."""
+    confirm: bool = False
+    publish_at: Optional[str] = Field(default=None, max_length=40)
+
+
+class CommunityCancelPublicationRequest(_CommunityBody):
+    reason: str = Field(default="", max_length=300)
+
+
 class CommunityPublishingEnableRequest(_CommunityBody):
     enabled: bool
     confirm: bool = False
@@ -3042,6 +3052,22 @@ async def api_community_publish(draft_id: str, req: CommunityPublishRequest, _: 
                                 __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
     return await _community_call(lambda: _publishing().publish(did, req.operator, req.version, req.confirm))
+
+
+@app.post("/api/community/drafts/{draft_id}/authorize-publication")
+async def api_community_authorize(draft_id: str, req: CommunityAuthorizeRequest, _: None = Depends(require_local_control),
+                                  __: None = Depends(require_autonomy_write)):
+    did = _community_draft_id(draft_id)
+    return await _community_call(lambda: _publishing().authorize(did, req.operator, req.version, req.confirm,
+                                                                 req.publish_at))
+
+
+@app.post("/api/community/publications/{publication_id}/cancel")
+async def api_community_cancel_publication(publication_id: str, req: CommunityCancelPublicationRequest,
+                                           _: None = Depends(require_local_control),
+                                           __: None = Depends(require_autonomy_write)):
+    pid = _community_pub_id(publication_id)
+    return await _community_call(lambda: _publishing().cancel_publication(pid, req.operator, req.reason))
 
 
 @app.post("/api/community/drafts/{draft_id}/handoff")

@@ -1001,8 +1001,9 @@ def test_publishing_is_confined_to_the_gated_publishing_modules():
     assert registry.REGISTRY["youtube.community.publish"].prohibited is True     # autonomy can never publish
     main_src = (Path(svc_mod.__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     routes = [ln for ln in main_src.splitlines() if ln.startswith("@app.") and "/api/community" in ln]
-    assert len(routes) == 27
+    assert len(routes) == 29             # 3.32F completion: + authorize-publication, + publications/{id}/cancel
     assert [r for r in routes if "publish" in r and "/publishing" not in r] == ['@app.post("/api/community/drafts/{draft_id}/publish")']
+    assert [r for r in routes if "authorize" in r] == ['@app.post("/api/community/drafts/{draft_id}/authorize-publication")']
     assert not any("upload" in r or "delete" in r.lower() for r in routes)
 
 
