@@ -981,7 +981,7 @@ class PublishingService:
                 "cancelled": [p for p in api if p["status"] == CANCELLED][:10],
                 "manual_handoffs": [p for p in pubs if p["mode"] == "manual"],
             },
-            "retry_policy": {"max_attempts": MAX_ATTEMPTS, "backoff_minutes": [int(b.total_seconds() // 60) for b in RETRY_BACKOFF],
+            "retry_policy": {"max_attempts": MAX_ATTEMPTS, "backoff_minutes": [int(b.total_seconds() // 60) for b in RETRY_BACKOFF[:MAX_ATTEMPTS - 1]],
                              "uncertain_is_never_retried": True},
             "published": [p for p in pubs if p["status"] == PUBLISHED],
             "attention": [p for p in pubs if p["status"] in (UNCERTAIN, FAILED, REQUIRES_REAUTH, RETRY_PENDING)],

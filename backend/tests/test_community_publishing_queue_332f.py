@@ -387,6 +387,7 @@ def test_status_separates_approved_queued_and_published(world):
     assert st["approved_awaiting"] == [] and len(st["queue"]["queued"]) == 1
     assert st["lifecycle_counts"][PUB.LC_QUEUED] == 1 and st["lifecycle_counts"][PUB.LC_PUBLISHED] == 0
     assert st["queue"]["published"] == [] and st["retry_policy"]["uncertain_is_never_retried"] is True
+    assert st["retry_policy"]["backoff_minutes"] == [5, 30]               # only the waits that 3 attempts use
     later(world, hours=4)
     pub.process_queue()
     st = pub.status()
