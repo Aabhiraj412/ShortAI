@@ -304,3 +304,13 @@ The 4 failures are the known baseline (`test_dashboard_html_page_served`, `test_
 - `test_creative_intel_332.py`: the API key set gained `analytics`, `providers` and `visual`.
 
 No test was weakened.
+
+## 14. Stage 3.35b: Wikimedia rate limiting in topic discovery (2026-11-21)
+
+| Suite | Result |
+|---|---|
+| `test_wikimedia_rate_limit_335b.py` (pacing, Retry-After cap and default, bounded retries, wait budget, host matching, gate routing, not-judged enrichment, stub requests, rejection reason, budget reset) | 19 passed |
+| Topic discovery suites (3.21h–m, 3.31A–D, 3.31K, exhaustion recovery, creative identity, orchestrator) | 181 passed, 44 skipped |
+| **Full suite** | **1668 passed, 5 failed, 173 skipped** (26 min 49 s, under concurrent production load) |
+
+**Failures:** the same 5 as §13: 4 baseline plus the timing-sensitive dashboard test. Discovery tests take the same time on the old and new code (31.2 s against 31.2 s for the slowest), so the pacing does not slow the suite.

@@ -27,8 +27,11 @@ import html
 import json
 import logging
 import re
+import threading
 import time
+from collections import Counter
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -358,6 +361,118 @@ class _RecoveryBudgetExhausted(Exception):
     pass
 
 
+class WikimediaRateLimited(Exception):
+    """Wikimedia still answered HTTP 429/503 after bounded, Retry-After-aware retries. The request says nothing
+    about the topic: a candidate that hits this is *not judged*, never recorded as lacking evidence."""
+
+
+_WIKIMEDIA_HOSTS = ("wikipedia.org", "wikimedia.org", "wikidata.org")
+
+
+def _is_wikimedia(url: str) -> bool:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in _WIKIMEDIA_HOSTS)
+
+
+class WikimediaGate:
+    """Paces every request to Wikimedia hosts and honours Retry-After.
+
+    Root cause found 2026-11-21: discovery sent about 200 unpaced requests a minute, Wikimedia answered
+    HTTP 429 after about 18, and every throttled candidate was recorded as INSUFFICIENT_EVIDENCE. That drained
+    the topic pool until cycles failed the creative-identity integrity gate.
+
+    * at most one request per ``MIN_INTERVAL`` seconds across all threads (0.4 s still drew 429s in a live
+      dry run; 1 s is the polite serial rate);
+    * on 429/503: wait Retry-After (default 10 s, capped at 40 s) and retry, at most ``RETRIES`` times;
+    * the total Retry-After waiting per discovery run is bounded by ``budget`` seconds, so discovery always
+      finishes well inside the recovery window."""
+
+    MIN_INTERVAL = 1.0
+    RETRIES = 2
+    DEFAULT_RETRY_AFTER = 10.0
+    MAX_RETRY_AFTER = 40.0
+    BUDGET = 180.0
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
+        self._lock = threading.Lock()
+        self._clock, self._sleep = clock, sleep
+        self._next_at = 0.0
+        self.reset()
+
+    def reset(self, budget: Optional[float] = None) -> None:
+        with self._lock:
+            self.budget = self.BUDGET if budget is None else float(budget)
+            self.waited = 0.0
+            self.stats: Counter = Counter()
+
+    def wait_turn(self) -> None:
+        with self._lock:
+            now = self._clock()
+            at = max(now, self._next_at)
+            self._next_at = at + self.MIN_INTERVAL
+        if at > now:
+            self._sleep(at - now)
+
+    def backoff(self, retry_after: Optional[str]) -> bool:
+        """Reserves a Retry-After wait; False when the run's wait budget is spent."""
+        try:
+            wait = float(retry_after) if retry_after else self.DEFAULT_RETRY_AFTER
+        except (TypeError, ValueError):
+            wait = self.DEFAULT_RETRY_AFTER
+        wait = max(1.0, min(self.MAX_RETRY_AFTER, wait))
+        with self._lock:
+            if self.waited + wait > self.budget:
+                self.stats["budget_exhausted"] += 1
+                return False
+            self.waited += wait
+            self._next_at = max(self._next_at, self._clock() + wait)
+        return True
+
+    def fetch(self, req: urllib.request.Request, timeout: float,
+              opener: Optional[Callable] = None) -> Tuple[int, bytes]:
+        opener = opener or urllib.request.urlopen          # resolved per call (tests patch urlopen)
+        for attempt in range(self.RETRIES + 1):
+            self.wait_turn()
+            try:
+                with opener(req, timeout=timeout) as resp:
+                    self.stats["ok"] += 1
+                    return resp.status, resp.read()
+            except urllib.error.HTTPError as exc:
+                self.stats[f"http_{exc.code}"] += 1
+                if exc.code not in (429, 503):
+                    raise
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                if attempt < self.RETRIES and self.backoff(retry_after):
+                    self.stats["retried"] += 1
+                    continue
+                self.stats["gave_up"] += 1
+                host = urllib.parse.urlparse(req.full_url).hostname
+                raise WikimediaRateLimited(f"HTTP {exc.code} from {host}") from exc
+        raise WikimediaRateLimited("retries exhausted")      # pragma: no cover - the loop returns or raises
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {"stats": dict(self.stats), "waited_seconds": round(self.waited, 1),
+                    "budget_seconds": self.budget, "min_interval_seconds": self.MIN_INTERVAL}
+
+
+WIKIMEDIA_GATE = WikimediaGate()
+_USER_AGENT = "CrazzyDocsStudio/1.0 (Autonomous Documentary Pipeline)"
+
+
+def _fetch_bytes(url: str, timeout: float, accept: Optional[str] = None) -> Optional[bytes]:
+    headers = {"User-Agent": _USER_AGENT}
+    if accept:
+        headers["Accept"] = accept
+    req = urllib.request.Request(url, headers=headers)
+    if _is_wikimedia(url):
+        status, body = WIKIMEDIA_GATE.fetch(req, timeout)
+    else:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status, body = resp.status, resp.read()
+    return body if status == 200 else None
+
+
 class CuriosityTopicEngine:
     """Discovers, scores, and selects high-curiosity video topics across 20+ configurable categories."""
 
@@ -401,6 +516,7 @@ class CuriosityTopicEngine:
     def begin_run(self, run_id: str) -> None:
         """Called by the orchestrator before discovery so ledger rows carry the job id."""
         self._run_id = run_id
+        WIKIMEDIA_GATE.reset()                      # a fresh Retry-After wait budget for every discovery run
 
     def _db_path(self) -> Optional[str]:
         return getattr(self.ledger, "db_path", None)
@@ -485,6 +601,15 @@ class CuriosityTopicEngine:
         if origin.startswith("wikipedia_search:"):
             return origin.split(":", 1)[1] or None
         return None
+
+    def _reject_unenriched(self, origin: str, title: str, blurb: str, stage: str) -> None:
+        """A rate-limited fetch is a provider failure (the topic was not judged), never missing evidence."""
+        if getattr(self, "_last_enrich_failure", None) == "rate_limited":
+            self._trace_reject_new(origin, title, blurb, cl.PROVIDER_FAILURE, stage,
+                                   {"rule": "Wikimedia rate limit (HTTP 429/503) after bounded retries; not judged"})
+        else:
+            self._trace_reject_new(origin, title, blurb, cl.INSUFFICIENT_EVIDENCE, stage,
+                                   {"rule": "no usable encyclopedic extract (short, disambiguation or fetch failed)"})
 
     def _trace_reject_new(self, source: str, title: str, blurb: str, reason: str, stage: str,
                           detail: Optional[Dict[str, Any]] = None, match: Optional[str] = None) -> None:
@@ -798,7 +923,7 @@ class CuriosityTopicEngine:
                     step["evaluated"] += 1
                     cand = self.enrich_wikipedia_candidate(title, event_blurb=blurb, discovery_origin=origin)
                     if not cand:
-                        self._trace_reject_new(origin, title, blurb, cl.INSUFFICIENT_EVIDENCE, "recovery_enrichment")
+                        self._reject_unenriched(origin, title, blurb, "recovery_enrichment")
                         continue
                     self._apply_category(cand, hint_key=self._origin_hint(origin) or self._hint_key(hint))
                     cands.append(cand)
@@ -1112,28 +1237,13 @@ class CuriosityTopicEngine:
 
     @staticmethod
     def _http_get_json(url: str, timeout: float = 12.0) -> Optional[Dict]:
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "CrazzyDocsStudio/1.0 (Autonomous Documentary Pipeline)",
-                "Accept": "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                return None
-            return json.loads(resp.read().decode("utf-8", errors="replace"))
+        body = _fetch_bytes(url, timeout, accept="application/json")
+        return None if body is None else json.loads(body.decode("utf-8", errors="replace"))
 
     @staticmethod
     def _http_get_text(url: str, timeout: float = 12.0) -> Optional[str]:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "CrazzyDocsStudio/1.0 (Autonomous Documentary Pipeline)"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                return None
-            return resp.read().decode("utf-8", errors="replace")
+        body = _fetch_bytes(url, timeout)
+        return None if body is None else body.decode("utf-8", errors="replace")
 
     @staticmethod
     def _clean_text(raw: str) -> str:
@@ -1188,7 +1298,11 @@ class CuriosityTopicEngine:
         event_blurb: str = "",
         discovery_origin: str = "wikipedia_featured",
     ) -> Optional[Dict]:
-        """Fetches verified Wikipedia extract, canonical URL, image URL, and factual bullets."""
+        """Fetches verified Wikipedia extract, canonical URL, image URL, and factual bullets.
+
+        Returns None when the article lacks a usable extract. When Wikimedia rate-limits the requests instead,
+        it also returns None but sets ``_last_enrich_failure = "rate_limited"``: the candidate was not judged."""
+        self._last_enrich_failure = None
         if not wiki_title:
             return None
         try:
@@ -1216,22 +1330,6 @@ class CuriosityTopicEngine:
             if orig_img and orig_img.lower().endswith((".jpg", ".jpeg", ".png")):
                 image_urls.append(orig_img)
 
-            # Query Wikipedia REST media-list for article-specific Wikimedia Commons filenames
-            commons_file_titles: List[str] = []
-            try:
-                ml_url = f"https://en.wikipedia.org/api/rest_v1/page/media-list/{encoded}"
-                ml_json = self._http_get_json(ml_url, timeout=8.0) or {}
-                for item in ml_json.get("items", []):
-                    t = item.get("title", "")
-                    if item.get("type") == "image" and t.startswith("File:"):
-                        low_t = t.lower()
-                        if low_t.endswith((".jpg", ".jpeg", ".png")) and "flag_" not in low_t and "commons-logo" not in low_t and "icon" not in low_t:
-                            commons_file_titles.append(t)
-                    if len(commons_file_titles) >= 14:
-                        break
-            except Exception:
-                pass
-
             # Fetch multi-paragraph extract for deep script/storyboard facts
             mw_url = (
                 "https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info"
@@ -1255,6 +1353,25 @@ class CuriosityTopicEngine:
             sentences = self._split_clean_sentences(extended_extract)
             if len(sentences) < 3:
                 return None
+
+            # Query Wikipedia REST media-list for article-specific Wikimedia Commons filenames. Done after the
+            # extract checks so stub articles cost no media request (fewer requests against the rate limit).
+            commons_file_titles: List[str] = []
+            try:
+                ml_url = f"https://en.wikipedia.org/api/rest_v1/page/media-list/{encoded}"
+                ml_json = self._http_get_json(ml_url, timeout=8.0) or {}
+                for item in ml_json.get("items", []):
+                    t = item.get("title", "")
+                    if item.get("type") == "image" and t.startswith("File:"):
+                        low_t = t.lower()
+                        if low_t.endswith((".jpg", ".jpeg", ".png")) and "flag_" not in low_t and "commons-logo" not in low_t and "icon" not in low_t:
+                            commons_file_titles.append(t)
+                    if len(commons_file_titles) >= 14:
+                        break
+            except WikimediaRateLimited:
+                raise                       # never score a candidate on a throttled, incomplete image list
+            except Exception:
+                pass
 
             summary_text = (f"{event_blurb.strip()} " if event_blurb else "") + " ".join(sentences[:2])
             summary_text = summary_text.strip()
@@ -1316,6 +1433,10 @@ class CuriosityTopicEngine:
                 "publication_timestamp": pub_ts,
                 "research_fingerprint": res_fp,
             }
+        except WikimediaRateLimited as e:
+            self._last_enrich_failure = "rate_limited"
+            logger.info("Wikipedia enrichment for '%s' not judged: %s", wiki_title, e)
+            return None
         except Exception as e:
             logger.debug("Wikipedia enrichment failed for '%s': %s", wiki_title, e)
             return None
@@ -1583,8 +1704,7 @@ class CuriosityTopicEngine:
                 self._apply_category(cand, hint_key=self._origin_hint(origin) or self._hint_key(hint_cat))
                 enriched_candidates.append(cand)
             else:
-                self._trace_reject_new(origin, wiki_title, blurb, cl.INSUFFICIENT_EVIDENCE, "enrichment",
-                                       {"rule": "no usable encyclopedic extract (short, disambiguation or fetch failed)"})
+                self._reject_unenriched(origin, wiki_title, blurb, "enrichment")
 
         # 4. Phys.org Live Multi-Category RSS Feeds (Science, Technology, Space, Biology, Earth)
         disc_ts = datetime.now(timezone.utc).isoformat()
@@ -1842,6 +1962,7 @@ class CuriosityTopicEngine:
                 "providers_used": [],
             }
             self.trace.note("pool", "empty")
+            self._note_wikimedia_requests()
             self._flush_trace()
             return []
 
@@ -1859,8 +1980,16 @@ class CuriosityTopicEngine:
             "selected_topic": valid[0].title if valid else None,
             "selected_score": valid[0].composite_score if valid else None,
         }
+        self._note_wikimedia_requests()
         self._flush_trace()
         return valid
+
+    def _note_wikimedia_requests(self) -> None:
+        snap = WIKIMEDIA_GATE.snapshot()
+        self.last_discovery_summary["wikimedia_requests"] = snap
+        self.trace.note("wikimedia_requests", snap)
+        if snap["stats"].get("gave_up") or snap["stats"].get("retried"):
+            logger.warning("[TOPIC DISCOVERY] Wikimedia rate limiting: %s", snap)
 
     def _score_and_filter(self, live_cands: List[Dict[str, Any]], filter_duplicates: bool = True,
                           stage_suffix: str = "") -> Tuple[List[ScoredTopic], List[Dict[str, Any]], int, List[ScoredTopic]]:
