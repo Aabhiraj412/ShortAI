@@ -71,7 +71,11 @@ The first in-window cycle is checked in §6.
 
 1. **The ledger row is overwritten on re-sighting.** The ledger keeps one row per candidate. When a candidate is seen again in a later run and rejected before enrichment, the update writes blank `category_code` and `category_v2_json` (`candidate_ledger.py`, `_upsert_candidate`). Its earlier v1/v2 categories are lost. In the baseline, **6 of 21 selected topics** had lost them by 23:45.
    - **Not fixed:** fixing it changes production code, needs a daemon restart and would invalidate this observation.
-   - **Mitigation:** an hourly read-only snapshot (`--snapshot`) keeps each run's category state. The snapshot is not scheduled yet; it needs operator approval.
+   - **Mitigation:** an hourly read-only snapshot (`--snapshot`) keeps each run's category state. Approved by the operator and scheduled as the Windows task `CrazzyDocs-Stage331-ShadowSnapshot`:
+   - runs hourly at :40 (between cycles), 2026-11-24 00:40 → 2026-11-26 00:40 IST;
+   - ends 2026-11-26 01:30 and is deleted automatically a day later;
+   - reads the database read-only; writes only `logs/stage331_observation/runs.jsonl`;
+   - first run 2026-11-24 00:05 IST (result 0). It captured all 80 runs to date, including `cycle_1_20261124_0000`, though runs before the window were captured after some overwrites.
 2. **v2 runs only on enriched candidates.** Candidates rejected at `rss_filter`, `pre_enrichment`, `discovery_filter` or pool assembly never receive a v2 prediction. This is by design, not a gap, but it means v2 coverage is roughly the eligible and enriched set, not all candidates.
 3. **Wikimedia rate limits continue** (baseline: 178 HTTP 429, 53 budget exhaustions in 21 cycles). They are recorded in `notes_json.wikimedia_requests`.
 4. **One run without an outcome** (`cycle_10_20261122_0900`, before the window, interrupted by a recovery); the analysis lists these as `incomplete_runs`.
