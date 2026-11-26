@@ -396,3 +396,28 @@ def test_cycle_report_does_not_run_the_storage_audit(env, monkeypatch):
     res = ems.email_monitoring_service.send_cycle_summary_report(
         "cycle_9", "cycle_9_20261124_0800", {"status": "COMPLETED", "topic": "T"}, test_now_ist=datetime(2026, 11, 24, 8, 20, tzinfo=IST_TZ))
     assert res["status"] == "SENT" and not called.called
+
+
+def test_cycle_closed_before_deadline_is_not_called_expired(env):
+    """Live case 2026-11-27 cycle 1: closed at 00:15 because another attempt could not fit before the 00:45 deadline."""
+    cp = {"cycle_state": {"recovery_expiration_at": "2999-01-01T00:45:00+05:30", "retry_terminal": True}}
+    _job(env["sessions"], "cycle_1_20261124_0000", status="RECOVERY_WINDOW_EXPIRED", retry=2, cp=cp,
+         error="integrity gate: every discovered topic was already selected by an earlier production")
+    with env["sessions"]() as db:
+        db.execute(text("UPDATE persistent_jobs SET current_stage='QUEUED' WHERE id='cycle_1_20261124_0000'"))
+        db.commit()
+    ems.email_monitoring_service.send_cycle_summary_report(
+        "cycle_1", "cycle_1_20261124_0000",
+        {"status": "RECOVERY_WINDOW_EXPIRED", "error": "integrity gate: every discovered topic was already selected"},
+        test_now_ist=datetime(2026, 11, 24, 0, 12, tzinfo=IST_TZ))
+    plain = env["sent"][-1]["plain"]
+    assert "not enough time remains before the recovery deadline" in plain
+    assert "has expired" not in plain and "window expired" not in plain
+    assert re.search(r"Failed stage\s+Topic selection", plain)
+    assert "Queued" not in plain
+
+
+def test_failed_stage_ignores_queue_states():
+    assert P.failed_stage_label("QUEUED", "BLOCKED_QC: narration") == "QUALITY_CONTROL"
+    assert P.failed_stage_label("RENDERING", "anything") == "RENDERING"
+    assert P.failed_stage_label("RUNNING", "unexplained") is None

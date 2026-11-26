@@ -1116,7 +1116,7 @@ class EmailMonitoringService:
                     topic=topic,
                     video_title=res.get("video_title") or cp.get("video_title"),
                     category=cp.get("category"),
-                    generated_at=now_ist,
+                    generated_at=datetime.now(timezone.utc),
                 )
                 ctx.recovery = Q.recovery_info(db_session, job, cp, succeeded=succeeded,
                                                decision=res.get("retry") if isinstance(res.get("retry"), dict) else None)
@@ -1142,7 +1142,8 @@ class EmailMonitoringService:
                     ctx.failed_stage = res.get("failed_stage") or res.get("current_stage") or (job.current_stage if job else None)
                     ctx.last_completed_stage = res.get("last_completed_stage")
                     ctx.error_message = res.get("error") or (job.error_details if job else None)
-                    ctx.error_at = now_ist
+                    # Real failure time: the scheduler passes the time it evaluated the cycle, not when it failed.
+                    ctx.error_at = (job.updated_at if job and job.updated_at else None) or datetime.now(timezone.utc)
                     ctx.recommended_action = res.get("recommended_action")
                     ctx.unapproved_artifacts = list(res.get("unapproved_artifacts") or [])
                     if "checkpoint_saved" in res:

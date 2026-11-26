@@ -58,7 +58,8 @@ class RecoveryInfo:
     first_failure: Optional[str] = None         # the failure that triggered recovery (redacted, clipped)
     recovered_at: Optional[Any] = None
     deadline: Optional[Any] = None              # recovery window end
-    window_expired: bool = False
+    window_expired: bool = False                # the deadline had passed when the cycle was closed
+    no_time_left: bool = False                  # closed before the deadline: too little time for another attempt
     retry_scheduled: Optional[bool] = None      # True only if the scheduler will try again
     next_attempt_at: Optional[Any] = None
 
@@ -160,6 +161,26 @@ _PATTERNS: List[Tuple[re.Pattern, str, str]] = [
      "A network or provider error interrupted production.",
      "Usually transient. If it repeats, check the internet connection and provider status."),
 ]
+
+
+_QUEUE_STATES = {"QUEUED", "PENDING", "DISPATCHING", "RUNNING", "RETRYING", "RETRY_SCHEDULED", "RECOVERY_PENDING",
+                 "RECOVERY_WINDOW_EXPIRED", "FAILED"}
+_STAGE_HINTS: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"integrity gate|already selected|already used|topic discovery|no eligible topic", re.I), "TOPIC_SELECTION"),
+    (re.compile(r"VisualDiversityValidator|storyboard", re.I), "STORYBOARD"),
+    (re.compile(r"BLOCKED_QC|QC_REJECTED|quality control", re.I), "QUALITY_CONTROL"),
+    (re.compile(r"ffmpeg|render", re.I), "RENDERING"),
+]
+
+
+def failed_stage_label(stage: Optional[str], error: Optional[str]) -> Optional[str]:
+    """A real pipeline stage; job queue states (QUEUED, RUNNING...) are not stages, so infer from the error instead."""
+    if stage and str(stage).upper() not in _QUEUE_STATES:
+        return stage
+    for pat, hint in _STAGE_HINTS:
+        if error and pat.search(error):
+            return hint
+    return None
 
 
 def interpret_failure(error: Optional[str], outcome: str) -> Tuple[str, Optional[str]]:
@@ -326,20 +347,25 @@ def render_failure(ctx: ProductionEmailContext) -> D.RenderedEmail:
     headline = _OUTCOME_TEXT.get(ctx.outcome, "Production failed")
     if rec.window_expired:
         headline += " · recovery window expired"
+    elif rec.no_time_left:
+        headline += " · no time left to retry"
     title = ctx.topic or "%s did not complete" % ctx.cycle_label
 
     if rec.retry_scheduled:
         retry_text = "Another attempt is scheduled" + (" for " + D.fmt_datetime(rec.next_attempt_at) if rec.next_attempt_at else "")
     elif rec.window_expired:
         retry_text = "No further attempts: the recovery window has expired"
+    elif rec.no_time_left:
+        retry_text = "No further attempts: not enough time remains before the recovery deadline"
     elif rec.retry_scheduled is False:
         retry_text = "No further automatic attempts"
     else:
         retry_text = None
 
+    stage = failed_stage_label(ctx.failed_stage, ctx.error_message)
     metrics = D.metric_grid([
         ("Attempts", D.fmt_count(rec.attempts), ("of %d allowed" % rec.max_attempts) if rec.max_attempts and rec.attempts else None),
-        ("Failed stage", D.humanize(ctx.failed_stage), None),
+        ("Failed stage", D.humanize(stage), None),
     ])
     details = D.kv_table([
         ("Topic", ctx.topic),
@@ -347,7 +373,7 @@ def render_failure(ctx: ProductionEmailContext) -> D.RenderedEmail:
         ("Job ID", ctx.job_id),
         ("Scheduled start", D.fmt_datetime(ctx.scheduled_start)),
         ("Last completed stage", D.humanize(ctx.last_completed_stage)),
-        ("Failed stage", D.humanize(ctx.failed_stage)),
+        ("Failed stage", D.humanize(stage)),
         ("Failed at", D.fmt_datetime(ctx.error_at)),
         ("Resumable checkpoint", None if ctx.can_resume is None else ("Yes" if ctx.can_resume else "No")),
     ] + list(ctx.extra_rows))

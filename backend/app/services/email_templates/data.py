@@ -133,7 +133,13 @@ def recovery_info(db, job: Any, cp: Dict[str, Any], *, succeeded: bool,
             first_failure = None
     deadline = cs.get("recovery_expiration_at") or (decision or {}).get("recovery_deadline_utc")
     status = str(getattr(job, "status", "") or "").upper()
-    expired = status == "RECOVERY_WINDOW_EXPIRED"
+    closed = status == "RECOVERY_WINDOW_EXPIRED"
+    # The scheduler also closes a cycle BEFORE the deadline when another attempt cannot fit
+    # ("no time for another attempt before the recovery deadline"). Only call it expired when it really was.
+    closed_at = D.to_ist(getattr(job, "updated_at", None)) or datetime.now(timezone.utc).astimezone(D.IST)
+    dl = D.to_ist(deadline)
+    expired = closed and (dl is None or closed_at >= dl)
+    no_time_left = closed and not expired
     retry_scheduled = None
     next_at = None
     if decision is not None:
@@ -141,11 +147,12 @@ def recovery_info(db, job: Any, cp: Dict[str, Any], *, succeeded: bool,
         if retry_scheduled and decision.get("retry_in_seconds"):
             next_at = datetime.now(timezone.utc) + timedelta(seconds=int(decision["retry_in_seconds"]))
     elif not succeeded:
-        retry_scheduled = False if (expired or cs.get("retry_terminal")) else None
+        retry_scheduled = False if (closed or cs.get("retry_terminal")) else None
         next_at = cs.get("next_retry_at_utc") if retry_scheduled else None
     return RecoveryInfo(attempts=attempts, max_attempts=max_attempts, first_failure=first_failure,
               recovered_at=getattr(job, "completed_at", None) if succeeded else None,
-              deadline=deadline, window_expired=expired, retry_scheduled=retry_scheduled, next_attempt_at=next_at)
+              deadline=deadline, window_expired=expired, no_time_left=no_time_left,
+              retry_scheduled=retry_scheduled, next_attempt_at=next_at)
 
 
 def relative_path(path: Optional[str]) -> Optional[str]:
