@@ -61,7 +61,15 @@ Not emails (out of scope):
 - the self-healing, Community and Autopilot notifications (`operator.notify` writes to the dashboard inbox);
 - desktop toasts.
 
-## 3. Reporting period of the daily report
+## 3. Delivery reliability fix: email no longer blocks the scheduler
+
+The cycle report used to run `media_lifecycle_manager.daily_report()`, a full storage audit of about 60,000 files, while building its embedded dashboard. Because the scheduler sends the report from its event loop, every success email was created 12–14 minutes after the job completed, and during that time the daemon's heartbeat stopped and interval jobs slipped. This was verified in the ledger and the log on 2026-11-26.
+
+The audit is no longer run per cycle (`test_cycle_report_does_not_run_the_storage_audit`). The daily report measures storage once a day with a plain directory walk (about 1.4 s).
+
+Sending is still synchronous in the scheduler loop. SMTP is bounded by 25 s timeouts and 2 retries before the DATA phase. Moving it to a worker thread would change the scheduler and was left out of scope.
+
+## 4. Reporting period of the daily report
 
 The scheduled 06:00 IST run reports the **previous complete IST day** (00:00–24:00), with every cycle the active schedule runs that weekday (24 under the current profile), plus manual productions of that day.
 
@@ -69,7 +77,7 @@ Before the redesign it reported the current day at 06:00. It covered cycles 0–
 
 The idempotency prefix changed to `daily_operations_report_`. Without the change, the first corrected report would collide with the old partial-day report of the same date, and the dedup guard would suppress it.
 
-## 4. Design guidelines (for every new email)
+## 5. Design guidelines (for every new email)
 
 - **Structure:**
   1. dark brand header (logo, "CrazzyDocs.", eyebrow = email type, title, subtitle);
@@ -104,7 +112,7 @@ The idempotency prefix changed to `daily_operations_report_`. Without the change
 3. Dispatch through the existing ledger: `dispatch_stage_notification` (add the type to `allowed_types`) or `dispatch_summary_notification`, with a stable idempotency key.
 4. Add a preview to `backend/scripts/render_email_previews.py` and tests to `backend/tests/test_email_redesign.py`.
 
-## 5. Previews
+## 6. Previews
 
 ```
 python backend/scripts/render_email_previews.py      # writes docs/email_previews/*.html + *.txt + index.html
@@ -126,10 +134,10 @@ Nothing is sent, and no database is used.
 - Headless Edge could not validate 320/375 px: on Windows it enforces a minimum window width of about 500 px, so its narrow screenshots are cropped.
 - HTML size: 13–48 KB including images; about 40 KB without the images for a 24-cycle report. Below Gmail's 102 KB clipping limit (the old success emails were 55–130 KB).
 
-## 6. Testing
+## 7. Testing
 
 ```
-pytest backend/tests/test_email_redesign.py           # 34 tests: formatting, escaping, redaction, state accuracy,
+pytest backend/tests/test_email_redesign.py           # 35 tests: formatting, escaping, redaction, state accuracy,
                                                       # recovery, dedup, SMTP-failure isolation, render fallback,
                                                       # CID conversion, size, report aggregation and period, 24 cycles
 pytest backend/tests/test_stage_3_9f_email_dashboard.py backend/tests/test_daily_publishing_summary.py \
@@ -138,7 +146,7 @@ pytest backend/tests/test_stage_3_9f_email_dashboard.py backend/tests/test_daily
 
 Existing tests updated for the new design keep their intent. Assertions on fabricated defaults are now inverted: `1080x1920 @ 30 FPS`, `SYNCHRONIZED` and `Withheld at safety gate` must no longer appear.
 
-## 7. Known limitations
+## 8. Known limitations
 
 - **Rendering time** is not persisted separately. The `RENDERING` lifecycle marker is set after rendering, so the gap to the next marker is seconds. Emails show total production time and the stage timeline instead of a rendering duration.
 - **"Quality score"** means the thumbnail score; no other per-video score is persisted. QC is shown as `N of M checks passed` when the run reports its checks, otherwise "Passed" (a COMPLETED run has passed the QC gate).

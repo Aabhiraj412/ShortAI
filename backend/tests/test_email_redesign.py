@@ -381,3 +381,15 @@ def test_plain_text_contains_essential_information_and_full_urls():
     assert "Jet engine" in r.text and "https://youtu.be/abc123" in r.text and "http://127.0.0.1:8000/" in r.text
     assert "Yes (public)" in r.text
     assert not re.search(r"<[a-z]+[ >]", r.text)
+
+
+def test_cycle_report_does_not_run_the_storage_audit(env, monkeypatch):
+    """The storage audit took 12-14 min and blocked the scheduler loop after every production (2026-11 finding)."""
+    import backend.app.services.media_lifecycle_manager as mlm
+    called = MagicMock(side_effect=AssertionError("storage audit must not run in the cycle report"))
+    monkeypatch.setattr(mlm.media_lifecycle_manager, "daily_report", called)
+    monkeypatch.setattr(mlm.media_lifecycle_manager, "generate_storage_report", called)
+    _job(env["sessions"], "cycle_9_20261124_0800")
+    res = ems.email_monitoring_service.send_cycle_summary_report(
+        "cycle_9", "cycle_9_20261124_0800", {"status": "COMPLETED", "topic": "T"}, test_now_ist=datetime(2026, 11, 24, 8, 20, tzinfo=IST_TZ))
+    assert res["status"] == "SENT" and not called.called

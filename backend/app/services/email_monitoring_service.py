@@ -772,14 +772,11 @@ class EmailMonitoringService:
         except Exception:
             next_cycle = "Unavailable"
 
+        # Storage is deliberately NOT computed here. The former call to media_lifecycle_manager.daily_report()
+        # ran a full storage audit (~60k files) inside every cycle report; it held the scheduler's event loop
+        # for 12-14 minutes after each production (no heartbeat, delayed interval jobs). The daily operations
+        # report measures storage once a day instead.
         storage_mb: Optional[float] = None
-        try:
-            from backend.app.services.media_lifecycle_manager import media_lifecycle_manager
-            rep = media_lifecycle_manager.daily_report()
-            if rep.get("total_size_mb") is not None:
-                storage_mb = float(rep["total_size_mb"])
-        except Exception:
-            storage_mb = None
 
         health = self.get_system_health()
         return {
