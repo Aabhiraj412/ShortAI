@@ -97,11 +97,92 @@ def reload_profile_from_db_if_changed() -> bool:
     return False
 
 
-async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] = None) -> Dict:
+# Stage 3.36: job ids currently inside run_cycle_generation in THIS process. The cron path and the Autopilot
+# controller run in the same daemon, so this closes the gap between "no job row yet" and "worker registered".
+_dispatch_guard_lock = threading.Lock()
+_dispatching: set = set()
+
+
+def _autopilot_handoff(cycle_id: str, test_ist_now: Optional[datetime], owner_token: Optional[str]) -> Optional[Dict]:
+    """Stage 3.36 ownership check. Returns a result when this call must NOT dispatch, else None.
+
+    * Autopilot owns production and this is the cron/recovery path (no token): the fired occurrence is handed to
+      the controller (recorded as deferred) and nothing is dispatched here.
+    * A token is presented but is not the live claim of this process: refused (never dispatch on a stale claim).
+    * Any error reading ownership: the scheduler keeps ownership (fail safe for production).
+    """
+    try:
+        from backend.app.autonomy.production_ownership import get_store
+        store = get_store()
+        if owner_token is not None:
+            if store.token_valid(owner_token):
+                return None
+            return {"status": "DEFERRED", "cycle_id": cycle_id,
+                    "reason": "Autopilot dispatch refused: the controller no longer holds production ownership."}
+        if not store.autopilot_owns():
+            return None
+        profile = get_active_profile()
+        cycle = next((c for c in profile.cycles if c.cycle_id == cycle_id), None)
+        if cycle is None:
+            return None
+        now_ist = test_ist_now or datetime.now(IST_TZ)
+        start, _target, _d, _p = cycle.calculate_datetimes(now_ist)
+        job_id = cycle.format_job_id(now_ist)
+        deadline = start + timedelta(hours=cycle.recovery_window_hours)
+        store.record_deferred({"cycle_id": cycle_id, "job_id": job_id, "scheduled_start_ist": start.isoformat(),
+                               "recovery_deadline_ist": deadline.isoformat(),
+                               "fired_at_ist": now_ist.isoformat()})
+        record_lifecycle_event("CYCLE_DUE_HANDED_TO_AUTOPILOT", "DEFERRED", cycle_id=cycle_id, job_id=job_id,
+                               details={"scheduled_start_ist": start.isoformat()})
+        logger.info("[SCHEDULER] Cycle %s (%s) fired; Autopilot owns production, handed to the controller.", cycle_id, job_id)
+        return {"status": "DEFERRED", "cycle_id": cycle_id, "job_id": job_id,
+                "reason": "Autopilot controller owns production; the occurrence was handed to it."}
+    except Exception as exc:
+        logger.warning("[SCHEDULER] Autopilot ownership check failed (%s); the scheduler keeps ownership.", type(exc).__name__)
+        return None
+
+
+async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] = None,
+                               owner_token: Optional[str] = None) -> Dict:
     """
     Executes automated content generation for a specific production cycle in Asia/Kolkata.
     Prevents duplicate runs, recovers from crashed jobs, and enforces 6h SLA windows.
+
+    Stage 3.36: when the Autopilot controller owns production, the cron/recovery path hands the occurrence to it;
+    the controller calls this same function with its ``owner_token``. At most one call per job id runs at a time
+    in this process.
     """
+    handoff = _autopilot_handoff(cycle_id, test_ist_now, owner_token)
+    if handoff is not None:
+        return handoff
+    guard_key = None
+    try:
+        _profile = get_active_profile()
+        _cycle = next((c for c in _profile.cycles if c.cycle_id == cycle_id), None)
+        if _cycle is not None:
+            guard_key = _cycle.format_job_id(test_ist_now or datetime.now(IST_TZ))
+    except Exception:
+        guard_key = None
+    if guard_key is not None:
+        with _dispatch_guard_lock:
+            if guard_key in _dispatching:
+                logger.warning("[SCHEDULER] %s is already being dispatched in this process; not dispatching again.", guard_key)
+                return {"status": "SKIPPED", "cycle_id": cycle_id, "job_id": guard_key, "reason": "CONCURRENT_ACTIVE_RUN"}
+            _dispatching.add(guard_key)
+    try:
+        return await _run_cycle_generation(cycle_id, test_ist_now)
+    finally:
+        if guard_key is not None:
+            with _dispatch_guard_lock:
+                _dispatching.discard(guard_key)
+
+
+def dispatching_job_ids() -> List[str]:
+    with _dispatch_guard_lock:
+        return sorted(_dispatching)
+
+
+async def _run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] = None) -> Dict:
     reload_profile_from_db_if_changed()
     operating_mode = get_operating_mode()
     if operating_mode != "PRODUCTION":
@@ -677,6 +758,8 @@ async def run_cycle_publishing(cycle_id: str, test_ist_now: Optional[datetime] =
 async def dispatch_eligible_recoveries(
     test_ist_now: Optional[datetime] = None,
     max_dispatches: int = 1,
+    owner_token: Optional[str] = None,
+    only_job_id: Optional[str] = None,
 ) -> Dict:
     """
     Dispatches checkpoint-resumable or waiting cycle recoveries strictly within active windows.
@@ -699,6 +782,16 @@ async def dispatch_eligible_recoveries(
 
     reconcile_report = startup_reconciler.reconcile_on_startup(test_now_ist=now_ist)
     profile = get_active_profile()
+    # Stage 3.36: while the Autopilot controller owns production, this (scheduler) path still reconciles, expires,
+    # re-arms and completes queue handoffs, but leaves the dispatch of recoveries to the controller.
+    autopilot_dispatches = False
+    if owner_token is None:
+        try:
+            from backend.app.autonomy.production_ownership import get_store
+            autopilot_dispatches = get_store().autopilot_owns()
+        except Exception:
+            autopilot_dispatches = False
+    deferred_to_autopilot: List[str] = []
     dispatched: List[Dict] = []
     rearmed: List[Dict] = []
     with SessionLocal() as db_session:
@@ -814,6 +907,11 @@ async def dispatch_eligible_recoveries(
             expired.append({"job_id": job_id, "cycle_id": cycle.cycle_id, "reason": "RECOVERY_WINDOW_EXPIRED"})
             continue
 
+        if only_job_id is not None and job_id != only_job_id:
+            continue
+        if autopilot_dispatches:
+            deferred_to_autopilot.append(job_id)
+            continue
         if len(dispatched) >= max_dispatches:
             continue
 
@@ -843,11 +941,15 @@ async def dispatch_eligible_recoveries(
                 job.recovery_reason = "CHECKPOINT_RESUMED"
                 db_session.commit()
 
-        result = await run_cycle_generation(cycle.cycle_id, test_ist_now=now_ist)
+        if owner_token is not None:
+            result = await run_cycle_generation(cycle.cycle_id, test_ist_now=now_ist, owner_token=owner_token)
+        else:
+            result = await run_cycle_generation(cycle.cycle_id, test_ist_now=now_ist)
         dispatched.append({"job_id": job_id, "cycle_id": cycle.cycle_id, "result_status": result.get("status")})
 
     return {
         "status": "OK",
+        "deferred_to_autopilot": deferred_to_autopilot,
         "reconcile_report": reconcile_report,
         "dispatched": dispatched,
         "expired": expired,

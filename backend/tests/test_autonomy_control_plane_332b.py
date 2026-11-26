@@ -660,7 +660,13 @@ def test_production_records_untouched_and_no_production_calls(tmp_path, monkeypa
     import ast
     pkg = Path(cpm.__file__).parent
     imported = set()
-    for p in pkg.glob("*.py"):
+    # Stage 3.36 deliberately adds production COORDINATION (the user-authorized Autopilot controller). Its four
+    # modules call the existing scheduler entry points by design and have their own, stricter source-safety test
+    # (test_autopilot_controller_336.py::test_production_modules_call_only_allowed_entry_points). Every other module
+    # of the package keeps this 3.32B guarantee unchanged.
+    stage_336 = {"production_controller.py", "production_handlers.py", "production_ownership.py", "decision_engine.py"}
+    modules = [p for p in pkg.glob("*.py") if p.name not in stage_336]
+    for p in modules:
         for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
                 imported |= {a.name for a in node.names}
@@ -680,11 +686,14 @@ def test_production_records_untouched_and_no_production_calls(tmp_path, monkeypa
                    # the 3.32H health-monitor ledger (file reads), the FFmpeg geometry self-check (pure function) and
                    # the 3.32A read-only intelligence. Their own tests: test_reliability_activation_reports_332hij.py.
                    "backend.app.autonomy.activation", "backend.app.autonomy.reports",
-                   "backend.app.core.health_monitoring", "backend.app.rendering.ffmpeg_geometry"}
+                   "backend.app.core.health_monitoring", "backend.app.rendering.ffmpeg_geometry",
+                   # Stage 3.36: handlers.py registers the two production handlers (same contract and gates); they
+                   # refuse to run outside the scheduler daemon's Autopilot controller. Own test: 336 suite.
+                   "backend.app.autonomy.production_handlers"}
     assert {m for m in imported if m.startswith(("backend", "app"))} <= allowed_app
     assert not imported & {"subprocess", "requests", "urllib.request", "socket", "shutil", "httpx"}
     # registry.py only *names* the guarded production functions (as data); the executable modules never mention them.
-    src = "\n".join(p.read_text(encoding="utf-8") for p in pkg.glob("*.py") if p.name != "registry.py")
+    src = "\n".join(p.read_text(encoding="utf-8") for p in modules if p.name != "registry.py")
     for forbidden in ("run_cycle_generation", "request_retry", "upload_short", "set_production_control_state",
                       "request_daemon_restart", "control_center_service", "youtube_service", "youtube_publishing_engine",
                       "urlopen", "requests.", "subprocess", "topic_history", "creative_policy_config", "scheduler.",

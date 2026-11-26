@@ -56,7 +56,7 @@ TRANSITIONS: Dict[str, Tuple[str, ...]] = {
 }
 
 RESERVED_ACTOR_PREFIXES = ("autonomy", "standing-approval", "system", "engine", "control-plane", "recommendation",
-                           "self-healing", "selfheal")
+                           "self-healing", "selfheal", "autopilot")
 # Separators are ignored when matching reserved identities, so "Self.Healing", "self healing" or "re-commendation"
 # cannot impersonate a machine identity.
 _RESERVED_NORMALIZED = tuple(sorted({re.sub(r"[ ._@-]", "", p) for p in RESERVED_ACTOR_PREFIXES}))

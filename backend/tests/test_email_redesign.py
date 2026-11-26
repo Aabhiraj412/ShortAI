@@ -258,7 +258,8 @@ def test_non_terminal_retry_sends_no_failure_email(env, monkeypatch):
     """Scheduler semantics preserved: only terminal outcomes produce a failure email (scheduler.run_cycle_generation)."""
     import inspect
     import backend.app.scheduler.scheduler as sched
-    src = inspect.getsource(sched.run_cycle_generation)
+    # Stage 3.36: the body moved unchanged into _run_cycle_generation (run_cycle_generation adds the ownership check).
+    src = inspect.getsource(sched._run_cycle_generation)
     assert 'if not decision["terminal"]:' in src and "return fail_res" in src
 
 

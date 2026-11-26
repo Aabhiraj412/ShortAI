@@ -27,6 +27,16 @@ from backend.app.services import deployment_diagnostics
 logger = logging.getLogger("crazzydocs_daemon")
 
 
+async def autopilot_controller_tick() -> None:
+    """Stage 3.36: one Autopilot controller step inside the existing recovery loop (not a new scheduler or worker).
+    Cheap when Autopilot is OFF; a failure here never affects the scheduler path."""
+    try:
+        from backend.app.autonomy.production_controller import get_controller
+        await get_controller().tick()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[AUTOPILOT] controller tick skipped: %s", type(exc).__name__)
+
+
 class ControlledRestart(Exception):
     """Raised at a safe point to exit so the startup monitor relaunches current code."""
 
@@ -75,6 +85,7 @@ async def periodic_recovery_and_sleep_loop(interval_sec: float = 45, tick_second
             if deployment_diagnostics.pending_restart_request():
                 logger.info("[RESTART] Restart requested; %s.", why)
             await dispatch_eligible_recoveries()
+            await autopilot_controller_tick()
         except asyncio.CancelledError:
             break
         except ControlledRestart:

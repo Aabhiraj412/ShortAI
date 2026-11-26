@@ -49,6 +49,10 @@ CATEGORIES: Dict[str, str] = {
     "community_drafts": "Prepare YouTube Community post drafts locally. Never publishes.",
     "self_healing": "Stage 3.32D: diagnose operational failures and run allow-listed, verifiable, low-impact recovery "
                     "actions. Never retries or re-renders jobs, restarts processes or changes configuration.",
+    "production": "Stage 3.36 Autopilot controller: coordinate the EXISTING 24-cycle schedule. It may dispatch only a "
+                  "cycle occurrence the production schedule already fired, or a recovery the existing retry policy "
+                  "already allows, through the existing pipeline. Never creates cycles, changes schedules, "
+                  "configuration or publishing, restarts processes or starts a second renderer.",
 }
 
 
@@ -220,6 +224,45 @@ PERMITTED: Tuple[ActionSpec, ...] = (
 )
 
 
+# -- Stage 3.36 Autopilot production coordination -----------------------------------------------------------------
+# Executed ONLY by the Autopilot controller inside the scheduler daemon while it holds production ownership (the
+# handlers refuse any other process, e.g. the dashboard's execute endpoint). Approval binds to the exact occurrence.
+PRODUCTION_PRECONDITIONS = COMMON_PRECONDITIONS + (
+    "controller_running_in_scheduler_daemon", "controller_holds_production_ownership",
+    "no_active_production_worker", "single_renderer_capacity_available", "resources_within_limits",
+    "inside_existing_recovery_window", "no_duplicate_dispatch_of_this_occurrence")
+PERMITTED = PERMITTED + (
+    ActionSpec(
+        action_type="production.scheduled_cycle.dispatch", category="production",
+        description="Dispatch ONE occurrence of an existing production cycle that the active schedule already fired "
+                    "(deferred to Autopilot), through the existing pipeline (run_cycle_generation). Creates no cycle "
+                    "and changes no schedule.",
+        risk=RISK_LOW, required_permission="autonomy.production.execute", approval=APPROVAL_STANDING_ALLOWED,
+        preconditions=PRODUCTION_PRECONDITIONS + ("occurrence_was_fired_by_the_active_schedule",),
+        timeout_seconds=3 * 3600, retry_limit=0,
+        verification="The job of this occurrence reached a safe state (terminal, handed off, scheduled retry or a "
+                     "deferral/skip by the existing guards) and no production worker for it is still running.",
+        rollback="None: production outcomes are handled by the existing retry policy and recovery windows.",
+        payload_fields={"cycle_id": Field(str, required=True, pattern=r"^cycle_\d{1,2}$", max_len=10),
+                        "job_id": Field(str, required=True, pattern=r"^cycle_\d{1,2}_\d{8}_\d{4}$", max_len=40),
+                        "scheduled_start_ist": Field(str, required=True, max_len=40)},
+        request_ttl_hours=1, daily_limit=30),
+    ActionSpec(
+        action_type="production.recovery.dispatch", category="production",
+        description="Dispatch ONE recovery that the existing retry policy already allows (checkpoint resume, due "
+                    "scheduled retry, verified-stalled worker), through the existing recovery dispatcher. Bounded by "
+                    "the retry policy and the cycle's recovery window; never extends either.",
+        risk=RISK_LOW, required_permission="autonomy.production.execute", approval=APPROVAL_STANDING_ALLOWED,
+        preconditions=PRODUCTION_PRECONDITIONS + ("retry_policy_allows_recovery",),
+        timeout_seconds=3 * 3600, retry_limit=0,
+        verification="The recovered job reached a safe state and no production worker for it is still running.",
+        rollback="None: the existing retry policy bounds further attempts.",
+        payload_fields={"job_id": Field(str, required=True, pattern=r"^cycle_\d{1,2}_\d{8}_\d{4}$", max_len=40),
+                        "status": Field(str, required=True, max_len=30, pattern=r"^[A-Z_]{3,30}$")},
+        request_ttl_hours=1, daily_limit=24),
+)
+
+
 def _prohibited(action_type: str, description: str, guards: str) -> ActionSpec:
     return ActionSpec(action_type=action_type, category="prohibited", description=description, risk=RISK_PROHIBITED,
                       required_permission="none (never grantable)", approval=APPROVAL_NEVER, preconditions=(),
@@ -232,7 +275,9 @@ PROHIBITED: Tuple[ActionSpec, ...] = (
                 "control_center_service scheduler enable / production start; /api/control-center/scheduler/enable; /api/control-center/production/start"),
     _prohibited("production.scheduler.stop", "Stop, pause or resume the production scheduler.",
                 "/api/control-center/scheduler/disable; /api/control-center/production/stop|pause|resume"),
-    _prohibited("production.cycle.create", "Create or trigger production cycles or jobs.",
+    _prohibited("production.cycle.create", "Create production cycles or jobs, or trigger production outside the "
+                "active schedule (manual runs, backfill, extra cycles). Stage 3.36 dispatch of an occurrence the "
+                "schedule itself fired is the separate production.scheduled_cycle.dispatch action.",
                 "run_cycle_generation; /api/pipeline/run; /api/jobs/run; /api/jobs/recover"),
     _prohibited("production.schedule.change", "Change production or publication schedules.",
                 "schedule draft / activate; unified-schedule activate; publication-schedule activate; reload_scheduler"),

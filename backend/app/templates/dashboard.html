@@ -1140,6 +1140,34 @@
       <div class="kpi-card"><div class="kpi-label">Executions</div><div class="kpi-val" id="apExecCount">--</div><div class="kpi-sub" id="apExecCountSub">--</div></div>
       <div class="kpi-card"><div class="kpi-label">Safety</div><div class="kpi-val" id="apSafety">--</div><div class="kpi-sub" id="apSafetySub">--</div></div>
     </div>
+    <!-- STAGE 3.36: Autopilot continuous production controller -->
+    <div class="card" id="apCtlCard"><div class="card-head"><div><h2 class="card-title">Autopilot controller (production)</h2>
+      <p class="card-desc">Operational state (<strong>OFF / STARTING / ON / STOPPING / BLOCKED</strong>) is separate from the autonomy mode (the <code>production</code> level, the lower of global and category). The controller runs inside the scheduler daemon. It takes production ownership only at <strong>APPROVED_EXECUTION</strong> with active standing approvals, and it dispatches only cycle occurrences the unchanged 24-cycle schedule fired, one renderer at a time. Start and Stop are requests: the state shown is the one the backend has verified. Publishing, schedule, configuration, restart, deletion and git actions are permanently prohibited.</p></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;">
+        <input id="apCtlReason" maxlength="500" placeholder="reason (required)" style="width:200px;" />
+        <button class="btn sm" id="apCtlStart" onclick="apCtlStart()">Start Autopilot</button>
+        <button class="btn sm" id="apCtlStop" onclick="apCtlStop()">Stop Autopilot</button>
+        <select id="apCtlLevel" style="font-size:12px;"><option value="OFF">OFF</option><option value="OBSERVE">OBSERVE</option><option value="RECOMMEND">RECOMMEND</option><option value="APPROVED_EXECUTION">APPROVED_EXECUTION</option></select>
+        <button class="btn sm" onclick="apCtlSetLevel()">Set production level</button></div></div>
+      <div class="overview-grid" style="margin-bottom:8px;">
+        <div class="kpi-card"><div class="kpi-label">Operational state</div><div class="kpi-val" id="apCtlState">--</div><div class="kpi-sub" id="apCtlStateSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Autonomy mode</div><div class="kpi-val" id="apCtlMode">--</div><div class="kpi-sub" id="apCtlModeSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Production ownership</div><div class="kpi-val" id="apCtlOwner">--</div><div class="kpi-sub" id="apCtlOwnerSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Current job</div><div class="kpi-val" id="apCtlJob" style="font-size:15px;">--</div><div class="kpi-sub" id="apCtlJobSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Resources</div><div class="kpi-val" id="apCtlRes" style="font-size:15px;">--</div><div class="kpi-sub" id="apCtlResSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Upload quota</div><div class="kpi-val" id="apCtlQuota" style="font-size:15px;">--</div><div class="kpi-sub" id="apCtlQuotaSub">--</div></div>
+      </div>
+      <div class="grid-2">
+        <div><h3 style="font-size:13px;margin:4px 0;">Controller and permissions</h3><div id="apCtlInfo" style="font-size:12px;">--</div></div>
+        <div><h3 style="font-size:13px;margin:4px 0;">Latest decision</h3><div id="apCtlDecision" style="font-size:12px;">--</div></div>
+      </div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Recent decisions</h3><div id="apCtlDecisions" style="font-size:12px;overflow-x:auto;">--</div>
+      <div class="grid-2">
+        <div><h3 style="font-size:13px;margin:10px 0 4px;">Dispatches and recovery activity</h3><div id="apCtlDispatches" style="font-size:12px;overflow-x:auto;">--</div></div>
+        <div><h3 style="font-size:13px;margin:10px 0 4px;">Blocked actions and pending approvals</h3><div id="apCtlBlocked" style="font-size:12px;overflow-x:auto;">--</div></div>
+      </div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Autopilot event history</h3><div id="apCtlHistory" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
     <!-- STAGE 3.32H/I/J: reliability, phased activation, operational reports -->
     <div class="grid-2">
       <div class="card"><div class="card-head"><div><h2 class="card-title">Dashboard health</h2><p class="card-desc">From the health monitor's persisted ledger. Liveness and readiness are probed separately. A slow or not-ready dashboard is <em>degraded</em> and is never restarted; a restart needs consecutive liveness failures <em>and</em> no running dashboard process.</p></div></div><div id="apHealth" style="font-size:12px;">--</div></div>
@@ -4083,6 +4111,7 @@ async function refreshAutopilot(force = false) {
     if (meta) meta.innerHTML = `<span class="auto-kill">Autopilot unavailable: ${escHtml(err.message || String(err))}</span>`;
   }
   refreshAutopilotOps(force);
+  refreshAutopilotController(force);
 }
 
 async function apPropose(recId, actionType) {
@@ -4095,6 +4124,114 @@ async function apPropose(recId, actionType) {
 }
 
 setInterval(() => refreshAutopilot(), 120000);   // only loads while the Autopilot tab is open
+
+// -- Stage 3.36 Autopilot controller: every value is the persisted backend state; controls are requests that the
+//    scheduler daemon verifies (STARTING / STOPPING are shown until it has). --
+const AP_CTL_COLOR = { OFF: "var(--muted)", STARTING: "#fcd34d", ON: "#86efac", STOPPING: "#fcd34d", BLOCKED: "#fca5a5" };
+
+function apCtlReason() {
+  const v = ((document.getElementById("apCtlReason") || {}).value || "").trim();
+  if (!v) throw new Error("Enter a reason first.");
+  return v;
+}
+
+async function apCtlStart() {
+  let reason; try { reason = apCtlReason(); } catch (e) { showToast(e.message, true); return; }
+  if (!(await askConfirm("Request Autopilot start?", "The scheduler daemon re-checks every precondition. Autopilot becomes ON only if they pass; otherwise it is BLOCKED with the exact reason.\n\nProduction ownership is taken only at APPROVED_EXECUTION with active standing approvals for both production actions. Active jobs are never interrupted, and the 24-cycle schedule is not changed."))) return;
+  try { const r = await apWrite("/api/autopilot/controller/start", { reason, confirm: true }); showToast(`Start requested: state ${r.state} (waiting for the controller to verify)`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilotController(true);
+}
+
+async function apCtlStop() {
+  let reason; try { reason = apCtlReason(); } catch (e) { showToast(e.message, true); return; }
+  if (!(await askConfirm("Request Autopilot stop?", "No new job is started. A production Autopilot already dispatched is allowed to finish; then ownership returns to the scheduler. Occurrences handed to Autopilot but not started are replayed through the normal scheduler path inside their recovery windows."))) return;
+  try { const r = await apWrite("/api/autopilot/controller/stop", { reason, confirm: true }); showToast(`Stop requested: state ${r.state}`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilotController(true);
+}
+
+async function apCtlSetLevel() {
+  let reason; try { reason = apCtlReason(); } catch (e) { showToast(e.message, true); return; }
+  const level = document.getElementById("apCtlLevel").value;
+  if (!(await askConfirm(`Set the production autonomy level to ${level}?`, "The effective mode is the lower of the global level and this category level. This uses the existing Autonomy Control permission change: it is audited, and it needs your operator name and a reason. It grants no standing approval."))) return;
+  try {
+    const op = ((document.getElementById("apOperator") || {}).value || "").trim();
+    const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
+    await autoWrite("/api/autonomy/permissions/levels", "PUT", { scope: "production", level, reason, confirm: true });
+    showToast(`Production level set to ${level}`);
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshAutopilotController(true);
+}
+
+async function refreshAutopilotController(force = false) {
+  const panel = document.getElementById("tab-autopilot");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  try {
+    const c = await apiJson("/api/autopilot/controller");
+    const lv = c.live || {}, res = lv.resources || {}, q = lv.quota || {}, own = c.ownership || {}, ctl = c.controller || {};
+    document.getElementById("apCtlState").innerHTML = `<span style="color:${AP_CTL_COLOR[c.state] || "inherit"}">${escHtml(c.state)}</span>`;
+    document.getElementById("apCtlStateSub").textContent = c.state === "BLOCKED" ? (c.blocked_reason || "blocked") : (c.pending_confirmation ? "waiting for the scheduler daemon to verify" : `since ${new Date(c.state_since_utc).toLocaleString("en-GB", { timeZone: "Asia/Kolkata" })} IST`);
+    document.getElementById("apCtlMode").textContent = c.mode;
+    document.getElementById("apCtlModeSub").textContent = `role ${c.role}${c.state === "ON" ? "" : ` (would be ${c.role_if_on})`} · global ${c.global_level} · production ${(c.category_levels || {}).production || "OFF"}`;
+    document.getElementById("apCtlOwner").innerHTML = own.owner === "AUTOPILOT" ? `<span class="auto-on">AUTOPILOT</span>` : `<span>SCHEDULER</span>`;
+    document.getElementById("apCtlOwnerSub").textContent = `${own.reason || ""}${(own.deferred_occurrences || []).length ? ` · ${(own.deferred_occurrences || []).length} handed over` : ""}`;
+    const jobs = lv.active_jobs || [], wh = lv.worker_heartbeat || {};
+    document.getElementById("apCtlJob").textContent = jobs.length ? jobs.map(j => j.job_id).join(", ") : "none";
+    document.getElementById("apCtlJobSub").textContent = jobs.length ? jobs.map(j => `${j.status} · ${j.stage || "?"} · worker ${j.worker_alive ? "alive" : "not seen"} · heartbeat ${j.heartbeat_utc ? autoTime(j.heartbeat_utc) : "--"}`).join(" | ") : (lv.renderer && lv.renderer.active ? "renderer active" : "renderer idle");
+    document.getElementById("apCtlRes").innerHTML = res.safe === false ? `<span class="auto-kill">PRESSURE</span>` : `<span class="auto-on">ok</span>`;
+    document.getElementById("apCtlResSub").textContent = `CPU ${res.cpu_used_percent ?? "?"}% · RAM ${res.memory_used_percent ?? "?"}% · disk free ${res.disk_free_gb ?? "?"} GB · max ${res.max_concurrency ?? "?"} renderer`;
+    document.getElementById("apCtlQuota").innerHTML = q.uploads_blocked ? `<span class="auto-kill">BLOCKED</span>` : (q.available === false ? "unavailable" : `<span class="auto-on">${escHtml(String(q.remaining_estimate ?? "?"))}</span>`);
+    document.getElementById("apCtlQuotaSub").textContent = q.uploads_blocked ? `${q.reason || ""} · resets ${q.blocked_until_ist || "?"}` : `${q.used_estimate ?? "?"} of ${q.daily_limit ?? "?"} ${q.unit || "units"} used (${q.source || "local estimate"})`;
+    const last = lv.last_successful_production;
+    document.getElementById("apCtlInfo").innerHTML = opsKV([
+      ["Controller", escHtml(`${ctl.responding ? "responding" : "not responding"} · process ${ctl.pid ?? "--"} · ${ctl.note || ""}`)],
+      ["Why not executing", escHtml((c.not_executor_because || []).join("; ") || "nothing blocks execution")],
+      ["Kill switches", escHtml((c.kill_switches || {}).any_active ? (c.kill_switches.active || []).join(", ") : "none")],
+      ["Standing approvals missing", escHtml((c.missing_standing_approvals || []).join(", ") || "none")],
+      ["Per-category levels", escHtml(Object.entries(c.effective_levels || {}).map(([k, v]) => `${k} ${v}`).join(" · "))],
+      ["Current dispatch", escHtml(Object.keys(c.current_dispatch || {}).length ? `${c.current_dispatch.job_id} (${c.current_dispatch.kind || ""})` : "none")],
+      ["Last successful production", escHtml(last ? `${last.job_id}${last.topic ? " · " + last.topic : ""} · ${last.updated_utc ? autoTime(last.updated_utc) : ""}` : "none recorded")],
+      ["Last success by Autopilot", escHtml((c.last_autopilot_success || {}).job_id || "none")],
+      ["Controller errors (1 h)", escHtml(String((c.errors || []).length))],
+    ]);
+    const d = c.latest_decision || {};
+    document.getElementById("apCtlDecision").innerHTML = d.outcome ? opsKV([
+      ["Outcome", escHtml(`${d.outcome}${d.selected ? " → " + d.selected.job_id : ""}`)],
+      ["Why", escHtml((d.reasons || []).join("; "))],
+      ["Rejected", escHtml((d.considered || []).filter(x => !x.accepted).map(x => `${x.job_id}: ${x.reason}`).join("; ") || "--")],
+      ["Bottlenecks", escHtml((d.bottlenecks || []).map(b => b.detail).join("; ") || "none")],
+      ["Quota", escHtml((d.quota_constraints || []).map(x => x.detail).join("; ") || "no constraint")],
+      ["Recommendations", escHtml((d.recommendations || []).map(r => r.text).join(" | ") || "none")],
+      ["Escalations", escHtml((d.escalations || []).map(e => e.text).join(" | ") || "none")],
+    ]) : `<div style="color:var(--muted)">No decision recorded yet (the controller decides only while ON).</div>`;
+    const ds = c.recent_decisions || [];
+    document.getElementById("apCtlDecisions").innerHTML = ds.length ? apTable(["When", "State / role", "Mode", "Outcome", "Executed", "Explanation"],
+      ds.map(x => `<tr><td>${autoTime(x.at_utc)}</td><td>${escHtml(x.state)} / ${escHtml(x.role)}</td><td>${escHtml(x.mode)}</td><td>${escHtml(x.outcome)}</td><td>${x.executed ? "yes" : "no"}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml((x.explanation || "").slice(0, 300))}</td></tr>`))
+      : `<div style="color:var(--muted)">No decisions yet.</div>`;
+    const dp = c.dispatches || [], rec = lv.recovery_activity || [];
+    document.getElementById("apCtlDispatches").innerHTML = (dp.length ? apTable(["Started", "Action", "Job", "Outcome", "Job status"],
+      dp.map(x => `<tr><td>${autoTime(x.started_at_utc)}</td><td>${escHtml(x.action_type)}</td><td>${escHtml(x.job_id)}</td><td>${escHtml(x.outcome)}</td><td>${escHtml(x.job_status || "")}</td></tr>`)) : `<div style="color:var(--muted)">No Autopilot dispatches.</div>`)
+      + (rec.length ? `<div style="margin-top:6px;">${rec.map(r => `<div>recovery: ${escHtml(r.job_id)} · ${escHtml(r.status)} · ${r.due ? "due" : "not due until " + escHtml(r.next_retry_utc || "?")}</div>`).join("")}</div>` : "");
+    const bl = c.blocked_actions || [], pa = c.pending_approvals || [];
+    document.getElementById("apCtlBlocked").innerHTML = (bl.length ? apTable(["When", "Event", "Action", "Reason"],
+      bl.map(x => `<tr style="color:#fca5a5"><td>${autoTime(x.ts_utc)}</td><td>${escHtml(x.event_type)}</td><td>${escHtml(x.action_type || "")}</td><td>${escHtml((x.reason || "").slice(0, 160))}</td></tr>`)) : `<div style="color:var(--muted)">No blocked actions.</div>`)
+      + `<div style="margin-top:6px;">${pa.length ? pa.map(r => `<div>pending: ${escHtml(r.id)} · ${escHtml(r.action_type)} · by ${escHtml(r.proposed_by)} (review in Autonomy Control)</div>`).join("") : `<span style="color:var(--muted)">No pending approvals.</span>`}</div>`;
+    const ev = [...(c.transitions || []).map(t => ({ at: t.at_utc, kind: "transition", text: `${t.from_state} → ${t.to_state}`, actor: t.actor, reason: t.reason })),
+                ...(c.events || []).filter(e => e.event_type !== "AUTOPILOT_STATE_CHANGED").map(e => ({ at: e.ts_utc, kind: e.event_type, text: e.new_state || "", actor: e.actor, reason: e.reason }))]
+      .sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 40);
+    document.getElementById("apCtlHistory").innerHTML = ev.length ? apTable(["When", "Event", "Change", "Actor", "Reason"],
+      ev.map(e => `<tr><td>${autoTime(e.at)}</td><td>${escHtml(e.kind)}</td><td>${escHtml(e.text)}</td><td>${escHtml(e.actor)}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml((e.reason || "").slice(0, 240))}</td></tr>`))
+      : `<div style="color:var(--muted)">No Autopilot events yet.</div>`;
+    document.getElementById("apCtlStart").disabled = !(c.controls || {}).can_start;
+    document.getElementById("apCtlStop").disabled = !(c.controls || {}).can_stop;
+    const sel = document.getElementById("apCtlLevel"); if (sel && document.activeElement !== sel) sel.value = (c.category_levels || {}).production || "OFF";
+  } catch (err) {
+    const el = document.getElementById("apCtlStateSub");
+    if (el) el.innerHTML = `<span class="auto-kill">controller status unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
 
 // -- Stage 3.32H/I/J operations: health, rendering, phased activation and reports (persisted backend state only). --
 const AP_STATE_COLOR = { HEALTHY: "#86efac", DEGRADED: "#fcd34d", UNAVAILABLE: "#fdba74", UNHEALTHY: "#fca5a5" };

@@ -2253,8 +2253,16 @@ async def api_autonomy_execute(request_id: str, req: AutonomyExecuteRequest, _: 
     from backend.app.autonomy.control_plane import validate_operator
 
     def _run():
+        from backend.app.autonomy.control_plane import PermissionDenied
         op = validate_operator(req.operator)
-        return _autonomy().execute(request_id, actor=f"operator:{op}")
+        cp = _autonomy()
+        if str(cp.get_request(request_id).get("action_type") or "").startswith("production."):
+            # Stage 3.36: production dispatches run only inside the scheduler daemon's Autopilot controller.
+            cp._audit_now("EXECUTION_BLOCKED", f"operator:{op}", request_id=str(request_id)[:40],
+                          reason="production actions are executed only by the Autopilot controller in the scheduler daemon")
+            raise PermissionDenied("production actions are executed only by the Autopilot controller inside the "
+                                   "scheduler daemon, never from the dashboard")
+        return cp.execute(request_id, actor=f"operator:{op}")
     return await _autonomy_call(_run)
 
 
@@ -2494,6 +2502,38 @@ async def api_autopilot(_: None = Depends(require_local_control)):
 async def api_autopilot_policy(_: None = Depends(require_local_control)):
     from backend.app.autonomy.autopilot import action_policy
     return await _autonomy_call(action_policy)
+
+
+# -- Stage 3.36: Autopilot continuous production controller ------------------------------------------------------
+# Start/stop are requests persisted for the controller in the scheduler daemon: the response shows the state the
+# backend actually holds (STARTING / STOPPING until the daemon has verified the transition), never assumed success.
+class AutopilotControllerRequest(_AutonomyBody):
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+def _production_controller():
+    from backend.app.autonomy.production_controller import get_controller
+    return get_controller()
+
+
+@app.get("/api/autopilot/controller")
+async def api_autopilot_controller(_: None = Depends(require_local_control)):
+    return await _autonomy_call(lambda: _production_controller().status())
+
+
+@app.post("/api/autopilot/controller/start")
+async def api_autopilot_controller_start(req: AutopilotControllerRequest, _: None = Depends(require_local_control),
+                                         __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _autonomy_call(lambda: _production_controller().request_start(req.operator, req.reason))
+
+
+@app.post("/api/autopilot/controller/stop")
+async def api_autopilot_controller_stop(req: AutopilotControllerRequest, _: None = Depends(require_local_control),
+                                        __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _autonomy_call(lambda: _production_controller().request_stop(req.operator, req.reason))
 
 
 # -- Stage 3.32H/I/J: operations, phased activation, operational reports ----------------------------------------

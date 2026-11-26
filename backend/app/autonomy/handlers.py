@@ -187,6 +187,11 @@ from backend.app.autonomy.self_healing.handlers import SELF_HEALING_HANDLERS  # 
 
 HANDLERS.update(SELF_HEALING_HANDLERS)
 
+# Stage 3.36 production coordination handlers (refuse to run outside the scheduler daemon's Autopilot controller).
+from backend.app.autonomy.production_handlers import PRODUCTION_HANDLERS  # noqa: E402
+
+HANDLERS.update(PRODUCTION_HANDLERS)
+
 # Import-time guard: a handler can never exist for an unknown or prohibited action type.
 for _action_type in HANDLERS:
     registry.require_permitted(_action_type)
