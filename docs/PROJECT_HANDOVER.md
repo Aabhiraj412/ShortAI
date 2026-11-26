@@ -1,5 +1,7 @@
 # CrazzyDocs Autonomous Studio: Project Handover
 
+> **This is the authoritative engineering context.** Read it, not a fresh repository audit, before any milestone, and update §2, §3, §4 and §7 when the milestone ends. The execution policy is in the repository root `CLAUDE.md`. Verification commands are in §8. Per-stage detail lives in `docs/STAGE_*.md`.
+
 **As of:** 2026-11-21 IST. Stage 3.35 (YouTube Analytics, autonomous learning and visual asset intelligence) is implemented and deployed in the commit that contains this file:
 - the root cause of the repeated Analytics "disconnections" is fixed (an upload-client refresh erased the analytics scope from the shared token);
 - analytics ingestion with a first-7-days window;
@@ -16,7 +18,7 @@ See `docs/STAGE_3_35_IMPLEMENTATION_REPORT.md` and the other `STAGE_3_35_*` repo
 
 **Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, in step with `main`.
 
-**Latest commit on `main` / `origin/main`:** the Stage 3.32H/I/J commit (on top of `ee6c8ce`, 3.32G). Run `git log -1` for the hash.
+**Latest commit on `main` / `origin/main`:** run `git log -1`. As of 2026-11-27 it is the maintenance commit that follows `fed2845` (3.36).
 
 ## 1. Architecture
 
@@ -69,7 +71,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 - `candidate_ledger`: on;
 - `category_classifier_v2`: shadow.
 
-## 2. Completed stages and commits (2026-11-20)
+## 2. Completed stages and commits
 
 | Commit | Stage |
 |---|---|
@@ -86,25 +88,41 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | `97b7990` (dev branch only, not pushed) | 3.32E: `image_not_blank` validator wording fix plus its regression test |
 | (uncommitted, dev worktree) | 3.32E: **timezone-aware Community Publishing Schedule**: `community/schedule.py` (IANA presets and list, DST rules, scheduling decision), `max_auto_attempts`, no retroactive run on enabling, 2 new read-only routes (18 total), dashboard panel, 52 new tests |
 
-**Test baseline at `710b8c5`:** 1208 passed, 5 failed, 173 skipped. The 5 failures are pre-existing (section 4).
+**Since 2026-11-20** (newest first):
+
+| Commit | Stage |
+|---|---|
+| `fed2845` | **3.36** Autopilot continuous production controller (deployed; Autopilot OFF) |
+| `3596f5d`, `1db7e03`, `0361710` | 3.31 formal 48-hour shadow observation and its final report (`docs/STAGE_3_31_SHADOW_OBSERVATION.md` §9) |
+| `f6c1d34` … `68c1c0c` | Email redesign plus fixes (`docs/EMAIL_SYSTEM.md`) |
+| `fb1e050`, `417076c` | 3.32F Community publishing workflow (API publishing stays OFF) |
+| `b641567` | 3.35b Wikimedia pacing in topic discovery |
+| `4275621` | 3.35 Analytics reliability, learning, footage |
+| `050bb13` | 3.34 production validation and reliability |
+| `2bae573` | 3.31–3.33 demand-led topic intelligence, creative intelligence, rendering decision |
+| `0c0f31c`, `523010a`, `09ffe30` | 3.32H–J reliability, phased activation, reports |
+| `ee6c8ce` | 3.32G Controlled Autopilot |
+
+**Test baseline at `710b8c5` (historical):** 1208 passed, 5 failed, 173 skipped. The 5 failures are pre-existing (section 4).
 
 **Docs for each stage:** `docs/STAGE_3_32*.md`. The latest audit is `docs/STAGE_3_32D_FINAL_SECURITY_AUDIT.md`.
 
-## 3. Current production state
+## 3. Current production state (2026-11-27 03:00 IST)
 
 | Item | State |
 |---|---|
-| Restart at 15:23:59 IST | The computer was restarted from the Start menu under the user's account (System event 1074). At logon the scheduled tasks relaunched everything from the files on disk (`687c156`). |
-| Daemon | PID 13216, started 17:34:26 IST by a controlled restart at a safe point; code `89ea49b` (loaded revision `5171904dce2ca340`). 24 cycles plus the `Community Draft Check` job, which returns `blocked` while automation is OFF. |
-| Dashboard | PID 3992, started 16:42:50 IST through `Start-ScheduledTask CrazzyDocs-Health-Dashboard`, because the monitor had reached its 3-relaunches-per-hour cap; code `89ea49b`. |
-| Monitor | PID 5260 (`startup_manager.py --monitor`), running again since the 15:24 restart. |
-| Schedule | Active revision `ccf0bd04f159`, CUSTOM 24 cycles, named profile "24/7", daemon in sync. |
-| Jobs | 45 completed, 12 failed, 40 recovery-window-expired, 1 aborted. |
-| Autonomy | All levels OFF; startup kill switch active (no `autonomy_startup.json`); 0 requests, 0 executions. |
-| Self-healing | BLOCKED (startup kill switch), level OFF; its six `selfheal_*` tables exist and are empty. |
-| Community drafts (3.32E) | **Automation ON**, switched on by the user in the dashboard at 19:43 IST on 2026-11-20 (`operator:Abhiraj`): daily at **20:00 Asia/Kolkata**. Today's 20:00 run is skipped because today already has a draft; the first automatic draft is due 2026-11-21 20:00 IST. `cdraft_00eeba9275a0990d` was **approved** by the user at 19:43 IST and is not published. |
+| Daemon | PID 3032, started 02:33 IST by a controlled restart at a safe point; code `fed2845`. 24 cycles plus Community, Autopilot-observation, creative, analytics and junk-cleaner jobs. |
+| Dashboard | PID 4920 (Task Scheduler `CrazzyDocs-Health-Dashboard`); code `fed2845`. |
+| Monitor | `startup_manager.py --monitor`, PID 7688. |
+| Schedule | Active revision `ccf0bd04f159`, CUSTOM 24 hourly cycles, 45-min recovery windows, concurrency 1. |
+| Operating mode / publishing policy | PRODUCTION / `automatic_private_scheduled` |
+| Autonomy | Global OBSERVE (categories OBSERVE; `community_drafts` and `production` OFF). The startup kill switch is active (no `autonomy_startup.json`). |
+| Autopilot controller (3.36) | OFF. The scheduler owns production. |
+| Topic intelligence flags | `candidate_ledger` on; `category_classifier_v2`, `demand_signals` and `scoring_v2` in shadow (3.31 report: do not activate v2 as-is). |
+| Community drafts | Automation ON (daily draft); API publishing OFF (pilot access and scope missing). |
+| Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
-| Latest backups | `D:\Agents\CrazzyDocs_backups\deploy_89ea49b_scheduler_20261120_173044` (before the daemon restart) and `deploy_89ea49b_dashboard_20261120_163917` |
+| Latest backup | `D:\Agents\CrazzyDocs_backups\predeploy_stage336_autopilot_20261127_023218` |
 
 ## 4. Outstanding bugs and risks
 
@@ -115,9 +133,10 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3 | **QC duration failures** | Duration 49.2 s, outside the 50–58 s window; seen after rendering. |
 | 4 | **High recovery-window expiry rate** | 40 of 98 jobs; YouTube daily quota exhaustion also delays publishing. |
 | 5 | **Monitor false unhealthy** | **Fixed in 3.32H** (2 s timeout on a ~2 s aggregate endpoint). The monitor now uses liveness/readiness probes and persists every decision. |
-| 6 | **5 known test failures** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`, and the timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests`. |
+| 6 | **Known test failures (baseline, 2026-11-27: 4)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
 | 7 | **DNS rebinding** | Could expose the CSRF token through a read (pre-existing; writes still need an allow-listed Origin). A Host-header allow-list is the suggested fix. |
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
+| 9 | **Junk cleaner reclaims almost nothing yet** | By design: intermediates are kept for 30 days, and production intermediates only date from mid-November. Test renders (about 1.8 GB) and downloaded assets have no retention rule (kept). The media tree grows by about 10k files a day. |
 
 ## 5. Pending roadmap
 
@@ -186,3 +205,29 @@ Outside these stages, still open:
 - YouTube quota pressure;
 - Community API publishing waits for Google pilot access and a `youtube.force-ssl` re-consent;
 - `test_stage_3_19_creative_identity_e2e.py` hardcodes the main checkout path (it trips the worktree isolation guard when run in a focused selection).
+
+## 8. Verification commands
+
+```bash
+# tests against the dev worktree (Git Bash; Windows-style PYTHONPATH, otherwise imports resolve to the main checkout)
+W='D:\Agents\CrazzyDocs\.claude\worktrees\crazzy-docs-handover-b1a088'
+PYTHONPATH="$W;$W\\backend;$W\\backend\\tests" /d/Agents/CrazzyDocs/.venv/Scripts/python.exe -m pytest backend/tests/<file>.py -q -p no:cacheprovider
+# full suite: about 23 min, run it in the background; baseline = 4 failures (section 4, item 6)
+
+# live state (read-only)
+curl -s http://127.0.0.1:8000/api/control-center/deployment      # daemon/dashboard revision, active job, restart safety
+curl -s http://127.0.0.1:8000/api/autopilot/controller           # Autopilot state, ownership, decisions
+curl -s http://127.0.0.1:8000/api/junk-cleaner/status            # cleaner health and last run
+sqlite3 "file:D:/Agents/CrazzyDocs/backend/studio.db?mode=ro" "select id,status,current_stage from persistent_jobs order by created_at desc limit 5"
+```
+
+- **Deploy:** follow the memory/procedure in §6:
+  1. verified backup to a new `CrazzyDocs_backups\predeploy_*` folder;
+  2. `git merge --ff-only` in `D:\Agents\CrazzyDocs`, then push;
+  3. daemon: `POST /api/control-center/deployment/restart {"confirm": true}` between :15 and :50 with no active job;
+  4. dashboard: stop the verified `run_dashboard.py` PID, wait at least 12 s, `Start-ScheduledTask CrazzyDocs-Health-Dashboard`;
+  5. check `/api/control-center/deployment` = OK.
+- **Junk cleaner** (from `D:\Agents\CrazzyDocs`, live paths):
+  `JunkCleaner(root=Path(r"D:\Agents\CrazzyDocs"), db_path=r"D:\Agents\CrazzyDocs\backend\studio.db").run(trigger="operator", live=False)`.
+  - Live quarantine needs `live=True, confirm=True` and no active job.
+  - `restore(run_id)` undoes a live run from its manifest (it never overwrites).

@@ -32,7 +32,13 @@ TERMINAL_STATUSES = {"COMPLETED", "RECOVERY_WINDOW_EXPIRED", "MISSED", "ABORTED_
 # A FAILED job can be re-evaluated for retry inside its recovery window (at most 4 h for the current schedule).
 # Treat it as recoverable for 24 h after its last update: conservative, never shorter than a recovery window.
 FAILED_RECOVERABLE_HOURS = 24
-UPLOADED_STATES = {"uploaded", "uploaded_public", "publication_scheduled", "published", "scheduled"}
+# BLOCKED_QC is terminal for the retry policy (scheduler/retry_policy.TERMINAL_STATUSES) but was treated as
+# "non-terminal" here, so a QC-blocked job's intermediates were kept forever. It now follows the FAILED rule.
+FAILED_LIKE = {"FAILED", "BLOCKED_QC"}
+# The publishing ledger records "uploaded_private" for a video already on YouTube (private / scheduled); it was
+# missing, so those jobs counted as "publishing still pending" indefinitely.
+UPLOADED_STATES = {"uploaded", "uploaded_private", "uploaded_public", "publication_scheduled", "published", "scheduled"}
+QUARANTINE_SUBDIR = ("quarantine", "junk_cleaner")
 
 # category -> (description, policy retention key or None = never eligible)
 CATEGORIES: Dict[str, Dict[str, Any]] = {
@@ -172,7 +178,7 @@ class JunkCleaner:
         status = job["status"]
         if status in ACTIVE_STATUSES:
             return f"active job ({status})"
-        if status == "FAILED":
+        if status in FAILED_LIKE:
             try:
                 upd = datetime.fromisoformat(str(job["updated_at"]).replace("Z", "")).replace(tzinfo=timezone.utc)
             except ValueError:
@@ -216,6 +222,13 @@ class JunkCleaner:
             if not st["db_ok"]:
                 record.update(outcome="failed", errors=["database unavailable: nothing evaluated"])
                 return self._persist(record)
+            active = sorted(j for j, v in st["jobs"].items() if v["status"] in ACTIVE_STATUSES)
+            if live and active:
+                # Shared caches and FFmpeg temp files carry no job id, so a live run while production is active could
+                # remove something a running job is about to read. Never move anything while a job is active.
+                record.update(outcome="refused", errors=[f"production job(s) active: {', '.join(active[:5])}; live "
+                                                         f"cleanup runs only when no job is active"])
+                return self._persist(record)
             days = self.policy.get("retention_days") or {}
             for dirpath, _dirs, files in os.walk(self.media):
                 rel = Path(dirpath).relative_to(self.media).parts
@@ -251,7 +264,7 @@ class JunkCleaner:
                                                          "category": cat})
                     if live:
                         try:
-                            self._quarantine(path, run_id)
+                            self._quarantine(path, run_id, size, mtime)
                             record["deleted"] += 1
                             record["bytes_reclaimed"] += size
                             c["deleted"] += 1
@@ -302,10 +315,71 @@ class JunkCleaner:
                     return "publishing still pending"
         return None
 
-    def _quarantine(self, path: Path, run_id: str) -> None:
-        dest = self.media / "quarantine" / "junk_cleaner" / run_id / path.relative_to(self.media)
+    def quarantine_dir(self, run_id: str) -> Path:
+        return self.media.joinpath(*QUARANTINE_SUBDIR) / run_id
+
+    def _quarantine(self, path: Path, run_id: str, size: Optional[int] = None, mtime: Optional[datetime] = None) -> None:
+        """Reversible move. Every moved file gets a manifest line (the run record lists at most 500 files), so
+        ``restore`` can always put the whole run back."""
+        qdir = self.quarantine_dir(run_id)
+        rel = path.relative_to(self.media)
+        dest = qdir / "files" / rel
+        if dest.exists():
+            raise FileExistsError(str(dest))
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(path), str(dest))
+        entry = {"original": str(rel).replace("\\", "/"), "quarantined": str(dest.relative_to(qdir)).replace("\\", "/"),
+                 "bytes": size, "mtime_utc": mtime.strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None,
+                 "moved_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        with open(qdir / "manifest.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+
+    def restore(self, run_id: str) -> Dict[str, Any]:
+        """Move every file of one live run back to its original location. Never overwrites: a file whose original
+        path exists again is left in quarantine and reported as a conflict."""
+        if not run_id or any(c in run_id for c in ("/", "\\", ".", ":")):
+            raise ValueError("invalid run id")
+        qdir = self.quarantine_dir(run_id)
+        out: Dict[str, Any] = {"run_id": run_id, "restored": 0, "restored_bytes": 0, "conflicts": [], "missing": [],
+                               "errors": []}
+        try:
+            lines = (qdir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+        except OSError:
+            out["errors"].append("no quarantine manifest for this run")
+            return out
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                out["errors"].append("unreadable manifest line")
+                continue
+            src, dst = qdir / e["quarantined"], self.media / e["original"]
+            if not src.resolve().is_relative_to(qdir.resolve()) or not dst.resolve().is_relative_to(self.media.resolve()):
+                out["errors"].append(f"path outside allowed area: {e['original']}")
+                continue
+            if not src.exists():
+                out["missing"].append(e["original"])
+                continue
+            if dst.exists():
+                out["conflicts"].append(e["original"])
+                continue
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                out["restored"] += 1
+                out["restored_bytes"] += int(e.get("bytes") or 0)
+            except OSError as exc:
+                out["errors"].append(f"{e['original']}: {type(exc).__name__}")
+        out["finished_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            self.runs_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.runs_dir / "restores.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(out) + "\n")
+        except OSError:
+            pass
+        logger.info("[JUNK CLEANER] restore %s: %d restored, %d conflicts, %d missing", run_id, out["restored"],
+                    len(out["conflicts"]), len(out["missing"]))
+        return out
 
     # ---- persistence ------------------------------------------------------------------------------------
     def _persist(self, record: Dict[str, Any]) -> Dict[str, Any]:

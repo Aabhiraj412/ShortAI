@@ -127,8 +127,24 @@ def test_live_refused_without_policy_or_confirmation(tree):
     assert (root / "media/productions/done/lemo_film/scene_01.mp4").exists()
 
 
+def _finish_live_job(db):
+    c = sqlite3.connect(db)
+    c.execute("UPDATE persistent_jobs SET status='COMPLETED' WHERE id='live'")
+    c.commit()
+    c.close()
+
+
+def test_live_refused_while_any_production_job_is_active(tree):
+    root, db = tree                                       # fixture has job "live" RUNNING
+    rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+    assert rec["outcome"] == "refused" and rec["deleted"] == 0 and "active" in rec["errors"][0]
+    assert (root / "media/productions/done/lemo_film/scene_01.mp4").exists()
+    assert _cleaner(root, db).run(trigger="test")["outcome"] == "completed"     # dry run still allowed
+
+
 def test_confirmed_live_run_quarantines_only_eligible_and_is_idempotent(tree):
     root, db = tree
+    _finish_live_job(db)
     rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
     assert rec["deleted"] == 3 and rec["bytes_reclaimed"] == 3000
     assert not (root / "media/productions/done/lemo_film/scene_01.mp4").exists()
@@ -171,3 +187,39 @@ def test_database_unavailable_evaluates_nothing(tmp_path):
     rec = _cleaner(tmp_path, str(tmp_path / "missing" / "nope.db")).run(trigger="test", live=True, confirm=True)
     assert rec["outcome"] == "failed" and rec["deleted"] == 0
     assert (tmp_path / "media/productions/done/lemo_film/scene_01.mp4").exists()
+
+
+def test_quarantine_manifest_and_restore_round_trip(tree):
+    root, db = tree
+    _finish_live_job(db)
+    rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+    assert rec["deleted"] == 3
+    qdir = root / "media/quarantine/junk_cleaner" / rec["run_id"]
+    lines = [json.loads(x) for x in (qdir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 3 and all(e["bytes"] == 1000 for e in lines)
+    # a file recreated at its original path is never overwritten
+    _file(root, "productions/done/lemo_film/scene_01.mp4", size=7)
+    res = _cleaner(root, db).restore(rec["run_id"])
+    assert res["restored"] == 2 and res["conflicts"] == ["productions/done/lemo_film/scene_01.mp4"]
+    assert (root / "media/productions/done/lemo_film/scene_01.mp4").stat().st_size == 7
+    assert (root / "media/productions/done/lemo_film/index.html").exists()
+    assert (root / "logs/junk_cleaner/restores.jsonl").exists()
+    with pytest.raises(ValueError):
+        _cleaner(root, db).restore("../escape")
+
+
+def test_blocked_qc_follows_failed_rule_and_uploaded_private_counts_as_uploaded(tmp_path):
+    old = (NOW - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    recent = (NOW - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    _file(tmp_path, "productions/qc_old/lemo_film/scene_01.mp4")
+    _file(tmp_path, "productions/qc_new/lemo_film/scene_01.mp4")
+    _file(tmp_path, "productions/priv/video/showcase_priv.mp4")
+    _file(tmp_path, "productions/priv/lemo_film/scene_01.mp4")
+    db = _db(tmp_path, [("qc_old", "BLOCKED_QC", old), ("qc_new", "BLOCKED_QC", recent), ("priv", "COMPLETED", old)],
+             pubs=[(1, str(tmp_path / "media/productions/priv/video/showcase_priv.mp4"), "", "vid", "uploaded_private")])
+    rec = _cleaner(tmp_path, db).run(trigger="test")
+    elig = _eligible(rec)
+    assert "productions/qc_old/lemo_film/scene_01.mp4" in elig
+    assert "productions/qc_new/lemo_film/scene_01.mp4" not in elig          # may still be recoverable
+    assert "productions/priv/lemo_film/scene_01.mp4" in elig
+    assert "productions/priv/video/showcase_priv.mp4" not in elig           # deliverable: permanent
