@@ -4,10 +4,11 @@ Phase 5, Stage 3.9F Production Standard.
 
 Serves as the primary monitoring interface for the CrazzyDocs autonomous studio:
 1. End-of-cycle summary emails for all 4 daily cycles (Asia/Kolkata).
-2. Four terminal outcome profiles (SUCCESS, FAILED, QC_REJECTED, MISSED_DEADLINE, RECOVERED_SUCCESS).
-3. Real-time Four-Cycle Daily Production Dashboard embedded in every report.
+2. Terminal outcome profiles (SUCCESS incl. recovered, FAILED, QC_REJECTED, MISSED_DEADLINE).
+3. A day-progress summary of every cycle the active schedule runs (24 under the current profile).
 4. Persistent notification records in SQLite with strict idempotency and restart recovery.
-5. High-contrast, responsive HTML email design with plain-text fallback and credential redaction.
+5. Shared email design system (backend/app/services/email_templates): responsive HTML + plain text,
+   escaped dynamic content, credential redaction, no fabricated values.
 6. Desktop notification fallback and optional consolidated daily digest.
 """
 
@@ -88,6 +89,13 @@ SENSITIVE_KEY_PATTERNS = [
 ]
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        return None if value is None or value == "" else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def redact_sensitive_string(text: str) -> str:
     """Masks potential secret credentials and tokens from logs and error strings."""
     if not text:
@@ -124,19 +132,19 @@ def redact_sensitive_dict(data: Dict) -> Dict:
 
 @dataclass
 class ProductionDetails:
-    """Structured details of the cycle's production run."""
+    """Structured details of the cycle's production run. Unknown values stay empty/None and are not shown."""
     date_str: str
     cycle_id: str
-    cycle_number: int
+    cycle_number: Optional[int]
     job_id: str
     topic: str
     video_title: str
-    storytelling_style: str = "Adaptive Multi-Style"
-    narrative_archetype: str = "Documentary Short"
-    duration_sec: float = 0.0
+    storytelling_style: str = ""
+    narrative_archetype: str = ""
+    duration_sec: Optional[float] = None
     start_time: str = ""
     completion_time: str = ""
-    total_duration_sec: float = 0.0
+    total_duration_sec: Optional[float] = None
 
 
 @dataclass
@@ -151,43 +159,45 @@ class DeliverablesDetails:
 
 @dataclass
 class QCDetails:
-    """Quality control metrics and verification results."""
-    rendering_status: str = "COMPLETED"
-    resolution_fps: str = "1080x1920 @ 30 FPS"
-    av_sync_status: str = "SYNCHRONIZED"
-    thumbnail_validation: str = "PASSED"
-    attribution_validation: str = "PASSED (License Verified)"
-    text_clipping_checks: str = "PASSED"
-    final_qc_result: str = "PASSED"
+    """Quality-control facts reported by the run. Empty fields are unknown and are not shown
+    (before the 2026-11 redesign they defaulted to PASSED/'1080x1920 @ 30 FPS', which was never verified)."""
+    rendering_status: str = ""
+    resolution_fps: str = ""
+    av_sync_status: str = ""
+    thumbnail_validation: str = ""
+    attribution_validation: str = ""
+    text_clipping_checks: str = ""
+    final_qc_result: str = ""
+    checks: Optional[Dict[str, Any]] = None
 
 
 @dataclass
 class PublishingDetails:
-    """Publishing state, queue status, and YouTube metadata."""
+    """Publishing facts. Empty fields are unknown and are not shown."""
     target_pub_timestamp: str = ""
     timezone_name: str = "Asia/Kolkata"
-    youtube_upload_status: str = "manual_approval - Withheld at safety gate"
-    visibility: str = "Private / Pending Approval"
+    youtube_upload_status: str = ""
+    visibility: str = ""
     youtube_video_id: Optional[str] = None
-    scheduled_publication_status: str = "AWAITING_MANUAL_APPROVAL"
-    manual_approval_status: str = "REQUIRED (settings.PUBLISHING_MODE = 'manual_approval')"
+    scheduled_publication_status: str = ""
+    manual_approval_status: str = ""
 
 
 @dataclass
 class FailureDetails:
-    """Structured diagnosis of a cycle failure or rejection."""
-    last_completed_stage: str = "UNKNOWN"
-    failed_stage: str = "UNKNOWN"
+    """Structured diagnosis of a cycle failure or rejection. Unknown values stay empty/None."""
+    last_completed_stage: str = ""
+    failed_stage: str = ""
     error_message: str = ""
     error_timestamp: str = ""
-    retry_count: int = 0
-    recovery_attempts: int = 0
-    recovery_outcome: str = "Execution Halted"
-    can_resume: bool = False
+    retry_count: Optional[int] = None
+    recovery_attempts: Optional[int] = None
+    recovery_outcome: str = ""
+    can_resume: Optional[bool] = None
     deadline_missed: bool = False
     unapproved_artifacts: List[str] = field(default_factory=list)
     log_paths: List[str] = field(default_factory=list)
-    recommended_next_action: str = "Inspect logs and resolve stage exception."
+    recommended_next_action: str = ""
 
 
 class EmailMonitoringService:
@@ -537,8 +547,16 @@ class EmailMonitoringService:
         payload = dict(details)
         payload.setdefault("event_type", event_type)
         payload.setdefault("timestamp_ist", datetime.now(IST_TZ).isoformat())
+        payload = redact_sensitive_dict(payload)
         payload_json = json.dumps(payload, ensure_ascii=True, default=str)
-        body = "\n".join(f"{key}: {value}" for key, value in payload.items())
+        try:
+            from backend.app.services.email_templates.alerts import render_event
+            rendered = render_event(event_type, subject[:500], payload)
+            body, body_html = rendered.text, rendered.html
+        except Exception:
+            logger.exception("[EMAIL_MONITOR] Alert rendering failed for %s; sending plain text.", event_type)
+            body = "\n".join(f"{key}: {value}" for key, value in payload.items())
+            body_html = ""
         job_id = str(payload.get("production_id") or payload.get("upload_id") or payload.get("job_id") or "")
         try:
             with SessionLocal() as db_session:
@@ -551,7 +569,7 @@ class EmailMonitoringService:
                     recipient=destination,
                     subject=subject[:500],
                     body_plain=body,
-                    body_html="",
+                    body_html=body_html,
                     payload_json=payload_json,
                 )
                 if suppressed is not None:
@@ -562,6 +580,7 @@ class EmailMonitoringService:
                 outcome = self._execute_smtp_with_state(
                     subject=subject[:500],
                     body_text=body,
+                    body_html=body_html,
                     recipient=destination,
                     max_retries=2,
                 )
@@ -654,164 +673,96 @@ class EmailMonitoringService:
         current_job_overlay: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         """
-        Compiles an accurate four-cycle production snapshot for the specified date
-        from real SQLite database records (optionally overlaid with an active
-        authoritative run payload to guarantee zero stale-read contradictions).
+        Snapshot of every cycle the active schedule runs on ``date_str`` (IST), from the database,
+        optionally overlaid with the authoritative result of the run that is reporting right now.
+        Before the 2026-11 redesign only the first four cycles were inspected (``profile.cycles[:4]``),
+        which under the 24-cycle schedule reported cycles 1-4 in every email.
         """
+        from backend.app.services.email_templates import report as R
+
         now_ist = test_now_ist or datetime.now(IST_TZ)
         cur_date_str = date_str or now_ist.strftime("%Y-%m-%d")
-
+        day = datetime.strptime(cur_date_str, "%Y-%m-%d").replace(tzinfo=IST_TZ)
         profile = get_active_profile()
-        cycle_rows = []
+        overlay = current_job_overlay or {}
+        ov_status = str(overlay.get("status") or "").upper()
 
-        total_scheduled = 4
-        total_started = 0
-        success_count = 0
-        failed_count = 0
-        missed_count = 0
-        awaiting_approval_count = 0
-        uploaded_count = 0
-        youtube_scheduled_count = 0
+        legacy = {R.ST_COMPLETED: "SUCCESS", R.ST_RECOVERED: "SUCCESS", R.ST_FAILED: "FAILED", R.ST_RUNNING: "RUNNING",
+                  R.ST_RETRY: "RETRYING", R.ST_NOT_STARTED: "MISSED", R.ST_UPCOMING: "QUEUED", R.ST_SKIPPED: "SKIPPED"}
+        qc_map = {"SUCCESS": "PASS", "FAILED": "FAIL", "QC_REJECTED": "FAIL", "RUNNING": "IN_PROGRESS",
+                  "RETRYING": "RETRY", "QUEUED": "PENDING"}
+        cycle_rows: List[Dict[str, Any]] = []
+        counts = {"started": 0, "success": 0, "failed": 0, "missed": 0, "running": 0, "upcoming": 0, "awaiting": 0}
         total_prod_seconds = 0.0
-
-        overlay_cycle_id = (current_job_overlay or {}).get("cycle_id")
-        overlay_job_id = (current_job_overlay or {}).get("job_id")
-        overlay_status = str((current_job_overlay or {}).get("status") or "").upper()
-        overlay_topic = (current_job_overlay or {}).get("topic")
-
+        uploaded_states = ("UPLOADED", "UPLOADED_PRIVATE", "SCHEDULED", "PUBLISHED")
+        active = [c for c in profile.cycles if day.weekday() in tuple(c.active_weekdays)]
         with SessionLocal() as db_session:
-            # Inspect each of the 4 cycles
-            for idx, cycle in enumerate(profile.cycles[:4], start=1):
-                c_start, c_pub, c_date, c_pub_date = cycle.calculate_datetimes(
-                    now_ist.replace(
-                        year=int(cur_date_str[:4]),
-                        month=int(cur_date_str[5:7]),
-                        day=int(cur_date_str[8:10]),
-                    )
-                )
-                expected_job_id = cycle.format_job_id(c_start)
-
-                # Query database for job matching this cycle
-                job = db_session.query(JobModel).filter(
-                    (JobModel.id == expected_job_id) |
-                    ((JobModel.date_str == cur_date_str) & (JobModel.id.like(f"%{cycle.cycle_id}%")))
-                ).first()
-
-                # Status resolution
-                display_status = "QUEUED"
-                topic_title = "Not selected"
-                qc_display = "PENDING"
-                actual_start_str = f"{cycle.start_hour_ist:02d}:{cycle.start_min_ist:02d}"
-                target_pub_str = f"{cycle.target_pub_hour_ist:02d}:{cycle.target_pub_min_ist:02d}"
+            for idx, cycle in enumerate(profile.cycles, start=1):
+                if cycle not in active:
+                    continue
+                slot = day.replace(hour=cycle.start_hour_ist, minute=cycle.start_min_ist)
+                expected_job_id = "%s_%s_%02d%02d" % (cycle.cycle_id, day.strftime("%Y%m%d"),
+                                                      cycle.start_hour_ist, cycle.start_min_ist)
+                job = db_session.query(JobModel).filter(JobModel.id == expected_job_id).first()
+                row = R._row_from_job(db_session, "Cycle %d" % idx, slot, job, now_ist)
+                applies = bool(overlay) and (overlay.get("job_id") == expected_job_id
+                                             or (overlay.get("cycle_id") == cycle.cycle_id and not overlay.get("job_id")))
+                if applies and ov_status in ("COMPLETED", "SUCCESS") and row.status not in (R.ST_COMPLETED, R.ST_RECOVERED):
+                    row.status = R.ST_COMPLETED
+                    row.topic = overlay.get("topic") or row.topic
+                    row.production_sec = overlay.get("total_duration_sec") or row.production_sec
+                    row.job_id = row.job_id or overlay.get("job_id")
+                elif applies and overlay.get("topic") and not row.topic:
+                    row.topic = overlay.get("topic")
+                status = legacy.get(row.status, "QUEUED")
+                if status == "FAILED" and str(row.raw_status or "").upper() in ("BLOCKED_QC", "FAILED_QC", "QC_REJECTED"):
+                    status = "QC_REJECTED"
+                if row.job_id:
+                    counts["started"] += 1
+                if status == "SUCCESS":
+                    counts["success"] += 1
+                    total_prod_seconds += float(row.production_sec or 0.0)
+                    if not (row.youtube and row.youtube.state in uploaded_states):
+                        counts["awaiting"] += 1
+                elif status in ("FAILED", "QC_REJECTED"):
+                    counts["failed"] += 1
+                elif status == "MISSED":
+                    counts["missed"] += 1
+                elif status in ("RUNNING", "RETRYING"):
+                    counts["running"] += 1
+                elif status == "QUEUED":
+                    counts["upcoming"] += 1
+                target_pub = "%02d:%02d" % (cycle.target_pub_hour_ist, cycle.target_pub_min_ist)
                 if cycle.pub_rollover_days > 0:
-                    target_pub_str += " (+1d)"
-
-                overlay_applies = bool(
-                    current_job_overlay
-                    and (
-                        (overlay_cycle_id and overlay_cycle_id == cycle.cycle_id)
-                        or (overlay_job_id and overlay_job_id == expected_job_id)
-                    )
-                )
-
-                effective_status = (job.status or "").upper() if job else ""
-                effective_topic = (job.topic_title if job else None)
-                cp_data: Dict[str, Any] = {}
-                if job and job.checkpoint_data_json:
-                    try:
-                        cp_data = json.loads(job.checkpoint_data_json) or {}
-                    except Exception:
-                        cp_data = {}
-
-                if overlay_applies and overlay_status:
-                    if effective_status in ("", "PENDING", "RUNNING", "RETRYING") or overlay_status in ("COMPLETED", "SUCCESS"):
-                        effective_status = "COMPLETED" if overlay_status in ("COMPLETED", "SUCCESS") else overlay_status
-                    if overlay_topic:
-                        effective_topic = overlay_topic
-
-                if job or overlay_applies:
-                    total_started += 1
-                    topic_title = effective_topic or "Autonomous Selection"
-                    if effective_status in ("COMPLETED", "SUCCESS", "RECOVERED_SUCCESS"):
-                        display_status = "SUCCESS"
-                        qc_display = "PASS"
-                        success_count += 1
-                        if not (job and job.youtube_video_id):
-                            awaiting_approval_count += 1
-                        run_secs = float(
-                            (current_job_overlay or {}).get("total_duration_sec")
-                            or (current_job_overlay or {}).get("elapsed_sec")
-                            or cp_data.get("total_duration_sec")
-                            or cp_data.get("elapsed_sec")
-                            or cp_data.get("duration_sec")
-                            or 0.0
-                        )
-                        total_prod_seconds += run_secs
-                    elif effective_status == "RUNNING":
-                        display_status = "RUNNING"
-                        qc_display = "IN_PROGRESS"
-                    elif effective_status == "MISSED":
-                        display_status = "MISSED"
-                        qc_display = "N/A"
-                        missed_count += 1
-                    elif effective_status in ("BLOCKED_QC", "FAILED_QC", "QC_REJECTED"):
-                        display_status = "QC_REJECTED"
-                        qc_display = "FAIL"
-                        failed_count += 1
-                    elif effective_status in ("INTERRUPTED", "PAUSED", "WAITING_FOR_INTERNET"):
-                        display_status = effective_status
-                        qc_display = "PAUSED"
-                    elif effective_status in ("FAILED", "CANCELLED", "RECOVERY_WINDOW_EXPIRED", "ABORTED_PRE_RESET"):
-                        display_status = "FAILED"
-                        qc_display = "FAIL"
-                        failed_count += 1
-                    elif effective_status == "RETRYING":
-                        display_status = "RETRYING"
-                        qc_display = "RETRY"
-                else:
-                    # No job in database yet
-                    if now_ist > c_pub:
-                        # Exceeded publication deadline without starting
-                        display_status = "MISSED"
-                        qc_display = "N/A"
-                        missed_count += 1
-                    elif now_ist >= c_start:
-                        display_status = "PENDING"
-                        qc_display = "PENDING"
-                    else:
-                        display_status = "QUEUED"
-                        qc_display = "PENDING"
-
+                    target_pub += " (+1d)"
                 cycle_rows.append({
                     "cycle_number": idx,
                     "cycle_id": cycle.cycle_id,
                     "cycle_name": cycle.name,
-                    "status": display_status,
-                    "topic": topic_title,
-                    "start_ist": actual_start_str,
-                    "target_pub_ist": target_pub_str,
-                    "qc": qc_display,
-                    "job_id": (job.id if job else overlay_job_id if overlay_applies else None),
+                    "status": status,
+                    "display_status": row.status,
+                    "topic": row.topic or ("Autonomous Selection" if row.job_id else "Not selected"),
+                    "start_ist": "%02d:%02d" % (cycle.start_hour_ist, cycle.start_min_ist),
+                    "target_pub_ist": target_pub,
+                    "qc": qc_map.get(status, "N/A"),
+                    "job_id": row.job_id,
                 })
 
-            # Reconcile real YouTube upload / scheduled counts from publishing_ledger if present
-            try:
-                pub_rows = db_session.execute(
-                    text(
-                        "SELECT upload_status, COUNT(*) FROM publishing_ledger "
-                        "WHERE (video_path NOT LIKE '%test_%' OR video_path IS NULL) "
-                        "GROUP BY upload_status"
-                    )
-                ).fetchall()
-                ledger_counts = {str(r[0] or "").lower(): int(r[1] or 0) for r in pub_rows}
-                uploaded_count = ledger_counts.get("uploaded_public", 0) + ledger_counts.get("published", 0)
-                youtube_scheduled_count = ledger_counts.get("scheduled", 0) + ledger_counts.get("scheduled_publish", 0)
-                if ledger_counts.get("pending_queue", 0) > awaiting_approval_count:
-                    awaiting_approval_count = ledger_counts["pending_queue"]
-            except Exception:
-                pass
+        # Uploads / scheduled publications recorded in the publishing ledger on this IST date (upload_timestamp).
+        uploaded_count: Optional[int] = None
+        scheduled_count: Optional[int] = None
+        try:
+            with SessionLocal() as db_session:
+                rows = db_session.execute(text(
+                    "SELECT upload_status, visibility, COUNT(*) FROM publishing_ledger "
+                    "WHERE (video_path NOT LIKE '%test_%' OR video_path IS NULL) AND upload_timestamp LIKE :d "
+                    "GROUP BY upload_status, visibility"), {"d": cur_date_str + "%"}).fetchall()
+            uploaded_count = sum(int(r[2] or 0) for r in rows if r[0] and "fail" not in str(r[0]).lower()
+                                 and str(r[0]).lower() not in ("pending_queue", "queued", "pending"))
+            scheduled_count = sum(int(r[2] or 0) for r in rows if "schedul" in str(r[0] or "").lower())
+        except Exception:
+            pass
 
-        # Next upcoming cycle, from the authoritative active schedule (was hardcoded by hour).
         next_cycle = "None scheduled"
         try:
             from backend.app.services.schedule_service import next_production_cycle
@@ -821,695 +772,147 @@ class EmailMonitoringService:
         except Exception:
             next_cycle = "Unavailable"
 
-        # Storage consumption (via media lifecycle report if available)
-        storage_mb = 0.0
+        storage_mb: Optional[float] = None
         try:
             from backend.app.services.media_lifecycle_manager import media_lifecycle_manager
             rep = media_lifecycle_manager.daily_report()
-            storage_mb = float(rep.get("total_size_mb", 0.0))
+            if rep.get("total_size_mb") is not None:
+                storage_mb = float(rep["total_size_mb"])
         except Exception:
-            pass
+            storage_mb = None
 
         health = self.get_system_health()
-
         return {
             "date": cur_date_str,
             "timezone": "Asia/Kolkata",
             "cycles": cycle_rows,
             "summary": {
-                "total_cycles_scheduled": total_scheduled,
-                "total_cycles_started": total_started,
-                "successfully_generated_videos": success_count,
-                "failed_cycles": failed_count,
-                "missed_cycles": missed_count,
-                "videos_awaiting_approval": awaiting_approval_count,
+                "total_cycles_scheduled": len(cycle_rows),
+                "total_cycles_started": counts["started"],
+                "successfully_generated_videos": counts["success"],
+                "failed_cycles": counts["failed"],
+                "missed_cycles": counts["missed"],
+                "in_progress_cycles": counts["running"],
+                "upcoming_cycles": counts["upcoming"],
+                "videos_awaiting_approval": counts["awaiting"],
                 "videos_successfully_uploaded": uploaded_count,
-                "videos_actually_scheduled_youtube": youtube_scheduled_count,
+                "videos_actually_scheduled_youtube": scheduled_count,
                 "total_production_duration_sec": total_prod_seconds,
                 "storage_consumed_mb": storage_mb,
-                "current_publishing_queue": awaiting_approval_count,
+                "current_publishing_queue": counts["awaiting"],
                 "next_scheduled_cycle": next_cycle,
                 "email_system_health": health["status"],
-            }
+            },
         }
 
+    @staticmethod
+    def _day_progress(dashboard: Optional[Dict]) -> Optional[Any]:
+        from backend.app.services.email_templates.production import DayProgress
+        if not dashboard or not dashboard.get("cycles"):
+            return None
+        sm = dashboard["summary"]
+        return DayProgress(
+            date=dashboard["date"], scheduled=int(sm.get("total_cycles_scheduled") or 0),
+            completed=int(sm.get("successfully_generated_videos") or 0), failed=int(sm.get("failed_cycles") or 0),
+            in_progress=int(sm.get("in_progress_cycles") or 0), upcoming=int(sm.get("upcoming_cycles") or 0),
+            not_started=int(sm.get("missed_cycles") or 0),
+        )
+
     # -------------------------------------------------------------------------
-    # 3. HTML & Plain-Text Email Builders
+    # 3. Email builders (shared design system in backend/app/services/email_templates)
     # -------------------------------------------------------------------------
 
     def _render_ascii_dashboard(self, dashboard: Dict) -> str:
-        """Renders clean ASCII table of the four-cycle dashboard."""
-        lines = [
-            f"CRAZZYDOCS DAILY PRODUCTION DASHBOARD",
-            f"Date: {dashboard['date']} | Timezone: {dashboard['timezone']}",
-            "-" * 72,
-            f"{'Cycle':<7} | {'Status':<9} | {'Topic':<24} | {'Start':<6} | {'Pub IST':<8} | {'QC':<5}",
-            "-" * 72,
-        ]
+        """Plain-text day summary (kept for scripts that print it)."""
+        lines = ["CrazzyDocs production day %s (%s)" % (dashboard["date"], dashboard["timezone"])]
         for c in dashboard["cycles"]:
-            top = (c["topic"][:22] + "..") if len(c["topic"]) > 24 else c["topic"]
-            lines.append(
-                f"{c['cycle_number']:<7} | {c['status']:<9} | {top:<24} | {c['start_ist']:<6} | {c['target_pub_ist']:<8} | {c['qc']:<5}"
-            )
-        lines.append("-" * 72)
-        sm = dashboard["summary"]
-        lines.append(
-            f"Summary: Scheduled: {sm['total_cycles_scheduled']} | Success: {sm['successfully_generated_videos']} | "
-            f"Failed: {sm['failed_cycles']} | Missed: {sm['missed_cycles']} | Awaiting Approval: {sm['videos_awaiting_approval']}"
-        )
-        lines.append(
-            f"Next Scheduled Cycle: {sm['next_scheduled_cycle']} | Storage: {sm['storage_consumed_mb']} MB"
-        )
+            lines.append("  Cycle %-3s %-6s %-12s %s" % (c["cycle_number"], c["start_ist"], c["status"], c["topic"][:60]))
+        prog = self._day_progress(dashboard)
+        if prog:
+            lines.append("  " + prog.summary())
         return "\n".join(lines)
 
-    def _render_html_dashboard_table(self, dashboard: Dict) -> str:
-        """
-        Renders mobile-first responsive individual cards for the four-cycle dashboard.
-        Replaces wide, unscrollable tables with vertically-stacked responsive cards
-        and a 2x2 summary metrics grid tailored for screens down to 320px.
-        """
-        cards_html = []
-        for c in dashboard["cycles"]:
-            status_str = c["status"].upper()
-            if status_str in ("SUCCESS", "COMPLETED"):
-                accent_color = "#10b981"
-                badge_bg = "#064e3b"
-                badge_fg = "#34d399"
-                badge_border = "#059669"
-                status_icon = "&#10003;"  # checkmark
-            elif status_str in ("FAILED", "ERROR"):
-                accent_color = "#ef4444"
-                badge_bg = "#450a0a"
-                badge_fg = "#f87171"
-                badge_border = "#b91c1c"
-                status_icon = "&#10007;"  # cross
-            elif status_str == "QC_REJECTED":
-                accent_color = "#f97316"
-                badge_bg = "#431407"
-                badge_fg = "#fb923c"
-                badge_border = "#c2410c"
-                status_icon = "&#9888;"  # warning
-            elif status_str in ("MISSED", "MISSED_DEADLINE"):
-                accent_color = "#e11d48"
-                badge_bg = "#4c0519"
-                badge_fg = "#fb7185"
-                badge_border = "#be123c"
-                status_icon = "&#9200;"  # clock
-            elif status_str == "RUNNING":
-                accent_color = "#3b82f6"
-                badge_bg = "#172554"
-                badge_fg = "#60a5fa"
-                badge_border = "#2563eb"
-                status_icon = "&#9654;"  # play
-            else:  # QUEUED, PENDING, IDLE
-                accent_color = "#64748b"
-                badge_bg = "#1e293b"
-                badge_fg = "#94a3b8"
-                badge_border = "#334155"
-                status_icon = "&#9679;"  # bullet
-
-            qc_str = c["qc"].upper()
-            if qc_str == "PASS":
-                qc_color = "#34d399"
-                qc_label = "PASSED"
-            elif qc_str == "FAIL":
-                qc_color = "#f87171"
-                qc_label = "FAILED"
-            elif qc_str == "IN_PROGRESS":
-                qc_color = "#60a5fa"
-                qc_label = "IN PROGRESS"
-            elif qc_str == "PENDING":
-                qc_color = "#94a3b8"
-                qc_label = "PENDING"
-            else:
-                qc_color = "#64748b"
-                qc_label = c["qc"] or "NOT STARTED"
-
-            # Individual Card HTML (fluid width, zero fixed-width table columns)
-            card_html = f"""
-            <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #0f172a; border: 1px solid #1e293b; border-left: 4px solid {accent_color}; border-radius: 8px; margin-bottom: 12px; border-collapse: separate;">
-              <tr>
-                <td style="padding: 14px 16px;">
-                  <!-- Card Header: Cycle Title & Badge -->
-                  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 10px;">
-                    <tr>
-                      <td align="left" style="font-size: 16px; font-weight: 800; color: #fee004; letter-spacing: 0.5px; vertical-align: middle;">
-                        CYCLE {c['cycle_number']}
-                      </td>
-                      <td align="right" style="vertical-align: middle;">
-                        <span style="background-color: {badge_bg}; color: {badge_fg}; border: 1px solid {badge_border}; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; display: inline-block;">
-                          {status_icon} {c['status']}
-                        </span>
-                      </td>
-                    </tr>
-                  </table>
-                  
-                  <!-- Card Body Rows -->
-                  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="font-size: 14px; line-height: 1.55;">
-                    <tr>
-                      <td style="padding: 4px 0; color: #94a3b8; width: 34%; font-size: 13px; vertical-align: top; font-weight: 500;">Topic:</td>
-                      <td style="padding: 4px 0; color: #f8fafc; font-weight: 600; font-size: 14px; word-break: break-word; vertical-align: top;">{c['topic']}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 4px 0; color: #94a3b8; font-size: 13px; vertical-align: top; font-weight: 500;">Target Publish:</td>
-                      <td style="padding: 4px 0; color: #cbd5e1; font-size: 14px; vertical-align: top;">{c['target_pub_ist']} <span style="color: #64748b; font-size: 12px;">(Asia/Kolkata)</span></td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 4px 0; color: #94a3b8; font-size: 13px; vertical-align: top; font-weight: 500;">QC Status:</td>
-                      <td style="padding: 4px 0; color: {qc_color}; font-weight: 700; font-size: 13px; vertical-align: top;">{qc_label}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 4px 0; color: #94a3b8; font-size: 13px; vertical-align: top; font-weight: 500;">Window:</td>
-                      <td style="padding: 4px 0; color: #94a3b8; font-size: 13px; vertical-align: top;">{c['start_ist']} &rarr; {c['target_pub_ist']}</td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            """
-            cards_html.append(card_html)
-
-        all_cards = "\n".join(cards_html)
-        sm = dashboard["summary"]
-
-        return f"""
-        <!-- Individual Responsive Cycle Cards -->
-        <div style="margin-top: 10px;">
-          {all_cards}
-        </div>
-
-        <!-- Summary Metrics 2x2 Responsive Grid -->
-        <table role="presentation" width="100%" border="0" cellspacing="6" cellpadding="0" style="margin-top: 14px;">
-          <tr>
-            <td width="50%" style="background-color: #131d31; border: 1px solid #1f293d; border-radius: 6px; padding: 12px 10px; text-align: center; vertical-align: middle;">
-              <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Scheduled</div>
-              <div style="font-size: 24px; font-weight: 800; color: #f8fafc; margin-top: 2px;">{sm['total_cycles_scheduled']}</div>
-            </td>
-            <td width="50%" style="background-color: #131d31; border: 1px solid #1f293d; border-radius: 6px; padding: 12px 10px; text-align: center; vertical-align: middle;">
-              <div style="font-size: 11px; color: #34d399; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Generated</div>
-              <div style="font-size: 24px; font-weight: 800; color: #34d399; margin-top: 2px;">{sm['successfully_generated_videos']}</div>
-            </td>
-          </tr>
-          <tr>
-            <td width="50%" style="background-color: #131d31; border: 1px solid #1f293d; border-radius: 6px; padding: 12px 10px; text-align: center; vertical-align: middle;">
-              <div style="font-size: 11px; color: #f2c14e; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Awaiting Approval</div>
-              <div style="font-size: 24px; font-weight: 800; color: #f2c14e; margin-top: 2px;">{sm['videos_awaiting_approval']}</div>
-            </td>
-            <td width="50%" style="background-color: #131d31; border: 1px solid #1f293d; border-radius: 6px; padding: 12px 10px; text-align: center; vertical-align: middle;">
-              <div style="font-size: 11px; color: #f87171; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Failed / Missed</div>
-              <div style="font-size: 24px; font-weight: 800; color: #f87171; margin-top: 2px;">{sm['failed_cycles'] + sm['missed_cycles']}</div>
-            </td>
-          </tr>
-        </table>
-
-        <!-- Health and Metadata Footer Box -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 10px; background-color: #0b1120; border: 1px solid #1e293b; border-radius: 6px;">
-          <tr>
-            <td style="padding: 10px 14px; font-size: 13px; color: #94a3b8; line-height: 1.5;">
-              <div>Next Scheduled Cycle: <strong style="color: #f1f5f9;">{sm['next_scheduled_cycle']}</strong></div>
-              <div style="margin-top: 3px;">Storage Consumed: <strong style="color: #cbd5e1;">{sm['storage_consumed_mb']} MB</strong> &bull; System Health: <strong style="color: #34d399;">{sm['email_system_health']}</strong></div>
-            </td>
-          </tr>
-        </table>
-        """
+    @staticmethod
+    def _legacy_context(prod: "ProductionDetails", outcome: str, dashboard: Optional[Dict]) -> Any:
+        from backend.app.services.email_templates.production import ProductionEmailContext
+        label = "Cycle %d" % prod.cycle_number if prod.cycle_number else "Manual production"
+        return ProductionEmailContext(
+            outcome=outcome, cycle_label=label, cycle_number=prod.cycle_number, cycle_id=prod.cycle_id,
+            job_id=prod.job_id, topic=prod.topic or None, video_title=prod.video_title or None,
+            video_duration_sec=prod.duration_sec, production_elapsed_sec=prod.total_duration_sec,
+            started_at=prod.start_time or None, completed_at=prod.completion_time or None,
+            day=EmailMonitoringService._day_progress(dashboard),
+        )
 
     def build_success_email(
         self,
-        prod: ProductionDetails,
-        deliv: DeliverablesDetails,
-        qc: QCDetails,
-        pub: PublishingDetails,
-        dashboard: Dict,
+        prod: "ProductionDetails",
+        deliv: "DeliverablesDetails",
+        qc: "QCDetails",
+        pub: "PublishingDetails",
+        dashboard: Optional[Dict],
+        context: Any = None,
     ) -> Tuple[str, str, str]:
-        """
-        Builds Subject, Plain Text, and HTML for a terminal SUCCESS / RECOVERED_SUCCESS report.
-        """
-        subject = f"CrazzyDocs | Cycle {prod.cycle_number} | SUCCESS | {prod.video_title}"
-
-        # Plain Text
-        ascii_dash = self._render_ascii_dashboard(dashboard)
-        plain_body = f"""======================================================================
-CRAZZYDOCS PRODUCTION SUMMARY — CYCLE {prod.cycle_number} SUCCESS
-======================================================================
-
-PRODUCTION DETAILS
-----------------------------------------------------------------------
-Production Date:         {prod.date_str}
-Cycle Number:            Cycle {prod.cycle_number} ({prod.cycle_id})
-Job ID:                  {prod.job_id}
-Topic:                   {prod.topic}
-Video Title:             {prod.video_title}
-Storytelling Style:      {prod.storytelling_style}
-Narrative Archetype:     {prod.narrative_archetype}
-Actual Video Duration:   {prod.duration_sec:.2f} seconds
-Production Started:      {prod.start_time}
-Production Completed:    {prod.completion_time}
-Total Duration:          {prod.total_duration_sec:.1f} seconds
-
-DELIVERABLES (LOCAL WORKSPACE)
-----------------------------------------------------------------------
-Video File:              {deliv.video_path}
-Thumbnail File:          {deliv.thumbnail_path}
-Subtitle File:           {deliv.subtitle_path}
-Attribution Manifest:    {deliv.attribution_manifest_path}
-
-QUALITY CONTROL MATRIX
-----------------------------------------------------------------------
-Rendering Status:        {qc.rendering_status}
-Resolution & FPS:        {qc.resolution_fps}
-A/V Synchronization:     {qc.av_sync_status}
-Thumbnail Validation:    {qc.thumbnail_validation}
-Attribution Check:       {qc.attribution_validation}
-Text Clipping Check:     {qc.text_clipping_checks}
-Final QC Gate:           {qc.final_qc_result}
-
-PUBLISHING STATUS
-----------------------------------------------------------------------
-Target Publication:      {pub.target_pub_timestamp} ({pub.timezone_name})
-YouTube Upload Status:   {pub.youtube_upload_status}
-Visibility:              {pub.visibility}
-YouTube Video ID:        {pub.youtube_video_id or 'Not assigned (Withheld)'}
-Publication Status:      {pub.scheduled_publication_status}
-Manual Approval Gate:    {pub.manual_approval_status}
-
-======================================================================
-{ascii_dash}
-======================================================================
-CrazzyDocs Autonomous Production Studio | Automated Monitoring Dispatch
-"""
-
-        # Thumbnail image embedding (Mobile responsive, max-width 100%, zero overflow)
-        thumb_tag = ""
-        if deliv.thumbnail_base64:
+        """(subject, plain, html) for a terminal SUCCESS report. ``context`` (a ProductionEmailContext built from the
+        database by send_cycle_summary_report) takes precedence; otherwise the detail objects are adapted."""
+        from backend.app.services.email_templates import production as P
+        from backend.app.services.email_templates.data import relative_path
+        if context is None:
+            context = self._legacy_context(prod, STATUS_SUCCESS, dashboard)
+            context.qc_checks = qc.checks
+            context.qc_gate_passed = True if (qc.final_qc_result or "").upper().startswith("PASS") else None
+            m = re.search(r"(\d+(?:\.\d+)?)\s*/\s*10", qc.thumbnail_validation or "")
+            context.thumbnail_score = float(m.group(1)) if m else None
+            extra = [("Visual style", prod.storytelling_style or None), ("Narrative", prod.narrative_archetype or None),
+                     ("Rendering", qc.rendering_status or None), ("Resolution", qc.resolution_fps or None),
+                     ("A/V sync", qc.av_sync_status or None), ("Thumbnail check", qc.thumbnail_validation or None),
+                     ("Attribution check", qc.attribution_validation or None), ("Text safe areas", qc.text_clipping_checks or None),
+                     ("Final QC", qc.final_qc_result or None)]
+            context.extra_rows = [(k, v) for k, v in extra if v]
+            context.target_publication = pub.target_pub_timestamp or None
+            if pub.youtube_video_id:
+                context.youtube = P.YouTubeState(P.YT_UPLOADED, pub.youtube_video_id, pub.visibility or None)
+            elif pub.youtube_upload_status:
+                context.youtube = P.YouTubeState(P.YT_UNKNOWN, detail=pub.youtube_upload_status)
+            context.artifacts = [(l, relative_path(p)) for l, p in (
+                ("Video", deliv.video_path), ("Thumbnail", deliv.thumbnail_path),
+                ("Subtitles", deliv.subtitle_path if re.search(r"[\\/]", deliv.subtitle_path or "") else None),
+                ("Attribution manifest", deliv.attribution_manifest_path)) if p]
+        if deliv is not None and deliv.thumbnail_base64 and not context.thumbnail_data_uri:
             mime = "image/jpeg" if deliv.thumbnail_base64.startswith("/9j/") else "image/png"
-            thumb_tag = f"""
-            <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 14px;">
-              <tr>
-                <td align="center" style="padding: 6px 0;">
-                  <img src="data:{mime};base64,{deliv.thumbnail_base64}" alt="Selected Art-Directed Poster" class="mobile-thumb-img" style="max-width: 100%; width: 280px; height: auto; border-radius: 8px; border: 2px solid #fee004; display: block; margin: 0 auto; box-shadow: 0 4px 16px rgba(0,0,0,0.6);" />
-                  <div style="font-size: 13px; color: #94a3b8; margin-top: 8px; line-height: 1.4;">
-                    Art-Directed Mobile Poster <span style="color: #cbd5e1;">({qc.thumbnail_validation})</span>
-                  </div>
-                </td>
-              </tr>
-            </table>
-            """
-
-        html_dash = self._render_html_dashboard_table(dashboard)
-        html_body = f"""<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="x-apple-disable-message-reformatting">
-  <title>{subject}</title>
-  <style type="text/css">
-    body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
-    table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
-    img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
-    table {{ border-collapse: collapse !important; }}
-    body {{ margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #080c14; }}
-    @media only screen and (max-width: 480px) {{
-      .mobile-padding {{ padding: 14px 12px !important; }}
-      .mobile-content-padding {{ padding: 16px 12px !important; }}
-      .mobile-heading {{ font-size: 21px !important; line-height: 1.3 !important; }}
-      .mobile-section-heading {{ font-size: 17px !important; }}
-      .mobile-thumb-img {{ width: 100% !important; max-width: 260px !important; }}
-    }}
-  </style>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #080c14; color: #f0f4fc; margin: 0; padding: 0; width: 100%;">
-  
-  <!-- Outer Wrapper Table -->
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #080c14; width: 100%;">
-    <tr>
-      <td align="center" style="padding: 16px 8px;" class="mobile-padding">
-        
-        <!-- Main Single-Column Fluid Container (max-width 600px) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; width: 100%; background-color: #131c2e; border: 1px solid #22304d; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-          
-          <!-- Header Banner -->
-          <tr>
-            <td style="background-color: #121e33; padding: 22px 20px; border-bottom: 3px solid #fee004;" class="mobile-padding">
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td align="left" style="font-size: 20px; font-weight: 800; color: #fee004; letter-spacing: 0.5px; vertical-align: middle;">
-                    🎬 CRAZZYDOCS STUDIO
-                  </td>
-                  <td align="right" style="vertical-align: middle;">
-                    <span style="background-color: #064e3b; color: #34d399; border: 1px solid #059669; padding: 5px 12px; border-radius: 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; display: inline-block;">
-                      &#10003; CYCLE {prod.cycle_number} SUCCESS
-                    </span>
-                  </td>
-                </tr>
-              </table>
-              <div style="font-size: 24px; font-weight: 800; color: #ffffff; line-height: 1.35; margin-top: 12px; word-break: break-word;" class="mobile-heading">
-                {prod.video_title}
-              </div>
-              <div style="font-size: 13px; color: #94a3b8; margin-top: 6px; line-height: 1.4;">
-                Job ID: <span style="font-family: monospace; color: #cbd5e1;">{prod.job_id}</span> &bull; Completed: <strong style="color: #cbd5e1;">{prod.completion_time}</strong>
-              </div>
-            </td>
-          </tr>
-
-          <!-- Content Body -->
-          <tr>
-            <td style="padding: 22px 20px;" class="mobile-content-padding">
-
-              <!-- 1. Production Summary & Story Details -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #20c997; letter-spacing: 0.5px; margin-top: 0; margin-bottom: 12px; border-bottom: 1px solid #1f2c46; padding-bottom: 6px;" class="mobile-section-heading">
-                1. Production Summary &amp; Story Details
-              </div>
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 20px; line-height: 1.55;">
-                <tr>
-                  <td style="color: #94a3b8; width: 36%; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Selected Topic:</td>
-                  <td style="color: #f8fafc; font-weight: 700; font-size: 15px; padding: 5px 0; word-break: break-word; vertical-align: top;">{prod.topic}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Visual Style:</td>
-                  <td style="color: #e2e8f0; font-size: 15px; padding: 5px 0; vertical-align: top;">{prod.storytelling_style}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Narrative Archetype:</td>
-                  <td style="color: #e2e8f0; font-size: 15px; padding: 5px 0; vertical-align: top;">{prod.narrative_archetype}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Video Duration:</td>
-                  <td style="color: #f8fafc; font-weight: 800; font-size: 15px; padding: 5px 0; vertical-align: top;">{prod.duration_sec:.2f} seconds</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Production Elapsed:</td>
-                  <td style="color: #cbd5e1; font-size: 14px; padding: 5px 0; vertical-align: top;">{prod.total_duration_sec:.1f}s ({prod.start_time} &rarr; {prod.completion_time})</td>
-                </tr>
-              </table>
-
-              <!-- 2. Deliverables & Mobile Thumbnail Preview -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #20c997; letter-spacing: 0.5px; margin-top: 22px; margin-bottom: 12px; border-bottom: 1px solid #1f2c46; padding-bottom: 6px;" class="mobile-section-heading">
-                2. Deliverables &amp; Poster Preview
-              </div>
-              <div style="background-color: #090e18; padding: 12px 14px; border-radius: 8px; border: 1px solid #1e293b; color: #cbd5e1; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.6; word-break: break-all;">
-                <div><strong style="color: #20c997;">Video:</strong> {deliv.video_path}</div>
-                <div style="margin-top: 5px;"><strong style="color: #20c997;">Thumbnail:</strong> {deliv.thumbnail_path}</div>
-                <div style="margin-top: 5px;"><strong style="color: #20c997;">Subtitles:</strong> {deliv.subtitle_path}</div>
-                <div style="margin-top: 5px;"><strong style="color: #20c997;">Attribution:</strong> {deliv.attribution_manifest_path}</div>
-              </div>
-              {thumb_tag}
-
-              <!-- 3. Quality Control (QC Gate) -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #20c997; letter-spacing: 0.5px; margin-top: 24px; margin-bottom: 12px; border-bottom: 1px solid #1f2c46; padding-bottom: 6px;" class="mobile-section-heading">
-                3. Quality Control (QC Gate)
-              </div>
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 20px; line-height: 1.55;">
-                <tr>
-                  <td style="color: #94a3b8; width: 38%; padding: 4px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Rendering &amp; Sync:</td>
-                  <td style="color: #34d399; font-weight: 700; font-size: 14px; padding: 4px 0; vertical-align: top;">{qc.resolution_fps} | {qc.av_sync_status}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 4px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Thumbnail Validation:</td>
-                  <td style="color: #34d399; font-size: 14px; padding: 4px 0; vertical-align: top;">{qc.thumbnail_validation}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 4px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Attribution Gate:</td>
-                  <td style="color: #34d399; font-size: 14px; padding: 4px 0; vertical-align: top;">{qc.attribution_validation}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 4px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Text Safe Margins:</td>
-                  <td style="color: #34d399; font-size: 14px; padding: 4px 0; vertical-align: top;">{qc.text_clipping_checks}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 4px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Final Gate Result:</td>
-                  <td style="color: #34d399; font-weight: 800; font-size: 15px; padding: 4px 0; vertical-align: top;">&#10003; {qc.final_qc_result}</td>
-                </tr>
-              </table>
-
-              <!-- 4. YouTube Publishing Gate -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #f2c14e; letter-spacing: 0.5px; margin-top: 24px; margin-bottom: 12px; border-bottom: 1px solid #1f2c46; padding-bottom: 6px;" class="mobile-section-heading">
-                4. YouTube Publishing Status
-              </div>
-              <div style="background-color: #171d2b; padding: 14px 16px; border-radius: 8px; border: 1px solid #2a374f; line-height: 1.55;">
-                <div style="font-size: 14px; margin-bottom: 6px;">
-                  <span style="color: #94a3b8; font-size: 13px;">Target Publication:</span>
-                  <strong style="color: #f8fafc; font-size: 15px; margin-left: 4px;">{pub.target_pub_timestamp} ({pub.timezone_name})</strong>
-                </div>
-                <div style="font-size: 14px; margin-bottom: 6px;">
-                  <span style="color: #94a3b8; font-size: 13px;">Publishing Mode:</span>
-                  <strong style="color: #f2c14e; font-size: 14px; margin-left: 4px;">MANUAL APPROVAL GATE</strong>
-                </div>
-                <div style="font-size: 14px; margin-bottom: 6px;">
-                  <span style="color: #94a3b8; font-size: 13px;">YouTube Status:</span>
-                  <span style="color: #cbd5e1; font-size: 14px; margin-left: 4px;">{pub.youtube_upload_status}</span>
-                </div>
-                <div style="font-size: 13px; color: #94a3b8;">
-                  Approval Gate: <span style="color: #f2c14e; font-weight: 600;">{pub.manual_approval_status}</span>
-                </div>
-              </div>
-
-              <!-- 5. Daily Production Dashboard (Cards) -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #fee004; letter-spacing: 0.5px; margin-top: 28px; margin-bottom: 12px; border-bottom: 1px solid #1f2c46; padding-bottom: 6px;" class="mobile-section-heading">
-                5. Daily Production Dashboard ({dashboard['date']})
-              </div>
-              {html_dash}
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background-color: #0b101c; padding: 16px 20px; text-align: center; border-top: 1px solid #1e293b; font-size: 13px; color: #94a3b8; line-height: 1.5;" class="mobile-padding">
-              <strong style="color: #cbd5e1;">CrazzyDocs Autonomous Production Studio</strong> &bull; Local-First Media Studio<br/>
-              Automated Dispatch &bull; Timezone: {dashboard['timezone']}
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
-
-        return subject, plain_body, html_body
+            context.thumbnail_data_uri = "data:%s;base64,%s" % (mime, deliv.thumbnail_base64)
+        return P.render_success(context).as_tuple()
 
     def build_failure_email(
         self,
-        prod: ProductionDetails,
-        fail: FailureDetails,
-        dashboard: Dict,
+        prod: "ProductionDetails",
+        fail: "FailureDetails",
+        dashboard: Optional[Dict],
         terminal_status: str = STATUS_FAILED,
+        context: Any = None,
     ) -> Tuple[str, str, str]:
-        """
-        Builds Subject, Plain Text, and HTML for a FAILED / QC_REJECTED / MISSED_DEADLINE report.
-        Redesigned with mobile-first responsive layout, high contrast, readable typography,
-        prominent diagnostic blocks, and responsive individual cycle cards.
-        """
-        redacted_err = redact_sensitive_string(fail.error_message)
-        subject = f"CrazzyDocs | Cycle {prod.cycle_number} | {terminal_status} | Action Required"
-
-        # Plain Text
-        ascii_dash = self._render_ascii_dashboard(dashboard)
-        unapproved_warning = ""
-        if fail.unapproved_artifacts:
-            unapproved_warning = f"""
-[ATTENTION - UNAPPROVED ARTIFACTS GENERATED]
-The following files were created prior to failure but DID NOT pass QC:
-{chr(10).join(' - ' + p for p in fail.unapproved_artifacts)}
-DO NOT PUBLISH OR USE THESE ARTIFACTS WITHOUT MANUAL VERIFICATION.
-"""
-
-        plain_body = f"""======================================================================
-CRAZZYDOCS PRODUCTION ALERT — CYCLE {prod.cycle_number} {terminal_status}
-======================================================================
-
-PRODUCTION DETAILS
-----------------------------------------------------------------------
-Production Date:         {prod.date_str}
-Cycle Number:            Cycle {prod.cycle_number} ({prod.cycle_id})
-Job ID:                  {prod.job_id}
-Topic:                   {prod.topic}
-Last Completed Stage:    {fail.last_completed_stage}
-Failed Stage:            {fail.failed_stage}
-Error Timestamp:         {fail.error_timestamp}
-
-DIAGNOSIS & ERROR DETAILS
-----------------------------------------------------------------------
-Error Summary:
-{redacted_err}
-
-Retry Count:             {fail.retry_count}
-Recovery Attempts:       {fail.recovery_attempts}
-Recovery Outcome:        {fail.recovery_outcome}
-Job Can Resume:          {'YES (Checkpoint saved)' if fail.can_resume else 'NO (Manual fix required)'}
-Deadline Missed:         {'YES' if fail.deadline_missed else 'NO'}
-
-RECOMMENDED ACTION:
-{fail.recommended_next_action}
-
-LOG FILE LOCATIONS:
-{chr(10).join(' - ' + p for p in fail.log_paths) if fail.log_paths else ' - logs/development.log'}
-{unapproved_warning}
-======================================================================
-{ascii_dash}
-======================================================================
-CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
-"""
-
-        # HTML Unapproved artifacts warning box
-        unapproved_html = ""
-        if fail.unapproved_artifacts:
-            items = "".join(f"<div style='margin-top: 4px;'>&bull; {p}</div>" for p in fail.unapproved_artifacts)
-            unapproved_html = f"""
-            <div style="background-color: #3b141a; border: 1px solid #7f1d1d; border-left: 4px solid #f87171; border-radius: 8px; padding: 14px 16px; margin-top: 20px; margin-bottom: 20px;">
-              <div style="color: #f87171; font-weight: 800; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">⚠️ UNAPPROVED ARTIFACTS GENERATED</div>
-              <div style="font-size: 13px; color: #fca5a5; margin-top: 6px; line-height: 1.5;">These files were generated before failure and MUST NOT be published or used:</div>
-              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: #cbd5e1; margin-top: 8px; word-break: break-all; line-height: 1.5;">
-                {items}
-              </div>
-            </div>
-            """
-
-        log_items = "".join(f"<div style='margin-top: 3px;'>&bull; {p}</div>" for p in fail.log_paths) if fail.log_paths else "<div>&bull; logs/development.log</div>"
-        html_dash = self._render_html_dashboard_table(dashboard)
-
-        resume_color = "#34d399" if fail.can_resume else "#f87171"
-        resume_text = "YES (Checkpoint saved)" if fail.can_resume else "NO (Manual fix required)"
-        missed_color = "#f87171" if fail.deadline_missed else "#34d399"
-        missed_text = "YES" if fail.deadline_missed else "NO"
-
-        html_body = f"""<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="x-apple-disable-message-reformatting">
-  <title>{subject}</title>
-  <style type="text/css">
-    body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
-    table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
-    img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
-    table {{ border-collapse: collapse !important; }}
-    body {{ margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #080c14; }}
-    @media only screen and (max-width: 480px) {{
-      .mobile-padding {{ padding: 14px 12px !important; }}
-      .mobile-content-padding {{ padding: 16px 12px !important; }}
-      .mobile-heading {{ font-size: 21px !important; line-height: 1.3 !important; }}
-      .mobile-section-heading {{ font-size: 17px !important; }}
-    }}
-  </style>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #080c14; color: #f0f4fc; margin: 0; padding: 0; width: 100%;">
-  
-  <!-- Outer Wrapper Table -->
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #080c14; width: 100%;">
-    <tr>
-      <td align="center" style="padding: 16px 8px;" class="mobile-padding">
-        
-        <!-- Main Single-Column Fluid Container (max-width 600px) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; width: 100%; background-color: #1a1218; border: 1px solid #4a1d24; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-          
-          <!-- Header Banner -->
-          <tr>
-            <td style="background-color: #2b1117; padding: 22px 20px; border-bottom: 3px solid #ef4444;" class="mobile-padding">
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td align="left" style="font-size: 20px; font-weight: 800; color: #ef4444; letter-spacing: 0.5px; vertical-align: middle;">
-                    ⚠️ CRAZZYDOCS ALERT
-                  </td>
-                  <td align="right" style="vertical-align: middle;">
-                    <span style="background-color: #450a0a; color: #f87171; border: 1px solid #b91c1c; padding: 5px 12px; border-radius: 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; display: inline-block;">
-                      &#10007; CYCLE {prod.cycle_number} {terminal_status}
-                    </span>
-                  </td>
-                </tr>
-              </table>
-              <div style="font-size: 24px; font-weight: 800; color: #ffffff; line-height: 1.35; margin-top: 12px; word-break: break-word;" class="mobile-heading">
-                Failure at Stage: {fail.failed_stage.upper()}
-              </div>
-              <div style="font-size: 13px; color: #94a3b8; margin-top: 6px; line-height: 1.4;">
-                Job ID: <span style="font-family: monospace; color: #cbd5e1;">{prod.job_id}</span> &bull; Timestamp: <strong style="color: #cbd5e1;">{fail.error_timestamp}</strong>
-              </div>
-            </td>
-          </tr>
-
-          <!-- Content Body -->
-          <tr>
-            <td style="padding: 22px 20px;" class="mobile-content-padding">
-
-              <!-- 1. Error Diagnostics Card -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #f87171; letter-spacing: 0.5px; margin-top: 0; margin-bottom: 12px; border-bottom: 1px solid #4a1d24; padding-bottom: 6px;" class="mobile-section-heading">
-                1. Error Diagnostics &amp; Root Cause
-              </div>
-              <div style="background-color: #240e14; border: 1px solid #571b25; border-left: 4px solid #ef4444; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px;">
-                <div style="font-size: 12px; text-transform: uppercase; color: #fca5a5; font-weight: 800; letter-spacing: 0.5px;">DIAGNOSTIC EXCEPTION TRACE</div>
-                <div style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: #fecaca; margin-top: 8px; word-break: break-word; white-space: pre-wrap; line-height: 1.6;">{redacted_err}</div>
-              </div>
-
-              <!-- 2. Production Summary & Recovery Status -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #f87171; letter-spacing: 0.5px; margin-top: 22px; margin-bottom: 12px; border-bottom: 1px solid #4a1d24; padding-bottom: 6px;" class="mobile-section-heading">
-                2. Production Summary &amp; Recovery Status
-              </div>
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 20px; line-height: 1.55;">
-                <tr>
-                  <td style="color: #94a3b8; width: 38%; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Selected Topic:</td>
-                  <td style="color: #f8fafc; font-weight: 700; font-size: 15px; padding: 5px 0; word-break: break-word; vertical-align: top;">{prod.topic}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Last Completed Stage:</td>
-                  <td style="color: #e2e8f0; font-size: 15px; padding: 5px 0; vertical-align: top;">{fail.last_completed_stage}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Retries / Recovery:</td>
-                  <td style="color: #cbd5e1; font-size: 14px; padding: 5px 0; vertical-align: top;">{fail.retry_count} retries &bull; <strong style="color: #f87171;">{fail.recovery_outcome}</strong></td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Resumable Checkpoint:</td>
-                  <td style="color: {resume_color}; font-weight: 800; font-size: 15px; padding: 5px 0; vertical-align: top;">{resume_text}</td>
-                </tr>
-                <tr>
-                  <td style="color: #94a3b8; padding: 5px 0; font-size: 13px; font-weight: 500; vertical-align: top;">Deadline Missed:</td>
-                  <td style="color: {missed_color}; font-weight: 800; font-size: 15px; padding: 5px 0; vertical-align: top;">{missed_text}</td>
-                </tr>
-              </table>
-
-              <!-- 3. Recommended Operator Action -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #60a5fa; letter-spacing: 0.5px; margin-top: 22px; margin-bottom: 12px; border-bottom: 1px solid #23314d; padding-bottom: 6px;" class="mobile-section-heading">
-                3. Recommended Operator Action
-              </div>
-              <div style="background-color: #0c1424; border: 1px solid #1e3a8a; border-left: 4px solid #3b82f6; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; line-height: 1.55;">
-                <div style="font-size: 12px; text-transform: uppercase; color: #93c5fd; font-weight: 800; letter-spacing: 0.5px;">RECOMMENDED ACTION</div>
-                <div style="font-size: 15px; font-weight: 600; color: #f8fafc; margin-top: 6px;">{fail.recommended_next_action}</div>
-                <div style="font-size: 13px; color: #94a3b8; margin-top: 10px; font-weight: 500;">Diagnostic Log Locations:</div>
-                <div style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: #93c5fd; margin-top: 4px; word-break: break-all;">{log_items}</div>
-              </div>
-
-              {unapproved_html}
-
-              <!-- 4. Daily Production Dashboard (Cards) -->
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #fee004; letter-spacing: 0.5px; margin-top: 28px; margin-bottom: 12px; border-bottom: 1px solid #4a1d24; padding-bottom: 6px;" class="mobile-section-heading">
-                4. Daily Production Dashboard ({dashboard['date']})
-              </div>
-              {html_dash}
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background-color: #0b101c; padding: 16px 20px; text-align: center; border-top: 1px solid #1e293b; font-size: 13px; color: #94a3b8; line-height: 1.5;" class="mobile-padding">
-              <strong style="color: #cbd5e1;">CrazzyDocs Autonomous Production Studio</strong> &bull; Action Required<br/>
-              Automated Alert Dispatch &bull; Timezone: {dashboard['timezone']}
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
-
-        return subject, plain_body, html_body
+        """(subject, plain, html) for a FAILED / QC_REJECTED / MISSED_DEADLINE report. Error text is redacted."""
+        from backend.app.services.email_templates import production as P
+        if context is None:
+            context = self._legacy_context(prod, terminal_status, dashboard)
+            context.failed_stage = fail.failed_stage or None
+            context.last_completed_stage = fail.last_completed_stage or None
+            context.error_at = fail.error_timestamp or None
+            context.recommended_action = fail.recommended_next_action or None
+            context.unapproved_artifacts = list(fail.unapproved_artifacts or [])
+            context.can_resume = fail.can_resume
+            attempts = fail.recovery_attempts if fail.recovery_attempts is not None else fail.retry_count
+            context.recovery = P.RecoveryInfo(attempts=attempts if attempts else None,
+                                              window_expired=bool(fail.deadline_missed and terminal_status == STATUS_MISSED_DEADLINE))
+            extra = [("Recovery outcome", fail.recovery_outcome or None),
+                     ("Deadline missed", "Yes" if fail.deadline_missed else None),
+                     ("Logs (studio PC)", ", ".join(fail.log_paths) if fail.log_paths else None)]
+            context.extra_rows = [(k, v) for k, v in extra if v]
+            context.error_message = fail.error_message or None
+        context.error_message = redact_sensitive_string(context.error_message or "") or None
+        if context.recovery and context.recovery.first_failure:
+            context.recovery.first_failure = redact_sensitive_string(context.recovery.first_failure)
+        return P.render_failure(context).as_tuple()
 
     # -------------------------------------------------------------------------
     # 4. Dispatch with Deduplication, Persistence & Fallbacks
@@ -1670,181 +1073,102 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
         test_now_ist: Optional[datetime] = None,
     ) -> Dict:
         """
-        Main entry point called by the scheduler when a production cycle finishes.
-        Inspects authoritative DB job/checkpoint + result dict, compiles dashboard, and dispatches email.
+        Main entry point called by the scheduler when a production cycle reaches a terminal outcome.
+        Builds the email from the run result plus persisted facts (job row, checkpoint, publishing ledger,
+        lifecycle events) and dispatches it through the deduplicated ledger. Rendering problems are logged
+        and fall back to a minimal plain report; they never raise into the scheduler.
         """
+        from backend.app.services.email_templates import data as Q
+        from backend.app.services.email_templates import production as P
+
         now_ist = test_now_ist or datetime.now(IST_TZ)
         cur_date_str = now_ist.strftime("%Y-%m-%d")
         res = dict(result or {})
+        res_status = str(res.get("status") or STATUS_FAILED)
+        succeeded = res_status.upper() in (STATUS_SUCCESS, "COMPLETED", STATUS_RECOVERED_SUCCESS)
 
-        # Authoritative enrichment from JobModel & checkpoint if any fields were omitted
-        job_cp: Dict[str, Any] = {}
-        db_job_topic: Optional[str] = None
-        db_youtube_id: Optional[str] = None
-        db_start_ist: Optional[str] = None
-        with SessionLocal() as db_session:
-            db_job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
-            if db_job:
-                db_job_topic = db_job.topic_title
-                db_youtube_id = db_job.youtube_video_id
-                if db_job.actual_start_at:
-                    try:
-                        utc_dt = db_job.actual_start_at.replace(tzinfo=timezone.utc)
-                        db_start_ist = utc_dt.astimezone(IST_TZ).strftime("%H:%M:%S IST")
-                    except Exception:
-                        pass
-                if db_job.checkpoint_data_json:
-                    try:
-                        job_cp = json.loads(db_job.checkpoint_data_json) or {}
-                    except Exception:
-                        job_cp = {}
-
-        # Determine cycle number
         profile = get_active_profile()
         cycle_obj = next((c for c in profile.cycles if c.cycle_id == cycle_id), None)
-        c_num = 1
+        c_num: Optional[int] = None
         if cycle_obj:
-            for idx, c in enumerate(profile.cycles, start=1):
-                if c.cycle_id == cycle_id:
-                    c_num = idx
-                    break
+            c_num = next(i for i, c in enumerate(profile.cycles, start=1) if c.cycle_id == cycle_id)
 
-        res_status = res.get("status", STATUS_FAILED)
-        resolved_topic = (
-            res.get("topic")
-            or job_cp.get("topic")
-            or db_job_topic
-            or (f"Production {job_id}" if res_status in (STATUS_SUCCESS, "COMPLETED") else "Autonomous Selection")
-        )
-        resolved_title = (
-            res.get("video_title")
-            or job_cp.get("video_title")
-            or resolved_topic
-        )
-
-        overlay_payload = {
-            "cycle_id": cycle_id,
-            "job_id": job_id,
-            "status": res_status,
-            "topic": resolved_topic,
-            "total_duration_sec": res.get("total_duration_sec") or res.get("elapsed_sec") or res.get("duration_sec") or 0.0,
-        }
-        dashboard = self.generate_daily_dashboard(
-            date_str=cur_date_str,
-            test_now_ist=now_ist,
-            current_job_overlay=overlay_payload,
-        )
-
-        # Encode thumbnail base64 if available (lightweight preview for email)
-        t_path = res.get("thumbnail_path") or job_cp.get("thumbnail_path") or ""
-        t_b64 = _encode_thumbnail_for_email(t_path)
-
-        if res_status in (STATUS_SUCCESS, "COMPLETED"):
-            dur_val = float(res.get("duration_sec") or job_cp.get("duration_sec") or 0.0)
-            tot_val = float(res.get("total_duration_sec") or res.get("elapsed_sec") or job_cp.get("total_duration_sec") or dur_val)
-            start_str = res.get("start_time") or job_cp.get("start_time") or db_start_ist or now_ist.strftime("%H:%M:%S IST")
-            comp_str = res.get("completion_time") or now_ist.strftime("%H:%M:%S IST")
-
-            qc_data = res.get("qc_checks") if isinstance(res.get("qc_checks"), dict) else {}
-            thumb_score = res.get("thumbnail_score") or job_cp.get("thumbnail_score") or qc_data.get("thumbnail_score")
-            thumb_val_str = f"PASSED (Score: {float(thumb_score):.2f}/10)" if thumb_score is not None else "PASSED"
-
-            yt_id = res.get("youtube_video_id") or db_youtube_id
-            pub_mode = str(getattr(settings, "PUBLISHING_MODE", "manual_approval"))
-            if yt_id:
-                yt_status_str = f"uploaded ({res.get('publishing_status') or pub_mode})"
-                vis_str = "Public" if pub_mode == "automatic_public" else "Private / Unlisted"
-                pub_state_str = "UPLOADED_TO_YOUTUBE"
-                approval_str = "APPROVED" if pub_mode == "manual_approval" else f"AUTO ({pub_mode})"
-            elif pub_mode == "manual_approval":
-                yt_status_str = "manual_approval - Withheld at safety gate (Zero unauthorized public uploads)"
-                vis_str = "Private / Pending Manual Authorization"
-                pub_state_str = "AWAITING_MANUAL_APPROVAL"
-                approval_str = "REQUIRED (settings.PUBLISHING_MODE = 'manual_approval')"
-            else:
-                yt_status_str = str(res.get("publishing_status") or f"pending_queue ({pub_mode})")
-                vis_str = "Queued for Upload"
-                pub_state_str = "QUEUED_NOT_YET_UPLOADED"
-                approval_str = f"MODE ({pub_mode})"
-
-            prod = ProductionDetails(
-                date_str=cur_date_str,
-                cycle_id=cycle_id,
-                cycle_number=c_num,
-                job_id=job_id,
-                topic=resolved_topic,
-                video_title=resolved_title,
-                storytelling_style=res.get("storytelling_style") or job_cp.get("storytelling_style") or "Adaptive Multi-Style",
-                narrative_archetype=res.get("narrative_archetype") or job_cp.get("narrative_archetype") or "Documentary Short",
-                duration_sec=dur_val,
-                start_time=start_str,
-                completion_time=comp_str,
-                total_duration_sec=tot_val,
-            )
-            deliv = DeliverablesDetails(
-                video_path=res.get("video_path") or job_cp.get("video_path") or "",
-                thumbnail_path=t_path or "",
-                subtitle_path=res.get("subtitle_path") or job_cp.get("subtitle_path") or "Burned-in / Embedded in Video",
-                attribution_manifest_path=res.get("attribution_manifest_path") or job_cp.get("attribution_manifest_path") or res.get("manifest_path") or "",
-                thumbnail_base64=t_b64,
-            )
-            qc = QCDetails(
-                rendering_status="COMPLETED",
-                resolution_fps="1080x1920 @ 30 FPS",
-                av_sync_status=qc_data.get("av_sync", "SYNCHRONIZED"),
-                thumbnail_validation=thumb_val_str,
-                attribution_validation=qc_data.get("attribution", "PASSED (License Verified)"),
-                text_clipping_checks=qc_data.get("text_clipping", "PASSED"),
-                final_qc_result="PASSED",
-            )
-            pub = PublishingDetails(
-                target_pub_timestamp=res.get("target_pub_timestamp") or (f"{cycle_obj.target_pub_hour_ist:02d}:00 IST" if cycle_obj else "N/A"),
-                timezone_name="Asia/Kolkata",
-                youtube_upload_status=yt_status_str,
-                visibility=vis_str,
-                youtube_video_id=yt_id,
-                scheduled_publication_status=pub_state_str,
-                manual_approval_status=approval_str,
-            )
-
-            subject, plain_body, html_body = self.build_success_email(
-                prod=prod, deliv=deliv, qc=qc, pub=pub, dashboard=dashboard
-            )
+        if succeeded:
             terminal_status = STATUS_SUCCESS
         else:
-            # Failure / QC Rejected / Missed Deadline
             terminal_status = STATUS_FAILED
-            if res_status == "MISSED" or res.get("error") == "DEADLINE_EXCEEDED":
+            err_l = str(res.get("error", "")).lower()
+            if res_status.upper() == "MISSED" or res.get("error") == "DEADLINE_EXCEEDED":
                 terminal_status = STATUS_MISSED_DEADLINE
-            elif "qc" in str(res.get("error", "")).lower() or res_status in ("QC_REJECTED", "BLOCKED_QC"):
+            elif "qc" in err_l or res_status.upper() in ("QC_REJECTED", "BLOCKED_QC"):
                 terminal_status = STATUS_QC_REJECTED
 
-            prod = ProductionDetails(
-                date_str=cur_date_str,
-                cycle_id=cycle_id,
-                cycle_number=c_num,
-                job_id=job_id,
-                topic=resolved_topic,
-                video_title=res.get("video_title") or (f"{resolved_topic} (Aborted)" if resolved_topic != "Autonomous Selection" else "Production Run Aborted"),
+        try:
+            with SessionLocal() as db_session:
+                job = db_session.query(JobModel).filter(JobModel.id == job_id).first()
+                cp = Q.checkpoint(job) if job else {}
+                cs = cp.get("cycle_state") or {}
+                topic = res.get("topic") or cp.get("topic") or (job.topic_title if job else None)
+                ctx = P.ProductionEmailContext(
+                    outcome=terminal_status,
+                    cycle_label=("Cycle %d" % c_num) if c_num else "Manual production",
+                    cycle_number=c_num,
+                    cycle_id=cycle_id if c_num else None,
+                    job_id=job_id,
+                    scheduled_start=cs.get("production_start_at"),
+                    topic=topic,
+                    video_title=res.get("video_title") or cp.get("video_title"),
+                    category=cp.get("category"),
+                    generated_at=now_ist,
+                )
+                ctx.recovery = Q.recovery_info(db_session, job, cp, succeeded=succeeded,
+                                               decision=res.get("retry") if isinstance(res.get("retry"), dict) else None)
+                ctx.youtube = Q.youtube_state(db_session, job, cp, res.get("publishing_status"))
+                ctx.target_publication = cs.get("target_publication_at_utc") or res.get("target_pub_timestamp")
+                if succeeded:
+                    ctx.video_duration_sec = _float_or_none(res.get("duration_sec") or cp.get("duration_sec"))
+                    ctx.production_elapsed_sec = _float_or_none(res.get("total_duration_sec") or res.get("elapsed_sec")
+                                                                or cp.get("total_duration_sec"))
+                    ctx.started_at = (job.actual_start_at if job and job.actual_start_at else None) or res.get("start_time") or cp.get("start_time")
+                    ctx.completed_at = (job.completed_at if job and job.completed_at else None) or res.get("completion_time") or cp.get("completion_time")
+                    ctx.thumbnail_score = _float_or_none(res.get("thumbnail_score") or cp.get("thumbnail_score"))
+                    ctx.qc_checks = res.get("qc_checks") if isinstance(res.get("qc_checks"), dict) else None
+                    ctx.qc_gate_passed = True  # a COMPLETED run has passed the QC gate (QC_PASSED lifecycle event)
+                    ctx.stage_timeline = Q.stage_timeline(db_session, job_id)
+                    ctx.artifacts = [(label, Q.relative_path(res.get(key) or cp.get(key))) for label, key in (
+                        ("Video", "video_path"), ("Thumbnail", "thumbnail_path"),
+                        ("Attribution manifest", "attribution_manifest_path")) if (res.get(key) or cp.get(key))]
+                    t_b64 = _encode_thumbnail_for_email(res.get("thumbnail_path") or cp.get("thumbnail_path") or "")
+                    if t_b64:
+                        ctx.thumbnail_data_uri = "data:image/jpeg;base64," + t_b64
+                else:
+                    ctx.failed_stage = res.get("failed_stage") or res.get("current_stage") or (job.current_stage if job else None)
+                    ctx.last_completed_stage = res.get("last_completed_stage")
+                    ctx.error_message = res.get("error") or (job.error_details if job else None)
+                    ctx.error_at = now_ist
+                    ctx.recommended_action = res.get("recommended_action")
+                    ctx.unapproved_artifacts = list(res.get("unapproved_artifacts") or [])
+                    if "checkpoint_saved" in res:
+                        ctx.can_resume = bool(res.get("checkpoint_saved"))
+            dashboard = self.generate_daily_dashboard(
+                date_str=cur_date_str, test_now_ist=now_ist,
+                current_job_overlay={"cycle_id": cycle_id, "job_id": job_id, "status": res_status, "topic": ctx.topic,
+                                     "total_duration_sec": ctx.production_elapsed_sec},
             )
-            fail = FailureDetails(
-                last_completed_stage=res.get("last_completed_stage") or "UNKNOWN",
-                failed_stage=res.get("failed_stage") or res.get("current_stage") or "PIPELINE_EXECUTION",
-                error_message=res.get("error") or "Pipeline exception encountered during stage execution.",
-                error_timestamp=now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
-                retry_count=int(res.get("retry_count", 0)),
-                recovery_attempts=int(res.get("recovery_attempts", 0)),
-                recovery_outcome=res.get("recovery_outcome") or "Execution Halted",
-                can_resume=bool(res.get("checkpoint_saved", True)),
-                deadline_missed=(terminal_status == STATUS_MISSED_DEADLINE),
-                unapproved_artifacts=res.get("unapproved_artifacts") or [],
-                log_paths=res.get("log_paths") or ["logs/development.log"],
-                recommended_next_action=res.get("recommended_action") or "Check stage error logs and restart cycle.",
-            )
-
-            subject, plain_body, html_body = self.build_failure_email(
-                prod=prod, fail=fail, dashboard=dashboard, terminal_status=terminal_status
-            )
+            ctx.day = self._day_progress(dashboard)
+            if succeeded:
+                subject, plain_body, html_body = self.build_success_email(None, None, None, None, None, context=ctx)
+            else:
+                subject, plain_body, html_body = self.build_failure_email(None, None, None, terminal_status, context=ctx)
+        except Exception as exc:
+            # Never lose the notification because of a rendering/data problem: send a minimal, honest report.
+            logger.exception("[EMAIL_MONITOR] Report rendering failed for %s (%s); sending minimal report.", job_id, type(exc).__name__)
+            label = ("Cycle %d" % c_num) if c_num else "Manual production"
+            subject = "CrazzyDocs | %s | %s | %s" % (label, terminal_status, res.get("topic") or job_id)
+            plain_body = ("CrazzyDocs production report (minimal: the full report could not be rendered).\n\n"
+                          "Cycle: %s\nJob ID: %s\nOutcome: %s\nError: %s\n" % (
+                              label, job_id, terminal_status, redact_sensitive_string(str(res.get("error") or "")) or "none"))
+            html_body = ""
 
         return self.dispatch_summary_notification(
             cycle_id=cycle_id,
@@ -1979,75 +1303,12 @@ CrazzyDocs Autonomous Production Studio | Automated Alert Dispatch
                 if existing.status == "DELIVERY_UNKNOWN" or d_state == "DELIVERY_UNKNOWN":
                     return {"status": "DELIVERY_UNKNOWN_SUPPRESSED", "idempotency_key": idempotency_key}
 
-        dashboard = self.generate_daily_dashboard(date_str=cur_date)
+        from backend.app.services.email_templates import report as R
+        with SessionLocal() as db_session:
+            rep = R.compile_report(db_session, cur_date, profile=get_active_profile())
+        rendered = R.render(rep)
         subject = f"CrazzyDocs | Daily Production Digest | {cur_date}"
-        ascii_dash = self._render_ascii_dashboard(dashboard)
-        html_dash = self._render_html_dashboard_table(dashboard)
-
-        plain_body = f"""======================================================================
-CRAZZYDOCS DAILY CONSOLIDATED PRODUCTION DIGEST
-Date: {cur_date} | Timezone: Asia/Kolkata
-======================================================================
-
-{ascii_dash}
-
-This digest summarizes all four autonomous cycles for {cur_date}.
-CrazzyDocs Autonomous Production Studio.
-"""
-
-        html_body = f"""<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="x-apple-disable-message-reformatting">
-  <title>{subject}</title>
-  <style type="text/css">
-    body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
-    table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
-    table {{ border-collapse: collapse !important; }}
-    body {{ margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #080c14; }}
-    @media only screen and (max-width: 480px) {{
-      .mobile-padding {{ padding: 14px 12px !important; }}
-      .mobile-heading {{ font-size: 21px !important; }}
-    }}
-  </style>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #080c14; color: #f0f4fc; margin: 0; padding: 0; width: 100%;">
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #080c14; width: 100%;">
-    <tr>
-      <td align="center" style="padding: 16px 8px;" class="mobile-padding">
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; width: 100%; background-color: #131c2e; border: 1px solid #22304d; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-          <tr>
-            <td style="background-color: #121e33; padding: 22px 20px; border-bottom: 3px solid #fee004;" class="mobile-padding">
-              <div style="font-size: 24px; font-weight: 800; color: #fee004; letter-spacing: 0.5px;" class="mobile-heading">
-                📊 CRAZZYDOCS DAILY DIGEST
-              </div>
-              <div style="font-size: 13px; color: #94a3b8; margin-top: 6px; line-height: 1.4;">
-                Consolidated 24-Hour Production Summary for <strong style="color: #cbd5e1;">{cur_date}</strong> &bull; Asia/Kolkata
-              </div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 22px 20px;" class="mobile-padding">
-              <div style="font-size: 18px; font-weight: 800; text-transform: uppercase; color: #fee004; letter-spacing: 0.5px; margin-bottom: 12px; border-bottom: 1px solid #1f2c46; padding-bottom: 6px;">
-                Four-Cycle Studio Summary
-              </div>
-              {html_dash}
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color: #0b101c; padding: 16px 20px; text-align: center; border-top: 1px solid #1e293b; font-size: 13px; color: #94a3b8; line-height: 1.5;" class="mobile-padding">
-              <strong style="color: #cbd5e1;">CrazzyDocs Autonomous Production Studio</strong> &bull; Daily Consolidated Digest
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+        plain_body, html_body = rendered.text, rendered.html
 
         return self.dispatch_summary_notification(
             cycle_id="daily_digest",

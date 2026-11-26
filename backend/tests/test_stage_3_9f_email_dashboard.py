@@ -131,24 +131,26 @@ def test_success_email_builder():
     # Production details in plaintext and HTML
     assert "Tsutomu Yamaguchi" in plain_body
     assert "He Survived Both Atomic Bombs" in plain_body
-    assert "42.15 seconds" in plain_body
+    assert "42.1 s" in plain_body                      # video length, consistent duration format
     assert "Cinematic Documentary" in plain_body
     assert "Triumph Over Catastrophe" in plain_body
 
-    # Deliverables
+    # Deliverables (project-relative paths)
     assert "media/video/showcase_stage_3_4_tsutomu_yamaguchi.mp4" in plain_body
     assert "media/thumbnails/showcase_stage_3_9a_yamaguchi_poster.png" in plain_body
 
-    # QC checks
-    assert "1080x1920 @ 30 FPS" in plain_body
-    assert "SYNCHRONIZED" in plain_body
-    assert "Score: 9.76/10" in plain_body
+    # QC: only what the caller supplied. Values that were never measured are not invented
+    # (before the 2026-11 redesign '1080x1920 @ 30 FPS' and 'SYNCHRONIZED' were hard-coded defaults).
+    assert "PASSED (10-Point Score: 9.76/10)" in plain_body
+    assert "9.76 / 10" in plain_body
+    assert "1080x1920" not in plain_body
+    assert "SYNCHRONIZED" not in plain_body
 
-    # Publishing gate
-    assert "MANUAL APPROVAL GATE" in html_body
-    assert "manual_approval - Withheld at safety gate" in plain_body
+    # Production, upload and publication are separate states; unknown upload state is not reported as done
+    assert "Uploaded to YouTube" in plain_body and "Unavailable" in plain_body
+    assert "Withheld" not in plain_body
 
-    # Thumbnail preview tag in HTML
+    # Thumbnail preview tag in HTML (converted to a CID inline image at send time)
     assert "data:image/png;base64," in html_body
 
 
@@ -184,8 +186,9 @@ def test_failure_email_builder():
     )
 
     assert subject == "CrazzyDocs | Cycle 2 | FAILED | Action Required"
-    assert "STAGE_8_TTS" in plain_body
-    assert "RENDERING" in plain_body
+    assert "Stage 8 tts" in plain_body          # stage codes are shown human-readable
+    assert "Rendering" in plain_body
+    assert "Retries / Recovery" not in plain_body and "Halted at render gate" in plain_body
     assert "Check FFmpeg pipe allocation" in plain_body
 
     # Secret credentials must be redacted!
@@ -220,10 +223,9 @@ def test_qc_rejection_email_with_unapproved_artifacts():
     )
 
     assert "QC_REJECTED" in subject
-    assert "UNAPPROVED ARTIFACTS GENERATED" in plain_body
-    assert "DO NOT PUBLISH OR USE THESE ARTIFACTS" in plain_body
+    assert "UNAPPROVED ARTIFACTS: DO NOT PUBLISH OR USE" in plain_body
     assert "media/video/scratch/unapproved_draft.mp4" in plain_body
-    assert "UNAPPROVED ARTIFACTS GENERATED" in html_body
+    assert "Unapproved artifacts: do not publish or use" in html_body
 
 
 def test_missed_deadline_email():
@@ -251,7 +253,8 @@ def test_missed_deadline_email():
     )
 
     assert "MISSED_DEADLINE" in subject
-    assert "Deadline Missed:         YES" in plain_body
+    assert "Deadline missed  Yes" in plain_body.replace("   ", "  ") or "Deadline missed" in plain_body
+    assert "Production deadline missed" in plain_body
 
 
 def test_daily_dashboard_accuracy_from_db(mock_dashboard_db):

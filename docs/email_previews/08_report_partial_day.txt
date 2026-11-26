@@ -1,0 +1,141 @@
+Subject: CrazzyDocs | Daily Operations Report | 2026-11-24
+
+================================================================
+CRAZZYDOCS | DAILY OPERATIONS REPORT
+Production report · Tuesday, 24 November 2026
+24 scheduled cycles · 17 completed · 0 failed
+================================================================
+
+STATUS: Final assessment
+Production is partially complete: 17 of 24 scheduled cycles completed and 7 still pending.
+
+EXECUTIVE OVERVIEW
+------------------
+  Scheduled cycles         24
+  Completed                17
+  Failed                   0
+  Did not start / skipped  0
+  In progress or upcoming  7
+  Success rate             100%  (of 17 finished cycles)
+Reporting period: Tuesday, 24 November 2026, 00:00 to 24:00 IST. The day is still in progress; pending cycles are shown as upcoming.
+
+PRODUCTION CYCLES
+-----------------
+  - Cycle 1 · 00:00 IST | Completed
+    Ancient Carthage
+    Production 11 min 00 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 2 · 01:00 IST | Completed
+    Assyriology
+    Production 11 min 05 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 3 · 02:00 IST | Completed
+    Mohenjo-daro
+    Production 11 min 10 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 4 · 03:00 IST | Completed
+    Curiosity rover spots layered rocks
+    Production 11 min 15 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 5 · 04:00 IST | Completed
+    James Webb Space Telescope
+    Production 11 min 20 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 6 · 05:00 IST | Completed
+    A cactus that changes gears: how the prickly pear makes the most of scarce water
+    Production 11 min 25 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 7 · 06:00 IST | Completed
+    Thomas Edison
+    Production 11 min 30 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 8 · 07:00 IST | Completed
+    Levent Alpöge
+    Production 11 min 35 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 9 · 08:00 IST | Completed
+    NSA encryption systems
+    Production 11 min 40 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 10 · 09:00 IST | Completed
+    Fiona (hippopotamus)
+    Production 11 min 45 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 11 · 10:00 IST | Completed
+    Flying shuttle
+    Production 11 min 50 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 12 · 11:00 IST | Completed
+    Riemann hypothesis
+    Production 11 min 55 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 13 · 12:00 IST | Completed
+    Physics
+    Production 12 min 00 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 14 · 13:00 IST | Completed
+    Verrazzano–Narrows Bridge
+    Production 12 min 05 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 15 · 14:00 IST | Completed
+    Eurozone crisis
+    Production 12 min 10 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 16 · 15:00 IST | Completed
+    Monopoly
+    Production 12 min 15 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 17 · 16:00 IST | Completed
+    Talking to Yourself
+    Production 12 min 20 s · Video 52 s · Thumbnail 9.30 / 10
+    YouTube: Uploaded (private), publication scheduled
+  - Cycle 18 · 17:00 IST | In progress
+    New laser welding process joins aluminum castings with fewer pores and less spatter
+  - Cycle 19 · 18:00 IST | Upcoming
+    Not started
+  - Cycle 20 · 19:00 IST | Upcoming
+    Not started
+  - Cycle 21 · 20:00 IST | Upcoming
+    Not started
+  - Cycle 22 · 21:00 IST | Upcoming
+    Not started
+  - Cycle 23 · 22:00 IST | Upcoming
+    Not started
+  - Cycle 24 · 23:00 IST | Upcoming
+    Not started
+
+MANUAL PRODUCTIONS
+------------------
+  - Manual production · 14:12 IST | Completed
+    Antikythera mechanism
+    Production 11 min 42 s · Video 53.4 s
+
+AGGREGATE PERFORMANCE
+---------------------
+  Videos produced      18  (including manual runs)
+  Failure rate         0%
+  Avg production time  11 min 40 s
+  Avg video length     52.1 s
+  Avg thumbnail score  9.30 / 10
+  Total retries        0
+Rendering time is not recorded separately; production time covers the whole pipeline.
+
+PUBLISHING
+----------
+  Uploaded to YouTube    17
+  Publication scheduled  17
+  Published (public)     0
+
+OPERATIONAL HEALTH (AT REPORT TIME)
+-----------------------------------
+  Scheduler                    Running, heartbeat 12s ago
+  Worker                       Idle
+  Schedule revision            ccf0bd04f159
+  Pending recovery operations  0
+  Email delivery (24 h)        25 sent or pending, 0 failed or unconfirmed
+  YouTube quota: Data API      3,250 of 10,000 units used (local estimate, Pacific day)
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/

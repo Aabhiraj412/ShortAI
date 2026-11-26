@@ -1,0 +1,24 @@
+Subject: YouTube upload completed: Jet engine #Shorts
+
+================================================================
+CRAZZYDOCS | YOUTUBE UPLOAD
+Upload to YouTube completed
+Jet engine #Shorts
+================================================================
+
+STATUS: Upload to YouTube completed
+The video is on YouTube. Upload is not publication: check its visibility and schedule in the Publishing Queue.
+
+DETAILS
+--------
+  Publishing queue ID  412
+  Video title          Jet engine #Shorts
+  Status               uploaded_private
+  YouTube video ID     a1B2c3D4e5F
+  Time                 24 Nov 2026, 20:11 IST
+  Link                 https://youtu.be/a1B2c3D4e5F
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/

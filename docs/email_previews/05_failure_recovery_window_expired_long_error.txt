@@ -1,0 +1,51 @@
+Subject: CrazzyDocs | Cycle 3 | FAILED | Action Required
+
+================================================================
+CRAZZYDOCS | PRODUCTION ALERT · CYCLE 3 · SCHEDULED 02:00 IST
+Cycle 3 did not complete
+Production failed · recovery window expired
+================================================================
+
+STATUS: Production failed · recovery window expired
+The recovery window closed before the cycle could complete.
+
+RECOMMENDED ACTION
+------------------
+WHAT TO DO
+No action is needed for this slot; the next cycle runs on schedule. Investigate if this repeats.
+
+KEY FACTS
+---------
+  Failed stage  Topic discovery
+
+DETAILS
+--------
+  Cycle            Cycle 3
+  Job ID           cycle_3_20261123_0200
+  Scheduled start  23 Nov 2026, 02:00 IST
+  Failed stage     Topic discovery
+  Failed at        23 Nov 2026, 02:43 IST
+Nothing from this attempt was uploaded or published.
+
+RECOVERY
+--------
+  Retry status       No further attempts: the recovery window has expired
+  Recovery deadline  23 Nov 2026, 02:45 IST
+  Window             Expired
+
+TECHNICAL DETAILS
+-----------------
+  Recovery window expired at 2026-11-23T02:45:00+05:30; reconciliation occurred at 02:43:45 after a host outage. Traceback (most recent call last):
+    File "D:\\Agents\\CrazzyDocs\\backend\\app\\render\\stage_00.py", line 100, in run
+    File "D:\\Agents\\CrazzyDocs\\backend\\app\\render\\stage_01.py", l
+  … (2059 characters omitted) …
+  ile "D:\\Agents\\CrazzyDocs\\backend\\app\\render\\stage_26.py", line 126, in run
+    File "D:\\Agents\\CrazzyDocs\\backend\\app\\render\\stage_27.py", line 127, in run
+    File "D:\\Agents\\CrazzyDocs\\backend\\app\\render\\stage_28.py", line 128, in run
+    File "D:\\Agents\\CrazzyDocs\\backend\\app\\render\\stage_29.py", line 129, in run
+  RuntimeError: ffmpeg exited with status 1 after 3 in-stage attempts: Conversion failed! RuntimeError: ffmpeg exited with status 1 after 3 in-stage attempts: Conversion failed! RuntimeError: ffmpeg exited with status 1 after 3 in-stage attempts: Conversion failed!
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/

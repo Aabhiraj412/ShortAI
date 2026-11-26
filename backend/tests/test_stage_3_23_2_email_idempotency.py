@@ -190,7 +190,8 @@ async def test_1_single_production_completion_sends_exactly_one_canonical_email(
     assert res["status"] == "COMPLETED"
     assert len(sent_messages) == 1
     assert sent_messages[0]["subject"] == "CrazzyDocs | Cycle 2 | SUCCESS | Saturn's Vanishing Rings Explained"
-    assert "CRAZZYDOCS PRODUCTION SUMMARY" in sent_messages[0]["plain"]
+    assert "CRAZZYDOCS | PRODUCTION REPORT" in sent_messages[0]["plain"]
+    assert sent_messages[0]["html"].count("<html") == 1
     assert "[CrazzyDocs Success]" not in sent_messages[0]["subject"]
 
 
@@ -430,8 +431,8 @@ def test_7_daily_dashboard_and_summary_reflect_completed_cycle_and_exclude_synth
     )
     assert res["status"] == "SENT"
     # Cycle 2 inside daily dashboard must reflect SUCCESS / real topic / Generated >= 1
-    assert "Success: 1" in captured["plain"]
-    assert "2       | SUCCESS" in captured["plain"]
+    assert "TODAY SO FAR" in captured["plain"]
+    assert "1 of 4 completed" in captured["plain"]
     assert "The Clockwork Compu" in captured["plain"]
 
     summary_svc = DailyPublishingSummaryService(
@@ -504,9 +505,15 @@ def test_10_production_success_distinguished_from_youtube_publication(isolated_e
         },
         test_now_ist=datetime(2026, 11, 12, 2, 0, 0, tzinfo=IST_TZ),
     )
-    assert "Withheld at safety gate" in captured["plain"]
-    assert "AWAITING_MANUAL_APPROVAL" in captured["plain"]
-    assert "Not assigned (Withheld)" in captured["plain"]
+    # Production, upload and publication are reported separately. With no publishing-ledger row and no
+    # video ID the upload state is unknown: it is shown as Unavailable, never as uploaded or published.
+    # (The pre-2026-11 email said "Withheld at safety gate" regardless of the real ledger state.)
+    plain = captured["plain"]
+    import re as _re
+    assert _re.search(r"Production\s+Completed", plain)
+    assert _re.search(r"Uploaded to YouTube\s+Unavailable", plain)
+    assert _re.search(r"Published\s+Unavailable", plain)
+    assert "Withheld" not in plain
 
     # Now seed a real uploaded row in publishing_ledger and confirm dashboard reflects it
     conn = sqlite3.connect(str(isolated_env["db_file"]))

@@ -1,0 +1,51 @@
+Subject: CrazzyDocs | Cycle 17 | SUCCESS | Talking to Yourself #Shorts
+
+================================================================
+CRAZZYDOCS | PRODUCTION REPORT · CYCLE 17 · SCHEDULED 16:00 IST
+Talking to Yourself #Shorts
+Completed 24 Nov 2026, 16:16 IST · Cycle 17
+================================================================
+
+STATUS: Production completed after recovery
+The video was produced on attempt 3 after an earlier failure. It is uploaded to YouTube as private, with publication scheduled.
+
+KEY METRICS
+-----------
+  Video length     55.1 s
+  Production time  16 min 03 s
+  Thumbnail score  9.12 / 10
+  Retries          2
+
+PRODUCTION
+----------
+  Topic         Talking to Yourself
+  Video title   Talking to Yourself #Shorts
+  Category      Human Biology
+  Cycle         Cycle 17
+  Job ID        cycle_17_20261124_1600
+  Started       24 Nov 2026, 16:10 IST
+  Completed     24 Nov 2026, 16:16 IST
+  Quality gate  Passed
+
+PRODUCTION, UPLOAD AND PUBLICATION
+----------------------------------
+  Production           Completed
+  Uploaded to YouTube  Yes (private)
+  Published            Scheduled for 24 Nov 2026, 17:00 IST
+  YouTube video        https://youtu.be/NdNW7eQyR6k
+
+RECOVERY
+--------
+  Attempts          3
+  Original failure  Stage 3.21J VisualDiversityValidator rejected storyboard: [live_talking_to_yourself_b16] Prohibited stick-figure/cartoon imagery
+  Recovered         24 Nov 2026, 16:16 IST
+  Final result      Completed
+
+TODAY SO FAR
+------------
+16 of 24 completed, 1 failed
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/

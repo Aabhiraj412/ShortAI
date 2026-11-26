@@ -1,0 +1,50 @@
+Subject: CrazzyDocs | Cycle 10 | QC_REJECTED | Action Required
+
+================================================================
+CRAZZYDOCS | PRODUCTION ALERT · CYCLE 10 · SCHEDULED 09:00 IST
+Fiona (hippopotamus)
+Blocked by the quality gate · recovery window expired
+================================================================
+
+STATUS: Blocked by the quality gate · recovery window expired
+The quality gate blocked the video: the narration did not mention the topic's key words.
+
+RECOMMENDED ACTION
+------------------
+WHAT TO DO
+This is deterministic: retrying the same script will not pass. No action is needed for this slot; if it repeats across topics, review the narration generator.
+
+KEY FACTS
+---------
+  Attempts      1
+  Failed stage  Blocked qc
+
+DETAILS
+--------
+  Topic                 Fiona (hippopotamus)
+  Cycle                 Cycle 10
+  Job ID                cycle_10_20261124_0900
+  Scheduled start       24 Nov 2026, 09:00 IST
+  Last completed stage  Rendering
+  Failed stage          Blocked qc
+  Failed at             24 Nov 2026, 09:14 IST
+Nothing from this attempt was uploaded or published.
+
+RECOVERY
+--------
+  Retry status       No further attempts: the recovery window has expired
+  Recovery deadline  24 Nov 2026, 09:45 IST
+  Window             Expired
+
+TODAY SO FAR
+------------
+9 of 24 completed, 1 failed
+
+TECHNICAL DETAILS
+-----------------
+  [DETERMINISTIC] ValueError: BLOCKED_QC: ["[CHECK_A_TOPIC_NARRATION] Narration lacks topic keywords (found ['fiona'] out of ['fiona', 'hippopotamus'])."] (attempt 1 failed; no time for another attempt before the recovery deadline 2026-11-24T04:15:00Z (needs 20 min))
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/

@@ -18,7 +18,7 @@ from backend.app.services.daily_publishing_summary import (
 @pytest.fixture
 def clean_summary_db():
     test_date = "2026-11-10"
-    idempotency_key = f"daily_publishing_summary_{test_date}"
+    idempotency_key = f"daily_operations_report_{test_date}"
     with SessionLocal() as db:
         db.query(PersistentNotificationModel).filter(
             PersistentNotificationModel.idempotency_key == idempotency_key
@@ -57,9 +57,10 @@ def test_render_summary_html(clean_summary_db):
     report = daily_publishing_summary_service.compile_daily_summary(date_str=test_date)
     html = daily_publishing_summary_service.render_summary_html(report)
 
-    assert "CrazzyDocs Daily Publishing Summary" in html
-    assert "Productions Attempted:" in html
-    assert "show_production_dashboard.py" in html
+    # Shared-design daily operations report (2026-11 redesign)
+    assert "Daily operations report" in html
+    assert "Executive overview" in html and "Final assessment" in html
+    assert "Production report" in html
 
 
 def test_daily_summary_deduplication(clean_summary_db):
@@ -83,7 +84,7 @@ def test_daily_summary_safe_offline_persistence(clean_summary_db):
 
     with SessionLocal() as db:
         rec = db.query(PersistentNotificationModel).filter(
-            PersistentNotificationModel.idempotency_key == f"daily_publishing_summary_{test_date}"
+            PersistentNotificationModel.idempotency_key == f"daily_operations_report_{test_date}"
         ).first()
         assert rec is not None
         assert rec.status == "FAILED"

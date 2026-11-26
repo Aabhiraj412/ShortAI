@@ -12,14 +12,20 @@ Gathers accurate 24-hour metrics from:
 7. Storage consumed (media footprint & disk free space)
 8. Errors requiring operator attention
 
+Reporting period (fixed 2026-11): the scheduled 06:00 IST run reports the PREVIOUS complete IST day.
+Before, it reported the current day at 06:00, so it covered only cycles 0-5 and the remaining 18 cycles
+of every day never appeared in any summary. The email is the shared-design "Daily Operations Report"
+(backend/app/services/email_templates/report.py).
+
 Enforces:
-- Exactly one email per reporting day.
+- Exactly one email per reporting day (idempotency key ``daily_operations_report_<date>``; the new
+  prefix keeps the first corrected report from colliding with the old partial-day report of that date).
 - Persistent deduplication via SQLite persistent_notifications.
 - Safe retry on delivery failure without losing the report.
 """
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import os
@@ -62,9 +68,12 @@ class DailySummaryReport:
     qc_blocked_details: List[Dict[str, str]] = field(default_factory=list)
     errors_requiring_attention: List[Dict[str, str]] = field(default_factory=list)
     production_titles: List[str] = field(default_factory=list)
+    operations: Any = field(default=None, repr=False, compare=False)   # email_templates.report.OperationsReport
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("operations", None)
+        return d
 
 
 class DailyPublishingSummaryService:
@@ -167,7 +176,18 @@ class DailyPublishingSummaryService:
         usage = shutil.disk_usage(self.workspace[:2])
         disk_free_gb = round(usage.free / (1024**3), 2)
 
+        operations = None
+        try:
+            from backend.app.services.email_templates import report as R
+            with SessionLocal() as db_session:
+                operations = R.compile_report(db_session, cur_date, profile=get_active_profile())
+            operations.storage_mb = storage_consumed_mb
+            operations.disk_free_gb = disk_free_gb
+        except Exception:
+            logger.exception("Daily operations report could not be compiled for %s.", cur_date)
+
         return DailySummaryReport(
+            operations=operations,
             date_str=cur_date,
             productions_attempted=productions_attempted,
             productions_completed=productions_completed,
@@ -185,58 +205,26 @@ class DailyPublishingSummaryService:
             production_titles=production_titles,
         )
 
+    def render_summary(self, report: DailySummaryReport):
+        """RenderedEmail (subject, text, html) in the shared design. Raises if the report cannot be rendered."""
+        from backend.app.services.email_templates import report as R
+        if report.operations is None:
+            raise RuntimeError("operations report unavailable for %s" % report.date_str)
+        return R.render(report.operations)
+
     def render_summary_html(self, report: DailySummaryReport) -> str:
-        """Renders responsive email HTML with clear status badges and metric tables."""
-        qc_rows = "".join(
-            f"<tr><td style='padding:6px 8px; border-bottom:1px solid #22304d;'><strong>{item['topic']}</strong></td>"
-            f"<td style='padding:6px 8px; border-bottom:1px solid #22304d; color:#ff6b6b;'>{item['error']}</td></tr>"
-            for item in report.qc_blocked_details
-        ) if report.qc_blocked_details else "<tr><td colspan='2' style='padding:8px; color:#20c997;'>Zero QC rejections today.</td></tr>"
+        return self.render_summary(report).html
 
-        err_rows = "".join(
-            f"<tr><td style='padding:6px 8px; border-bottom:1px solid #22304d;'>[{item['status']}] {item['id']}</td>"
-            f"<td style='padding:6px 8px; border-bottom:1px solid #22304d; color:#ff6b6b;'>{item['details']}</td></tr>"
-            for item in report.errors_requiring_attention
-        ) if report.errors_requiring_attention else "<tr><td colspan='2' style='padding:8px; color:#20c997;'>Zero critical errors.</td></tr>"
-
-        titles_list = "".join(f"<li>{t}</li>" for t in report.production_titles) if report.production_titles else "<li>No productions attempted.</li>"
-
-        return f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>CrazzyDocs Daily Publishing Summary</title></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background-color:#080c14; color:#f0f4fc; margin:0; padding:20px;">
-  <div style="max-width:650px; margin:0 auto; background:#131c2e; border:1px solid #22304d; border-radius:12px; overflow:hidden;">
-    <div style="background:#121e33; padding:20px; border-bottom:3px solid #fee004;">
-      <h2 style="color:#fee004; margin:0;">📊 CrazzyDocs Daily Publishing Summary</h2>
-      <p style="color:#94a3b8; margin:5px 0 0 0; font-size:13px;">Reporting Date: <strong>{report.date_str}</strong> (Asia/Kolkata)</p>
-    </div>
-    <div style="padding:20px;">
-      <h3 style="color:#fee004; border-bottom:1px solid #1f2c46; padding-bottom:6px;">1. Operational Metrics</h3>
-      <table style="width:100%; border-collapse:collapse; font-size:14px; margin-bottom:20px;">
-        <tr style="background:#0f172a;"><td style="padding:8px;">Productions Attempted:</td><td style="padding:8px; font-weight:bold;">{report.productions_attempted}</td></tr>
-        <tr><td style="padding:8px;">Productions Completed:</td><td style="padding:8px; font-weight:bold; color:#20c997;">{report.productions_completed}</td></tr>
-        <tr style="background:#0f172a;"><td style="padding:8px;">Videos Publicly Published:</td><td style="padding:8px; font-weight:bold; color:#fee004;">{report.videos_published_public}</td></tr>
-        <tr><td style="padding:8px;">Videos Blocked by QC:</td><td style="padding:8px; font-weight:bold; color:#ff6b6b;">{report.videos_blocked_qc}</td></tr>
-        <tr style="background:#0f172a;"><td style="padding:8px;">Missed Production Cycles:</td><td style="padding:8px;">{report.missed_cycles}</td></tr>
-        <tr><td style="padding:8px;">Recovered Production Cycles:</td><td style="padding:8px; color:#20c997;">{report.recovered_cycles}</td></tr>
-        <tr style="background:#0f172a;"><td style="padding:8px;">Media Storage Footprint:</td><td style="padding:8px;">{report.storage_consumed_mb} MB (Free: {report.disk_free_gb} GB)</td></tr>
-      </table>
-
-      <h3 style="color:#fee004; border-bottom:1px solid #1f2c46; padding-bottom:6px;">2. Productions & Titles</h3>
-      <ul style="font-size:14px; color:#cbd5e1; padding-left:20px;">{titles_list}</ul>
-
-      <h3 style="color:#fee004; border-bottom:1px solid #1f2c46; padding-bottom:6px;">3. QC Blocked Deliverables</h3>
-      <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:15px;">{qc_rows}</table>
-
-      <h3 style="color:#fee004; border-bottom:1px solid #1f2c46; padding-bottom:6px;">4. Attention Required / Exceptions</h3>
-      <table style="width:100%; border-collapse:collapse; font-size:13px;">{err_rows}</table>
-    </div>
-    <div style="background:#0b101c; padding:12px; text-align:center; font-size:12px; color:#64748b; border-top:1px solid #1e293b;">
-      CrazzyDocs Autonomous Production Studio &bull; Dashboard: <code>python backend/scripts/show_production_dashboard.py</code>
-    </div>
-  </div>
-</body>
-</html>"""
+    @staticmethod
+    def _fallback_plain(report: DailySummaryReport) -> str:
+        return (
+            f"CRAZZYDOCS DAILY OPERATIONS REPORT - {report.date_str} (minimal: full report could not be rendered)\n\n"
+            f"Productions attempted: {report.productions_attempted}\n"
+            f"Productions completed: {report.productions_completed}\n"
+            f"Blocked by QC: {report.videos_blocked_qc}\n"
+            f"Missed cycles: {report.missed_cycles}\n"
+            f"Media footprint: {report.storage_consumed_mb} MB (free: {report.disk_free_gb} GB)\n"
+        )
 
     def send_daily_summary(
         self,
@@ -248,27 +236,20 @@ class DailyPublishingSummaryService:
         Compiles and dispatches the daily summary email with strict idempotency,
         transactional claim lock, and DELIVERY_UNKNOWN timeout safety.
         """
-        cur_date = date_str or datetime.now(IST_TZ).strftime("%Y-%m-%d")
-        idempotency_key = f"daily_publishing_summary_{cur_date}"
-        recip = recipient or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL") or "aabhiraj321@gmail.com"
+        # Scheduled run (no date): report the previous, complete IST day.
+        cur_date = date_str or (datetime.now(IST_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        idempotency_key = f"daily_operations_report_{cur_date}"
+        recip = recipient or os.environ.get("NOTIFICATION_RECIPIENT_EMAIL") or email_monitoring_service.get_recipient()
         notif_job_id = f"daily_summary_{cur_date}"
 
         report = self.compile_daily_summary(date_str=cur_date)
-        subject = f"CrazzyDocs | Daily Publishing Summary | {cur_date}"
-        html_body = self.render_summary_html(report)
-        plain_body = (
-            f"CRAZZYDOCS DAILY PUBLISHING SUMMARY - {cur_date}\n\n"
-            f"Productions Attempted: {report.productions_attempted}\n"
-            f"Productions Completed: {report.productions_completed}\n"
-            f"Videos Publicly Published: {report.videos_published_public}\n"
-            f"Videos Uploaded Private: {report.videos_uploaded_private}\n"
-            f"Videos Awaiting Approval: {report.videos_awaiting_approval}\n"
-            f"Videos Scheduled: {report.videos_scheduled}\n"
-            f"Videos Blocked by QC: {report.videos_blocked_qc}\n"
-            f"Missed Cycles: {report.missed_cycles}\n"
-            f"Recovered Cycles: {report.recovered_cycles}\n"
-            f"Media Footprint: {report.storage_consumed_mb} MB (Free: {report.disk_free_gb} GB)\n"
-        )
+        try:
+            rendered = self.render_summary(report)
+            subject, plain_body, html_body = rendered.subject, rendered.text, rendered.html
+        except Exception:
+            logger.exception("Daily operations report rendering failed for %s; sending minimal text.", cur_date)
+            subject = f"CrazzyDocs | Daily Operations Report | {cur_date}"
+            plain_body, html_body = self._fallback_plain(report), ""
 
         with SessionLocal() as db_session:
             claimed, suppressed = email_monitoring_service._claim_notification_slot(

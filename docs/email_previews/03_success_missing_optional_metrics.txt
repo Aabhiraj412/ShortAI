@@ -1,0 +1,27 @@
+Subject: CrazzyDocs | Manual production | SUCCESS | Antikythera mechanism
+
+================================================================
+CRAZZYDOCS | PRODUCTION REPORT · MANUAL PRODUCTION
+Antikythera mechanism
+Manual production
+================================================================
+
+STATUS: Production completed successfully
+The video passed the quality gate. It has not been uploaded to YouTube yet.
+
+PRODUCTION
+----------
+  Topic   Antikythera mechanism
+  Cycle   Manual production
+  Job ID  manual_20261124_1412
+
+PRODUCTION, UPLOAD AND PUBLICATION
+----------------------------------
+  Production           Completed
+  Uploaded to YouTube  No (in the publishing queue)
+  Published            No
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/

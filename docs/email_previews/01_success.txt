@@ -1,0 +1,63 @@
+Subject: CrazzyDocs | Cycle 18 | SUCCESS | New laser welding process joins aluminum castings with fewer pores and less spatter #Shorts
+
+================================================================
+CRAZZYDOCS | PRODUCTION REPORT · CYCLE 18 · SCHEDULED 17:00 IST
+New laser welding process joins aluminum castings with fewer pores and less spatter #Shorts
+Completed 24 Nov 2026, 17:11 IST · Cycle 18
+================================================================
+
+STATUS: Production completed successfully
+The video passed the quality gate. It is uploaded to YouTube as private, with publication scheduled.
+
+KEY METRICS
+-----------
+  Video length     52.3 s
+  Production time  11 min 16 s
+  Thumbnail score  9.46 / 10
+  Retries          0
+
+PRODUCTION
+----------
+  Topic         New laser welding process joins aluminum castings with fewer pores and less spatter
+  Video title   New laser welding process joins aluminum castings with fewer pores and less spatter #Shorts
+  Category      Technology
+  Cycle         Cycle 18
+  Job ID        cycle_18_20261124_1700
+  Started       24 Nov 2026, 17:00 IST
+  Completed     24 Nov 2026, 17:11 IST
+  Quality gate  15 of 15 checks passed
+
+PRODUCTION, UPLOAD AND PUBLICATION
+----------------------------------
+  Production           Completed
+  Uploaded to YouTube  Yes (private)
+  Published            Scheduled for 24 Nov 2026, 18:00 IST
+  YouTube video        https://youtu.be/itAn8UlBC5s
+
+THUMBNAIL
+---------
+
+STAGE TIMELINE
+--------------
+  Story development      17:03:10 IST
+  Voiceover              17:07:10 IST
+  Rendering              17:11:14 IST
+  Thumbnail              17:11:16 IST
+  Video rendered         17:11:18 IST
+  Quality gate passed    17:11:18 IST
+  Uploaded to YouTube    17:11:31 IST
+  Publication scheduled  17:11:31 IST
+
+TODAY SO FAR
+------------
+17 of 24 completed, 1 failed
+
+OUTPUT FILES (STUDIO PC)
+------------------------
+  Video      media/productions/cycle_18_20261124_1700/video/showcase_cycle_18_20261124_1700.mp4
+  Thumbnail  media/productions/cycle_18_20261124_1700/thumbnails/thumb_cycle_18_20261124_1700.png
+
+----------------------------------------------------------------
+CrazzyDocs Autonomous Studio - automated operational report
+Generated 24 Nov 2026, 17:19 IST. All times Asia/Kolkata (IST).
+Control Center (studio PC): http://127.0.0.1:8000/
