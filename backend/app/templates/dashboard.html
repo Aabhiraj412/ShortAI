@@ -1168,6 +1168,28 @@
       </div>
       <h3 style="font-size:13px;margin:10px 0 4px;">Autopilot event history</h3><div id="apCtlHistory" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
+    <!-- STAGE 3.37: production queues and resource coordinator -->
+    <div class="card" id="pqCard"><div class="card-head"><div><h2 class="card-title">Production queues and resources</h2>
+      <p class="card-desc">Two logical queues share one resource coordinator. <strong>Shorts</strong> is the unchanged 24-cycle scheduler (always first for the renderer). <strong>Long-form</strong> runs operator-enqueued, checkpointed steps only in the gaps between Shorts cycles and only within the resource thresholds. One heavyweight render at a time. Pausing never interrupts a running step. No publishing, schedule or configuration action happens here.</p></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;">
+        <input id="pqReason" maxlength="500" placeholder="reason (required)" style="width:200px;" />
+        <button class="btn sm" id="pqPause" onclick="pqPause(true)">Pause long-form</button>
+        <button class="btn sm" id="pqResume" onclick="pqPause(false)">Resume long-form</button></div></div>
+      <div class="overview-grid" style="margin-bottom:8px;">
+        <div class="kpi-card"><div class="kpi-label">Shorts queue</div><div class="kpi-val" id="pqShorts" style="font-size:15px;">--</div><div class="kpi-sub" id="pqShortsSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Long-form queue</div><div class="kpi-val" id="pqLong" style="font-size:15px;">--</div><div class="kpi-sub" id="pqLongSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Renderer</div><div class="kpi-val" id="pqRender" style="font-size:15px;">--</div><div class="kpi-sub" id="pqRenderSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">CPU / RAM</div><div class="kpi-val" id="pqCpu" style="font-size:15px;">--</div><div class="kpi-sub" id="pqCpuSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">GPU / disk</div><div class="kpi-val" id="pqGpu" style="font-size:15px;">--</div><div class="kpi-sub" id="pqGpuSub">--</div></div>
+        <div class="kpi-card"><div class="kpi-label">Recovery</div><div class="kpi-val" id="pqRec" style="font-size:15px;">--</div><div class="kpi-sub" id="pqRecSub">--</div></div>
+      </div>
+      <div class="grid-2">
+        <div><h3 style="font-size:13px;margin:4px 0;">Execution model</h3><div id="pqModel" style="font-size:12px;">--</div></div>
+        <div><h3 style="font-size:13px;margin:4px 0;">Admission rules</h3><div id="pqRules" style="font-size:12px;">--</div></div>
+      </div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Jobs (both queues)</h3><div id="pqJobs" style="font-size:12px;overflow-x:auto;">--</div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Coordinator events</h3><div id="pqEvents" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
     <!-- STAGE 3.32H/I/J: reliability, phased activation, operational reports -->
     <div class="grid-2">
       <div class="card"><div class="card-head"><div><h2 class="card-title">Dashboard health</h2><p class="card-desc">From the health monitor's persisted ledger. Liveness and readiness are probed separately. A slow or not-ready dashboard is <em>degraded</em> and is never restarted; a restart needs consecutive liveness failures <em>and</em> no running dashboard process.</p></div></div><div id="apHealth" style="font-size:12px;">--</div></div>
@@ -4112,6 +4134,7 @@ async function refreshAutopilot(force = false) {
   }
   refreshAutopilotOps(force);
   refreshAutopilotController(force);
+  refreshProductionQueues(force);
 }
 
 async function apPropose(recId, actionType) {
@@ -4229,6 +4252,65 @@ async function refreshAutopilotController(force = false) {
   } catch (err) {
     const el = document.getElementById("apCtlStateSub");
     if (el) el.innerHTML = `<span class="auto-kill">controller status unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
+}
+
+
+// -- Stage 3.37 production queues: persisted coordinator state plus a live resource sample. --
+async function pqPause(paused) {
+  const reason = ((document.getElementById("pqReason") || {}).value || "").trim();
+  if (!reason) { showToast("Enter a reason first.", true); return; }
+  if (!(await askConfirm(paused ? "Pause the long-form queue?" : "Resume the long-form queue?", paused
+      ? "No new long-form step is admitted. A running step is asked to stop at its next safe point and keeps its checkpoint. Shorts production is not affected."
+      : "Long-form steps are admitted again, only in the gaps between Shorts cycles and within the resource thresholds."))) return;
+  try { await apWrite(`/api/production/queues/long-form/${paused ? "pause" : "resume"}`, { reason, confirm: true }); showToast(paused ? "Long-form queue paused" : "Long-form queue resumed"); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshProductionQueues(true);
+}
+
+async function refreshProductionQueues(force = false) {
+  const panel = document.getElementById("tab-autopilot");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  try {
+    const s = await apiJson("/api/production/queues");
+    const sh = s.queues.SHORTS || {}, lf = s.queues.LONG_FORM || {}, r = s.resources || {}, rd = s.renderer || {}, rc = s.recovery || {}, cfg = s.config || {}, em = s.execution_model || {};
+    const ist = t => t ? new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Kolkata" }) + " IST" : "--";
+    document.getElementById("pqShorts").textContent = (sh.active_jobs || []).length ? `${sh.active_jobs.length} active` : "idle";
+    document.getElementById("pqShortsSub").textContent = `${sh.cycles ?? "?"} cycles · next ${ist(sh.next_start_utc)} · concurrency ${sh.logical_concurrency ?? "?"}`;
+    document.getElementById("pqLong").innerHTML = !lf.enabled ? `<span style="color:var(--muted)">disabled</span>` : (lf.paused ? `<span class="auto-kill">PAUSED</span>` : `<span class="auto-on">enabled</span>`);
+    document.getElementById("pqLongSub").textContent = `${lf.waiting || 0} waiting · ${lf.running || 0} running · starving ${(lf.starving || []).length} · executors ${(lf.executors || []).join(", ") || "none installed"}`;
+    document.getElementById("pqRender").innerHTML = rd.occupied ? `<span style="color:#fcd34d">${rd.occupied}/${rd.heavy_slots} busy</span>` : `<span class="auto-on">free</span>`;
+    document.getElementById("pqRenderSub").textContent = `${(rd.holders || []).map(h => `${h.holder_queue} ${h.holder_job_id}${h.preempt_requested ? " (yield requested)" : ""}`).join("; ") || "no holder"} · ffmpeg processes ${rd.ffmpeg_processes ?? "?"}`;
+    document.getElementById("pqCpu").textContent = `${r.cpu_used_percent ?? "?"}% / ${r.memory_used_percent ?? "?"}%`;
+    document.getElementById("pqCpuSub").textContent = `RAM available ${r.memory_available_gb ?? "?"} of ${r.memory_total_gb ?? "?"} GB`;
+    document.getElementById("pqGpu").textContent = `${r.gpu_used_percent ?? "n/a"}% / ${r.disk_free_gb ?? "?"} GB`;
+    document.getElementById("pqGpuSub").textContent = r.gpu_used_percent == null ? (r.gpu_note || "GPU not measurable") : `busiest engine ${r.gpu_busiest_engine || "?"} · disk free`;
+    document.getElementById("pqRec").innerHTML = rc.daemon_responding ? `<span class="auto-on">daemon ticking</span>` : `<span class="auto-kill">no daemon snapshot</span>`;
+    document.getElementById("pqRecSub").textContent = `snapshot ${rc.daemon_snapshot_age_seconds ?? "--"} s old · last recovery: ${(rc.last_recovered || []).map(a => `${a.action} ${a.job_id || ""}`).join(", ") || "none"}`;
+    document.getElementById("pqModel").innerHTML = opsKV([
+      ["Logical jobs", escHtml(`Shorts active ${em.logical_jobs?.shorts_active ?? "?"} · long-form open ${em.logical_jobs?.long_form_open ?? "?"}`)],
+      ["Worker threads", escHtml(`Shorts ${em.worker_threads?.shorts ?? "?"} · long-form ${em.worker_threads?.long_form ?? "?"} (${em.worker_threads?.source || ""})`)],
+      ["OS processes", escHtml(`daemon ${em.os_processes?.daemon_pid ?? "?"} · ffmpeg ${em.os_processes?.ffmpeg ?? "?"}${(em.os_processes?.ffmpeg_pids || []).length ? " (" + em.os_processes.ffmpeg_pids.join(", ") + ")" : ""}`)],
+      ["Publishing cadence", escHtml(sh.publishing_cadence || "")],
+    ]);
+    document.getElementById("pqRules").innerHTML = opsKV([
+      ["Heavy", escHtml(`${cfg.max_heavy_concurrency} at a time (benchmarked max ${rd.benchmarked_max_heavy}) · CPU ≤ ${cfg.heavy_max_cpu_percent}% · RAM ≥ ${cfg.heavy_min_ram_available_gb} GB · disk ≥ ${cfg.heavy_min_disk_free_gb} GB · ends ≥ ${cfg.shorts_guard_minutes} min before the next Shorts cycle`)],
+      ["Light", escHtml(`${cfg.max_light_concurrency} at a time · CPU ≤ ${cfg.light_max_cpu_percent}% · RAM ≥ ${cfg.light_min_ram_available_gb} GB`)],
+      ["Fairness", escHtml(`priority + 1 per ${cfg.aging_minutes} min waiting · starving after ${cfg.starvation_alert_hours} h`)],
+      ["Shorts wait", escHtml(`at most ${cfg.shorts_slot_wait_seconds} s for a long-form step to yield, then Shorts proceeds`)],
+    ]);
+    const rows = [...(sh.active_jobs || []).map(j => `<tr><td>SHORTS</td><td>${escHtml(j.job_id)}</td><td>${escHtml(j.status)}</td><td>${escHtml(j.stage || "")}</td><td>highest</td><td>scheduler</td></tr>`),
+                  ...(lf.jobs || []).map(j => `<tr><td>LONG_FORM</td><td>${escHtml(j.id)} · ${escHtml(j.title)}</td><td>${escHtml(j.state)}</td><td>${escHtml(`${j.next_step}/${j.step_count}`)}</td><td>${escHtml(String(j.decision ? j.decision.effective_priority : j.priority))}</td><td style="max-width:360px;overflow-wrap:anywhere;">${escHtml(j.decision ? j.decision.reason : (j.error || ""))}</td></tr>`)];
+    document.getElementById("pqJobs").innerHTML = rows.length ? apTable(["Queue", "Job", "State", "Stage / step", "Priority", "Admission"], rows) : `<div style="color:var(--muted)">No active Shorts job and no long-form jobs.</div>`;
+    const ev = s.events || [];
+    document.getElementById("pqEvents").innerHTML = ev.length ? apTable(["When", "Event", "Queue", "Job", "Actor"],
+      ev.slice(0, 20).map(e => `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.event)}</td><td>${escHtml(e.queue || "")}</td><td>${escHtml(e.job_id || "")}</td><td>${escHtml(e.actor || "")}</td></tr>`))
+      : `<div style="color:var(--muted)">No coordinator events yet.</div>`;
+    document.getElementById("pqPause").disabled = !!lf.paused;
+    document.getElementById("pqResume").disabled = !lf.paused;
+  } catch (err) {
+    const el = document.getElementById("pqShortsSub");
+    if (el) el.innerHTML = `<span class="auto-kill">queue status unavailable: ${escHtml(err.message || String(err))}</span>`;
   }
 }
 

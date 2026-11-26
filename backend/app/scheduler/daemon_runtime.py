@@ -37,6 +37,25 @@ async def autopilot_controller_tick() -> None:
         logger.warning("[AUTOPILOT] controller tick skipped: %s", type(exc).__name__)
 
 
+COORDINATOR_TICK_MIN_SECONDS = 60.0
+_last_coordinator_tick = [float("-inf")]
+
+
+async def production_coordinator_tick() -> None:
+    """Stage 3.37: one resource-coordinator step (recovery of leases/claims, long-form admission, snapshot) inside
+    the same recovery loop, at most once per COORDINATOR_TICK_MIN_SECONDS so the loop's restart and recovery checks
+    are never slowed. Never affects the Shorts path; a failure here is logged and skipped."""
+    now = time.monotonic()
+    if now - _last_coordinator_tick[0] < COORDINATOR_TICK_MIN_SECONDS:
+        return
+    _last_coordinator_tick[0] = now
+    try:
+        from backend.app.scheduler.production_coordinator import get_coordinator
+        await get_coordinator().tick()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[COORDINATOR] tick skipped: %s", type(exc).__name__)
+
+
 class ControlledRestart(Exception):
     """Raised at a safe point to exit so the startup monitor relaunches current code."""
 
@@ -86,6 +105,7 @@ async def periodic_recovery_and_sleep_loop(interval_sec: float = 45, tick_second
                 logger.info("[RESTART] Restart requested; %s.", why)
             await dispatch_eligible_recoveries()
             await autopilot_controller_tick()
+            await production_coordinator_tick()
         except asyncio.CancelledError:
             break
         except ControlledRestart:

@@ -177,6 +177,18 @@ async def run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] =
                 _dispatching.discard(guard_key)
 
 
+def shorts_render_slot(job_id: str):
+    """Stage 3.37 render-slot lease for a Shorts worker. Any failure to even build the coordinator yields a no-op
+    context, so the Shorts path behaves exactly as before."""
+    try:
+        from backend.app.scheduler.production_coordinator import get_coordinator
+        return get_coordinator().shorts_render_slot(job_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[SCHEDULER] render-slot coordinator unavailable (%s); proceeding unchanged.", type(exc).__name__)
+        import contextlib
+        return contextlib.nullcontext({"job_id": job_id, "outcome": "COORDINATOR_UNAVAILABLE"})
+
+
 def dispatching_job_ids() -> List[str]:
     with _dispatch_guard_lock:
         return sorted(_dispatching)
@@ -567,7 +579,9 @@ async def _run_cycle_generation(cycle_id: str, test_ist_now: Optional[datetime] 
             logger.warning("[SCHEDULER] Job %s already has a live worker in this process; not starting another.", job_id)
             return {"status": "SKIPPED", "job_id": job_id, "reason": "CONCURRENT_ACTIVE_RUN"}
         try:
-            return _run_registered_worker(worker_id, _json)
+            # Stage 3.37: lease the shared heavyweight render slot (fail-open; never refuses Shorts).
+            with shorts_render_slot(job_id):
+                return _run_registered_worker(worker_id, _json)
         finally:
             worker_registry.registry.unregister(job_id, worker_id)
 

@@ -1048,11 +1048,13 @@ async def control_center_start_production(
     def _run_manual_production():
         from backend.app.orchestration.crazzydocs_master_orchestrator import master_orchestrator
         from backend.app.core.execution_context import ExecutionContext
+        from backend.app.scheduler.scheduler import shorts_render_slot
         try:
-            master_orchestrator.execute_production_pipeline(
-                job_id=job_id,
-                execution_context=ExecutionContext.PRODUCTION,
-            )
+            with shorts_render_slot(job_id):   # Stage 3.37: same heavyweight lease as scheduled Shorts (fail-open)
+                master_orchestrator.execute_production_pipeline(
+                    job_id=job_id,
+                    execution_context=ExecutionContext.PRODUCTION,
+                )
         finally:
             if control_center_service.get_production_control_state().get("state") == "RUNNING":
                 control_center_service.set_production_control_state("IDLE", reason="Production finished")
@@ -2534,6 +2536,94 @@ async def api_autopilot_controller_stop(req: AutopilotControllerRequest, _: None
                                         __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
     return await _autonomy_call(lambda: _production_controller().request_stop(req.operator, req.reason))
+
+
+# -- Stage 3.37: production queues and resource coordinator ------------------------------------------------------
+# Read: both logical queues, renderer occupancy, resources, recovery. Writes are operator-only (local origin, CSRF,
+# explicit confirmation) and limited to the long-form queue: Shorts production stays governed by the schedule.
+class ProductionQueueReasonRequest(_AutonomyBody):
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+class LongFormStep(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = Field(min_length=1, max_length=80)
+    weight: str = Field(min_length=4, max_length=5)
+    estimate_minutes: float
+
+
+class LongFormEnqueueRequest(_AutonomyBody):
+    kind: str = Field(min_length=1, max_length=60)
+    title: str = Field(min_length=1, max_length=200)
+    priority: int = 50
+    steps: List[LongFormStep] = Field(min_length=1, max_length=50)
+    confirm: bool = False
+
+
+class CoordinatorConfigRequest(_AutonomyBody):
+    changes: Dict[str, Any]
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+async def _coordinator_call(fn):
+    from backend.app.scheduler.production_coordinator import CoordinatorError
+    try:
+        return await asyncio.to_thread(fn)
+    except CoordinatorError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc)[:300])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Production coordinator request failed")
+        raise HTTPException(status_code=503, detail="Production coordinator unavailable; Shorts production is unaffected.")
+
+
+def _coordinator():
+    from backend.app.scheduler.production_coordinator import get_coordinator
+    return get_coordinator()
+
+
+@app.get("/api/production/queues")
+async def api_production_queues(_: None = Depends(require_local_control)):
+    return await _coordinator_call(lambda: _coordinator().status())
+
+
+@app.post("/api/production/queues/long-form/pause")
+async def api_long_form_pause(req: ProductionQueueReasonRequest, _: None = Depends(require_local_control),
+                              __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _coordinator_call(lambda: _coordinator().set_queue_paused("LONG_FORM", True, req.operator, req.reason))
+
+
+@app.post("/api/production/queues/long-form/resume")
+async def api_long_form_resume(req: ProductionQueueReasonRequest, _: None = Depends(require_local_control),
+                               __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _coordinator_call(lambda: _coordinator().set_queue_paused("LONG_FORM", False, req.operator, req.reason))
+
+
+@app.post("/api/production/queues/long-form/jobs")
+async def api_long_form_enqueue(req: LongFormEnqueueRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    steps = [s.model_dump() for s in req.steps]
+    return await _coordinator_call(lambda: _coordinator().enqueue(kind=req.kind, title=req.title, steps=steps,
+                                                                  priority=req.priority, requested_by=req.operator))
+
+
+@app.post("/api/production/queues/long-form/jobs/{job_id}/cancel")
+async def api_long_form_cancel(job_id: str, req: ProductionQueueReasonRequest, _: None = Depends(require_local_control),
+                               __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _coordinator_call(lambda: _coordinator().cancel(job_id[:80], req.operator, req.reason))
+
+
+@app.put("/api/production/queues/config")
+async def api_coordinator_config(req: CoordinatorConfigRequest, _: None = Depends(require_local_control),
+                                 __: None = Depends(require_autonomy_write)):
+    _require_confirm(req.confirm)
+    return await _coordinator_call(lambda: _coordinator().set_config(req.changes, req.operator, req.reason))
 
 
 # -- Stage 3.32H/I/J: operations, phased activation, operational reports ----------------------------------------
