@@ -104,6 +104,13 @@ The idempotency prefix changed to `daily_operations_report_`. Without the change
   - production, upload and publication are separate rows and are never inferred from each other;
   - times use `fmt_datetime`/`fmt_time`/`fmt_clock` (IST; naive datetimes are UTC as stored by SQLAlchemy);
   - durations use `fmt_duration`.
+- **YouTube state** is read from `publishing_ledger`, one rule per state:
+  - `pending_queue` → queued (not uploaded);
+  - a video ID with `publication_scheduled` and a time → uploaded (private) and scheduled;
+  - `uploaded_public` or `published` → published. The reconciler sets this once YouTube reports the video live, and leaves the `visibility` column as uploaded;
+  - otherwise a video ID → uploaded (private, or visibility unknown);
+  - `fail`/`error` → upload failed;
+  - nothing → Unavailable.
 - **Subjects** keep the established `CrazzyDocs | <scope> | <STATUS> | <tail>` format, so operator mail filters keep working.
 
 ### Adding a new email type
