@@ -376,7 +376,7 @@ def image(data_uri: Optional[str], alt: str, caption: Optional[str] = None, widt
            'border:0;border-radius:8px;" />' % (esc(data_uri), width, esc(alt), width))
     if caption:
         img += tag("div", "font-size:12px;line-height:17px;color:%s;margin-top:6px;" % C["subtle"], esc(caption))
-    return Block(tag("div", "text-align:center;", img), "")
+    return Block(tag("div", "text-align:center;", img), "  (%s: shown in the HTML version of this email)" % plain(caption or alt))
 
 
 @dataclass

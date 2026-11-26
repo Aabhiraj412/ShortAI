@@ -164,7 +164,10 @@ def test_stage_alert_details_are_redacted_and_rendered(env):
 # ---- production status accuracy ------------------------------------------------------------------------------------
 @pytest.mark.parametrize("row,state", [
     ({"upload_status": "pending_queue", "visibility": "private"}, P.YT_QUEUED),
-    ({"upload_status": "uploaded_public", "visibility": "private", "youtube_video_id": "v1"}, P.YT_UPLOADED_PRIVATE),
+    ({"upload_status": "uploaded_private", "visibility": "private", "youtube_video_id": "v1"}, P.YT_UPLOADED_PRIVATE),
+    # reconciler-confirmed live video: status promoted, visibility column left as uploaded (live data, 2026-11-26)
+    ({"upload_status": "uploaded_public", "visibility": "private", "youtube_video_id": "v1",
+      "scheduled_timestamp": "2026-11-26T17:30:00Z"}, P.YT_PUBLISHED),
     ({"upload_status": "publication_scheduled", "visibility": "private", "youtube_video_id": "v1",
       "scheduled_timestamp": "2026-11-24T12:30:00Z"}, P.YT_SCHEDULED),
     ({"upload_status": "uploaded_public", "visibility": "public", "youtube_video_id": "v1"}, P.YT_PUBLISHED),

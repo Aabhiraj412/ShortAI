@@ -59,8 +59,10 @@ def youtube_state(db, job: Any = None, cp: Optional[Dict[str, Any]] = None,
             return YouTubeState(YT_UPLOAD_FAILED, vid, vis or None, None, "Publishing ledger status: %s" % status)
         if status in ("pending_queue", "queued", "pending") and not vid:
             return YouTubeState(YT_QUEUED)
-        if vis == "public" and vid:
-            return YouTubeState(YT_PUBLISHED, vid, "public")
+        # The publishing reconciler promotes a row to 'uploaded_public' once YouTube confirms the video is live
+        # (youtube_publishing_engine.verify_scheduled_publications) but leaves the visibility column as uploaded.
+        if vid and (vis == "public" or status in ("uploaded_public", "published")):
+            return YouTubeState(YT_PUBLISHED, vid, "public", sched)
         if vid and sched and ("schedul" in status or status == "publication_scheduled"):
             return YouTubeState(YT_SCHEDULED, vid, vis or "private", sched)
         if vid and vis in ("private", "unlisted"):
