@@ -13,7 +13,7 @@ DETAILS
 --------
   Publishing queue ID  412
   Video title          Jet engine #Shorts
-  Status               uploaded_private
+  Status               Uploaded private
   YouTube video ID     a1B2c3D4e5F
   Time                 24 Nov 2026, 20:11 IST
   Link                 https://youtu.be/a1B2c3D4e5F

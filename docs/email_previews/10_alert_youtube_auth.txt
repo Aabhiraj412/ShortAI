@@ -14,7 +14,7 @@ Reconnect YouTube from the Control Center. Uploads wait until the connection is 
 
 DETAILS
 --------
-  Status  reconnect_required
+  Status  Reconnect required
   Time    24 Nov 2026, 08:02 IST
 
 TECHNICAL DETAILS
