@@ -91,9 +91,25 @@ class RoutinePollingAccessFilter(logging.Filter):
         return True
 
 
+def dashboard_loop_setting() -> str:
+    """Remediation WS1: the dashboard runs on the asyncio *Selector* loop on Windows.
+
+    Under the default Proactor loop the long-running dashboard logged ``ConnectionResetError`` from
+    ``_ProactorBasePipeTransport._call_connection_lost`` whenever a browser tab dropped a polling connection, and
+    its event-loop thread climbed to a full CPU core over uptime (liveness probes then timed out). The dashboard
+    needs no Proactor-only features (no asyncio subprocesses or pipes). ``CRAZZYDOCS_DASHBOARD_LOOP=proactor``
+    restores the previous behaviour.
+    """
+    if sys.platform == "win32" and os.environ.get("CRAZZYDOCS_DASHBOARD_LOOP", "selector").lower() != "proactor":
+        return "asyncio:SelectorEventLoop"
+    return "auto"
+
+
 def build_uvicorn_log_config(logs_dir: Path = LOGS_DIR) -> Dict[str, Any]:
     """Builds a structured rotating logging configuration for Uvicorn & CrazzyDocs."""
     logs_dir.mkdir(parents=True, exist_ok=True)
+    # Under pythonw.exe sys.stdout is None: a console handler would fail on every record.
+    console = ["console"] if sys.stdout is not None else []
     return {
         "version": 1,
         "disable_existing_loggers": False,
@@ -149,12 +165,12 @@ def build_uvicorn_log_config(logs_dir: Path = LOGS_DIR) -> Dict[str, Any]:
         },
         "loggers": {
             "uvicorn": {
-                "handlers": ["console", "app_file", "error_file"],
+                "handlers": console + ["app_file", "error_file"],
                 "level": "INFO",
                 "propagate": False,
             },
             "uvicorn.error": {
-                "handlers": ["console", "app_file", "error_file"],
+                "handlers": console + ["app_file", "error_file"],
                 "level": "INFO",
                 "propagate": False,
             },
@@ -176,7 +192,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
-        logging.StreamHandler(sys.stdout),
+        *([logging.StreamHandler(sys.stdout)] if sys.stdout is not None else []),
         _app_handler,
         _err_handler,
     ],
@@ -281,6 +297,7 @@ def main():
             host=args.host,
             port=args.port,
             reload=args.reload,
+            loop=dashboard_loop_setting(),
             log_level="info",
             log_config=build_uvicorn_log_config(LOGS_DIR),
         )

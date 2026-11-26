@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import time
+import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Literal, Optional
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI):
             )
     if os.getenv("ENABLE_EMBEDDED_SCHEDULER", "false").lower() in ("true", "1"):
         start_scheduler()
+    try:   # Remediation WS1: event-loop lag + loop-thread stack sampling (bounded, < 1 % CPU)
+        from backend.app.core import loop_diagnostics
+        loop_diagnostics.start()
+    except Exception:
+        pass
     yield
     # Shutdown
 
@@ -83,7 +89,7 @@ app.mount("/thumbnails", StaticFiles(directory=settings.THUMB_DIR), name="thumbn
 
 
 @app.get("/favicon.ico", include_in_schema=False)
-async def get_favicon():
+def get_favicon():
     """Serves the official YouTube icon as browser favicon."""
     icon_path = os.path.join(STATIC_DIR, "branding", "Youtube-Icon.png")
     if not os.path.exists(icon_path):
@@ -312,7 +318,7 @@ async def trigger_pipeline(
     return {"status": "started", "message": "Pipeline initiated in background."}
 
 @app.get("/api/pipeline/status")
-async def get_pipeline_status():
+def get_pipeline_status():
     return {
         "is_running": pipeline.is_running,
         "current_stage": pipeline.current_stage,
@@ -321,7 +327,7 @@ async def get_pipeline_status():
 
 # --- Persistent Job Queue Endpoints ---
 @app.get("/api/jobs")
-async def get_jobs(
+def get_jobs(
     db: Session = Depends(get_db),
     _: None = Depends(require_local_control),
 ):
@@ -351,7 +357,7 @@ async def run_daily_job(
 
 # --- Overview & Dashboard Stats ---
 @app.get("/api/overview")
-async def get_overview(db: Session = Depends(get_db)):
+def get_overview(db: Session = Depends(get_db)):
     v_jobs = db.query(VideoJobModel).all()
     pubs = db.query(PublicationModel).all()
     topics = db.query(TopicModel).all()
@@ -377,22 +383,22 @@ async def get_overview(db: Session = Depends(get_db)):
 
 # --- Topics Endpoints ---
 @app.get("/api/topics")
-async def get_topics(db: Session = Depends(get_db)):
+def get_topics(db: Session = Depends(get_db)):
     return db.query(TopicModel).order_by(TopicModel.created_at.desc()).limit(20).all()
 
 # --- Scripts Endpoints ---
 @app.get("/api/scripts")
-async def get_scripts(db: Session = Depends(get_db)):
+def get_scripts(db: Session = Depends(get_db)):
     return db.query(ScriptModel).order_by(ScriptModel.created_at.desc()).limit(15).all()
 
 # --- Storyboard Endpoints ---
 @app.get("/api/storyboards")
-async def get_storyboards(db: Session = Depends(get_db)):
+def get_storyboards(db: Session = Depends(get_db)):
     return db.query(StoryboardModel).order_by(StoryboardModel.created_at.desc()).limit(10).all()
 
 # --- Videos & Jobs Endpoints ---
 @app.get("/api/videos")
-async def get_videos(db: Session = Depends(get_db)):
+def get_videos(db: Session = Depends(get_db)):
     jobs = db.query(VideoJobModel).order_by(VideoJobModel.created_at.desc()).limit(20).all()
     results = []
     for j in jobs:
@@ -533,7 +539,7 @@ async def stage_322_disconnect_youtube(
 
 
 @app.get("/api/stage-3-22/publishing/config")
-async def stage_322_publishing_config(_: None = Depends(require_local_control)):
+def stage_322_publishing_config(_: None = Depends(require_local_control)):
     return {
         "mode": settings.PUBLISHING_MODE,
         "supported_modes": {
@@ -599,18 +605,18 @@ async def stage_322_queue_publication(
 
 
 @app.get("/api/stage-3-22/publishing/pending")
-async def stage_322_pending_uploads(_: None = Depends(require_local_control)):
+def stage_322_pending_uploads(_: None = Depends(require_local_control)):
     statuses = ["pending_queue", "approved", "uploading", "upload_interrupted", "awaiting_auth", "failed", "uploaded_unverified"]
     return {"uploads": YouTubePublisherService().list_uploads(statuses=statuses)}
 
 
 @app.get("/api/stage-3-22/publishing/history")
-async def stage_322_upload_history(limit: int = 100, _: None = Depends(require_local_control)):
+def stage_322_upload_history(limit: int = 100, _: None = Depends(require_local_control)):
     return {"uploads": YouTubePublisherService().list_uploads(limit=limit)}
 
 
 @app.get("/api/stage-3-22/publishing/{ledger_id}")
-async def stage_322_upload_status(ledger_id: int, _: None = Depends(require_local_control)):
+def stage_322_upload_status(ledger_id: int, _: None = Depends(require_local_control)):
     upload = YouTubePublisherService().get_upload(ledger_id)
     if not upload:
         raise HTTPException(status_code=404, detail="Publishing record not found.")
@@ -637,7 +643,7 @@ async def stage_322_approve_upload(
 
 
 @app.get("/api/stage-3-22/notifications/config")
-async def stage_322_notification_config(_: None = Depends(require_local_control)):
+def stage_322_notification_config(_: None = Depends(require_local_control)):
     from backend.app.services.email_monitoring_service import email_monitoring_service
     return email_monitoring_service.get_notification_configuration()
 
@@ -655,13 +661,13 @@ async def stage_322_update_notification_config(
 
 
 @app.get("/api/stage-3-22/notifications/history")
-async def stage_322_notification_history(limit: int = 100, _: None = Depends(require_local_control)):
+def stage_322_notification_history(limit: int = 100, _: None = Depends(require_local_control)):
     from backend.app.services.email_monitoring_service import email_monitoring_service
     return {"notifications": email_monitoring_service.get_notification_history(limit=limit)}
 
 # --- Stage 3.23 Control Center ---
 @app.get("/api/control-center/state")
-async def control_center_state(_: None = Depends(require_local_control)):
+def control_center_state(_: None = Depends(require_local_control)):
     return control_center_service.get_control_center_state()
 
 
@@ -696,7 +702,7 @@ async def control_center_cancel_mode_draft(_: None = Depends(require_local_contr
 
 
 @app.get("/api/control-center/schedule/preset/{profile_name}")
-async def control_center_schedule_preset(
+def control_center_schedule_preset(
     profile_name: Literal["FOUR_CYCLES_DAILY", "SINGLE_DAILY", "CUSTOM"],
     _: None = Depends(require_local_control),
 ):
@@ -762,12 +768,12 @@ class UnifiedScheduleActivateRequest(BaseModel):
 
 
 @app.get("/api/control-center/schedule/timeline")
-async def control_center_schedule_timeline(_: None = Depends(require_local_control)):
+def control_center_schedule_timeline(_: None = Depends(require_local_control)):
     return control_center_service.get_live_cycle_schedule_status()
 
 
 @app.get("/api/control-center/unified-schedule")
-async def control_center_unified_schedule(_: None = Depends(require_local_control)):
+def control_center_unified_schedule(_: None = Depends(require_local_control)):
     return control_center_service.get_unified_schedule_state()
 
 
@@ -886,8 +892,25 @@ async def control_center_request_daemon_restart(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+_RESOURCE_STATUS_TTL_SEC = 10.0
+_resource_status_cache: Dict[str, Any] = {"at": float("-inf"), "value": None}
+_resource_status_lock = threading.Lock()
+
+
 @app.get("/api/control-center/resources")
-async def control_center_resource_status(_: None = Depends(require_local_control)):
+def control_center_resource_status(_: None = Depends(require_local_control)):
+    """Host resources for the dashboard. Remediation WS1: runs in the threadpool and is shared across open tabs for
+    10 s, because each sample spawns nvidia-smi/tasklist and samples CPU for 100 ms."""
+    import time as _time
+    with _resource_status_lock:
+        if _time.monotonic() - _resource_status_cache["at"] < _RESOURCE_STATUS_TTL_SEC and _resource_status_cache["value"]:
+            return _resource_status_cache["value"]
+        value = _resource_status_uncached()
+        _resource_status_cache.update(at=_time.monotonic(), value=value)
+        return value
+
+
+def _resource_status_uncached() -> Dict[str, Any]:
     disk = shutil.disk_usage(settings.BASE_DIR)
     memory: dict[str, Any] = {"status": "NOT AVAILABLE"}
     cpu: dict[str, Any] = {"status": "NOT AVAILABLE"}
@@ -1017,7 +1040,7 @@ async def control_center_resource_status(_: None = Depends(require_local_control
 
 
 @app.get("/api/control-center/cycles/live")
-async def control_center_live_cycles(_: None = Depends(require_local_control)):
+def control_center_live_cycles(_: None = Depends(require_local_control)):
     return control_center_service.get_live_cycle_schedule_status()
 
 
@@ -1079,7 +1102,7 @@ async def control_center_stop_production(_: None = Depends(require_local_control
 
 
 @app.get("/api/control-center/scheduler/status")
-async def control_center_scheduler_status(_: None = Depends(require_local_control)):
+def control_center_scheduler_status(_: None = Depends(require_local_control)):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     from backend.scripts.manage_windows_startup import get_all_tasks_status
     m = production_health_dashboard.get_health_metrics()
@@ -1183,7 +1206,7 @@ async def control_center_disable_scheduler(
 
 # --- Settings Endpoints ---
 @app.get("/api/settings")
-async def get_settings(_: None = Depends(require_local_control)):
+def get_settings(_: None = Depends(require_local_control)):
     return {
         "gemini_api_key_configured": bool(settings.GEMINI_API_KEY),
         "publishing_mode": settings.PUBLISHING_MODE,
@@ -1209,7 +1232,7 @@ async def update_settings(
 
 # --- Browser Production Health Dashboard Endpoints ---
 @app.get("/dashboard", response_class=HTMLResponse)
-async def serve_dashboard():
+def serve_dashboard():
     """Serves the rich, browser-accessible CrazzyDocs production health dashboard."""
     tmpl_path = os.path.join(os.path.dirname(__file__), "templates", "dashboard.html")
     if not os.path.exists(tmpl_path):
@@ -1220,7 +1243,7 @@ async def serve_dashboard():
 
 
 @app.get("/api/dashboard/overview")
-async def get_dashboard_overview():
+def get_dashboard_overview():
     from backend.app.services.production_health_dashboard import production_health_dashboard
     from backend.app.scheduler.schedule_profiles import get_active_profile, IST_TZ
     from datetime import datetime, timedelta
@@ -1282,7 +1305,7 @@ async def get_dashboard_overview():
 
 
 @app.get("/api/dashboard/stats")
-async def get_dashboard_stats(filter: str = "all"):
+def get_dashboard_stats(filter: str = "all"):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     return production_health_dashboard.get_production_statistics(time_filter=filter)
 
@@ -1292,6 +1315,13 @@ async def api_health_live():
     """Stage 3.32H liveness: answers from the event loop without touching the database or Windows services."""
     from datetime import datetime, timezone
     return {"status": "alive", "pid": os.getpid(), "at_utc": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/health/loop")
+def api_health_loop(_: None = Depends(require_local_control)):
+    """Remediation WS1: event-loop lag and what the loop thread is doing (local only; no secrets)."""
+    from backend.app.core import loop_diagnostics
+    return loop_diagnostics.snapshot()
 
 
 @app.get("/api/health/ready")
@@ -1315,7 +1345,7 @@ def api_health_ready():
 
 
 @app.get("/api/dashboard/health")
-async def get_dashboard_health():
+def get_dashboard_health():
     from backend.app.services.production_health_dashboard import production_health_dashboard
     m = production_health_dashboard.get_health_metrics()
     services = production_health_dashboard.get_services_status()
@@ -1349,13 +1379,13 @@ async def get_dashboard_health():
 
 
 @app.get("/api/dashboard/history")
-async def get_dashboard_history(limit: int = 25):
+def get_dashboard_history(limit: int = 25):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     return production_health_dashboard.get_publishing_history(limit=limit)
 
 
 @app.get("/api/dashboard/archive")
-async def get_dashboard_archive(limit: int = 25):
+def get_dashboard_archive(limit: int = 25):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     return {
         "summary": production_health_dashboard.get_archived_publishing_summary(),
@@ -1364,13 +1394,13 @@ async def get_dashboard_archive(limit: int = 25):
 
 
 @app.get("/api/dashboard/recovery")
-async def get_dashboard_recovery(limit: int = 15):
+def get_dashboard_recovery(limit: int = 15):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     return production_health_dashboard.get_recovery_history(limit=limit)
 
 
 @app.get("/api/dashboard/activity")
-async def get_dashboard_activity(limit: int = 25):
+def get_dashboard_activity(limit: int = 25):
     from backend.app.services.production_health_dashboard import production_health_dashboard
     return production_health_dashboard.get_recent_activity(limit=limit)
 
@@ -1460,7 +1490,7 @@ def _enrich_progress_record(rec: Optional[dict]) -> Optional[dict]:
 
 
 @app.get("/api/dashboard/progress")
-async def get_dashboard_progress(include_tests: bool = False):
+def get_dashboard_progress(include_tests: bool = False):
     from backend.app.services.production_observability import production_observability
     payload = production_observability.get_dashboard_payload(include_tests=include_tests)
     if isinstance(payload, dict):
@@ -1476,21 +1506,21 @@ async def get_dashboard_progress(include_tests: bool = False):
 
 
 @app.get("/api/dashboard/progress/active")
-async def get_dashboard_active_progress(include_tests: bool = False):
+def get_dashboard_active_progress(include_tests: bool = False):
     from backend.app.services.production_observability import production_observability
     active = _enrich_progress_record(production_observability.get_active_production(include_tests=include_tests))
     return {"has_active": active is not None, "active_production": active}
 
 
 @app.get("/api/dashboard/progress/history")
-async def get_dashboard_progress_history(limit: int = 15, include_tests: bool = False):
+def get_dashboard_progress_history(limit: int = 15, include_tests: bool = False):
     from backend.app.services.production_observability import production_observability
     items = [_enrich_progress_record(h) for h in production_observability.get_history(limit=limit, include_tests=include_tests)]
     return {"productions": items}
 
 
 @app.get("/api/dashboard/progress/{production_id}")
-async def get_dashboard_production_progress(production_id: str, include_tests: bool = True):
+def get_dashboard_production_progress(production_id: str, include_tests: bool = True):
     from backend.app.services.production_observability import production_observability
     rec = production_observability.get_production(production_id, include_tests=include_tests)
     if not rec:
@@ -1499,7 +1529,7 @@ async def get_dashboard_production_progress(production_id: str, include_tests: b
 
 
 @app.get("/api/dashboard/productions/{production_id}/thumbnail")
-async def get_production_thumbnail(production_id: str):
+def get_production_thumbnail(production_id: str):
     info = _resolve_production_deliverables(production_id)
     thumb_p = info.get("thumbnail_path")
     base_dir = os.path.abspath(os.path.join(info["workspace_abs_dir"], "thumbnails"))
@@ -1510,7 +1540,7 @@ async def get_production_thumbnail(production_id: str):
 
 
 @app.get("/api/dashboard/productions/{production_id}/video")
-async def get_production_video(production_id: str):
+def get_production_video(production_id: str):
     info = _resolve_production_deliverables(production_id)
     vid_p = info.get("video_path")
     base_dir = os.path.abspath(os.path.join(info["workspace_abs_dir"], "video"))
@@ -1520,7 +1550,7 @@ async def get_production_video(production_id: str):
 
 
 @app.get("/api/dashboard/productions/{production_id}/manifest")
-async def get_production_manifest(production_id: str):
+def get_production_manifest(production_id: str):
     import json
     from backend.app.orchestration.production_workspace import compute_file_sha256
     info = _resolve_production_deliverables(production_id)
@@ -1556,7 +1586,7 @@ async def get_production_manifest(production_id: str):
 
 
 @app.get("/api/dashboard/productions/{production_id}/artifacts")
-async def get_production_artifacts(production_id: str):
+def get_production_artifacts(production_id: str):
     info = _resolve_production_deliverables(production_id)
     if not info["workspace_exists"]:
         raise HTTPException(status_code=404, detail=f"Production workspace '{production_id}' not found")
@@ -1628,12 +1658,12 @@ def _redact_log_secrets(text: str) -> str:
 
 
 @app.get("/api/control-center/publication-schedule")
-async def api_get_publication_schedule(_: None = Depends(require_local_control)):
+def api_get_publication_schedule(_: None = Depends(require_local_control)):
     return control_center_service.get_publication_schedule()
 
 
 @app.get("/api/control-center/publication-recovery")
-async def api_get_publication_recovery(_: None = Depends(require_local_control)):
+def api_get_publication_recovery(_: None = Depends(require_local_control)):
     return control_center_service.get_publication_recovery_timeline()
 
 
@@ -1676,7 +1706,7 @@ async def api_cancel_publication_schedule_draft(_: None = Depends(require_local_
 
 
 @app.get("/api/control-center/production-config")
-async def api_get_production_config():
+def api_get_production_config():
     return control_center_service.get_production_config()
 
 
@@ -1691,7 +1721,7 @@ async def api_save_production_config(req: ProductionConfigRequest, _: None = Dep
 
 
 @app.get("/api/control-center/storage-config")
-async def api_get_storage_config():
+def api_get_storage_config():
     cfg = control_center_service.get_storage_config()
     val = control_center_service.validate_storage_config(cfg)
     return {"config": cfg, "validation": val}
@@ -1725,7 +1755,7 @@ async def api_open_storage_folder(req: OpenFolderRequest, _: None = Depends(requ
 
 
 @app.get("/api/control-center/storage/browse")
-async def api_browse_storage_folder(path: str = ""):
+def api_browse_storage_folder(path: str = ""):
     from backend.app.core.paths import MEDIA_DIR
     base = Path(path).resolve() if path else MEDIA_DIR.resolve()
     if not base.exists() or not base.is_dir():
@@ -1736,7 +1766,7 @@ async def api_browse_storage_folder(path: str = ""):
 
 
 @app.get("/api/control-center/processes")
-async def api_get_process_monitor():
+def api_get_process_monitor():
     from backend.app.core.process_utils import hidden_subprocess_kwargs
     from backend.scripts.manage_windows_startup import get_all_tasks_status
 
@@ -1795,7 +1825,7 @@ async def api_get_process_monitor():
 
 
 @app.get("/api/control-center/logs")
-async def api_get_filtered_logs(
+def api_get_filtered_logs(
     level: str = "ALL",
     category: str = "ALL",
     search: str = "",
@@ -1900,7 +1930,7 @@ async def api_list_publishing_queue(limit: int = 100, _: None = Depends(require_
 
 
 @app.get("/api/publishing/queue/{ledger_id}/thumbnail-preview")
-async def api_queue_thumbnail_preview(ledger_id: int, _: None = Depends(require_local_control)):
+def api_queue_thumbnail_preview(ledger_id: int, _: None = Depends(require_local_control)):
     rec = YouTubePublisherService().engine.db.get_publication(ledger_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Publishing record not found.")
@@ -2028,13 +2058,13 @@ class ScheduleActivateRequest(ConfirmedActionRequest):
 
 
 @app.get("/api/schedule")
-async def api_schedule_view(_: None = Depends(require_local_control)):
+def api_schedule_view(_: None = Depends(require_local_control)):
     from backend.app.services import schedule_service
     return schedule_service.schedule_view()
 
 
 @app.get("/api/production/monitor")
-async def api_production_monitor(_: None = Depends(require_local_control)):
+def api_production_monitor(_: None = Depends(require_local_control)):
     from backend.app.services import production_monitor_service
     return production_monitor_service.monitor_view()
 
@@ -2175,7 +2205,7 @@ def _require_confirm(flag: bool) -> None:
 
 
 @app.get("/api/autonomy/session")
-async def api_autonomy_session(_: None = Depends(require_same_origin)):
+def api_autonomy_session(_: None = Depends(require_same_origin)):
     """CSRF token for the dashboard. Cross-site pages cannot read it (CORS) and are refused by Origin checks."""
     return {"csrf_header": AUTONOMY_CSRF_HEADER, "csrf_token": _AUTONOMY_CSRF_TOKEN}
 
@@ -3309,7 +3339,7 @@ async def api_provider_probe(_: None = Depends(require_local_control)):
 
 
 @app.get("/api/production/recovery-policy")
-async def api_recovery_policy(_: None = Depends(require_local_control)):
+def api_recovery_policy(_: None = Depends(require_local_control)):
     from backend.app.services import production_monitor_service
     return production_monitor_service._policy_summary()
 
@@ -3329,7 +3359,7 @@ async def api_recovery_policy_save(req: RecoveryPolicyRequest, _: None = Depends
 
 
 @app.get("/api/production/jobs/{job_id}/retry")
-async def api_operator_retry_eligibility(job_id: str, _: None = Depends(require_local_control)):
+def api_operator_retry_eligibility(job_id: str, _: None = Depends(require_local_control)):
     from backend.app.services import operator_retry_service
     return operator_retry_service.evaluate(job_id)
 
@@ -3347,7 +3377,7 @@ async def api_operator_retry(job_id: str, req: OperatorRetryRequest, _: None = D
 
 
 @app.get("/api/schedule/presets/{name}")
-async def api_schedule_preset(name: str, _: None = Depends(require_local_control)):
+def api_schedule_preset(name: str, _: None = Depends(require_local_control)):
     from backend.app.services import schedule_service
     try:
         return schedule_service.preset(name)
@@ -3481,7 +3511,7 @@ async def api_schedule_profile_load(profile_id: str, req: ScheduleProfileLoadReq
 
 
 @app.get("/", include_in_schema=False)
-async def root_redirect():
+def root_redirect():
     """Redirects root browser access directly to the Production Health Dashboard."""
     return RedirectResponse(url="/dashboard")
 
