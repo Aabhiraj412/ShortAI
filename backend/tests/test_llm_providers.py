@@ -262,3 +262,14 @@ def test_json_validate_failed_maps_to_invalid_output(monkeypatch, clock):
     s = FakeSession([FakeResp(400, {"error": {"code": "json_validate_failed", "message": "..."}})])
     with pytest.raises(lp.InvalidOutput):
         lp.generate_openai_compat("groq", "openai/gpt-oss-120b", "x", session=s)
+
+
+def test_configuration_is_read_from_env_local_when_not_in_the_environment(monkeypatch, clock):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setattr(lp, "_file_env", lambda: {"CRAZZYDOCS_LLM_ALTERNATES": "groq:openai/gpt-oss-20b",
+                                                 "GROQ_API_KEY": "from-file"})
+    c = lp.candidates(["g"])
+    assert [(x["provider"], x["model"], x["usable"]) for x in c] == [("gemini", "g", True),
+                                                                      ("groq", "openai/gpt-oss-20b", True)]
+    monkeypatch.setenv("CRAZZYDOCS_LLM_ALTERNATES", "")                 # empty env does not hide the file value
+    assert len(lp.candidates([])) == 1

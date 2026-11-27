@@ -78,7 +78,7 @@ Runs on 2026-11-28, 02:50–03:40 IST, on 5 recent production topics (Hibiscus R
   - Hindi translation quality.
   - A same-topic Gemini Flash comparison, because the quota is exhausted until 13:35 IST.
 
-**Verdict:** Groq is integrated, verified against the real API and benchmarked. It is **not enabled**: enabling it is an explicit configuration step (below). Gemini stays primary.
+**Verdict:** Groq is integrated, verified against the real API and benchmarked. **Enabled on 2026-11-28 (operator approved)** as the backup writer after the Gemini chain: `CRAZZYDOCS_LLM_ALTERNATES=groq:openai/gpt-oss-20b,groq:openai/gpt-oss-120b` in `.env.local`. Gemini stays primary. Configuration is read from the process environment, then `.env.local`.
 
 ## To enable Groq (operator)
 

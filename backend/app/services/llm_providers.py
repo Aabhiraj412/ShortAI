@@ -125,22 +125,36 @@ def parse_duration(text: Optional[str]) -> Optional[float]:
 
 
 # ---- configuration ------------------------------------------------------------------------------------------------
+_file_cache: Dict[str, Any] = {"mtime": None, "values": {}}
+
+
+def _file_env() -> Dict[str, str]:
+    """``.env.local`` values (re-read when the file changes). Nothing exports that file into os.environ, so this is
+    read like gnews_client.api_key does."""
+    try:
+        from dotenv import dotenv_values
+        from backend.app.core.paths import ENV_LOCAL_PATH
+        mtime = os.path.getmtime(ENV_LOCAL_PATH)
+        if _file_cache["mtime"] != mtime:
+            _file_cache.update(mtime=mtime, values={k: v for k, v in dotenv_values(ENV_LOCAL_PATH).items() if v})
+        return _file_cache["values"]
+    except Exception:
+        return {}
+
+
+def _env(name: str) -> str:
+    """Process environment first, then .env.local."""
+    return (os.environ.get(name) or _file_env().get(name) or "").strip()
+
+
 def key_set(provider: str) -> bool:
     env = (PROVIDERS.get(provider) or {}).get("env")
-    if not env:
-        return False
-    if os.environ.get(env):
-        return True
-    try:
-        from backend.app.core.config import settings
-        return bool(getattr(settings, env, "") or "")
-    except Exception:
-        return False
+    return bool(env and _key(provider))
 
 
 def _key(provider: str) -> str:
     env = PROVIDERS[provider]["env"]
-    val = os.environ.get(env, "")
+    val = _env(env)
     if not val:
         try:
             from backend.app.core.config import settings
@@ -171,12 +185,12 @@ def parse_target(text: str) -> Optional[Tuple[str, str]]:
 
 
 def primary_provider() -> str:
-    p = (os.environ.get("CRAZZYDOCS_LLM_PRIMARY") or "gemini").strip().lower()
+    p = (_env("CRAZZYDOCS_LLM_PRIMARY") or "gemini").strip().lower()
     return p if p in PROVIDERS else "gemini"
 
 
 def configured_alternates() -> List[Tuple[str, str]]:
-    raw = os.environ.get("CRAZZYDOCS_LLM_ALTERNATES") or ""
+    raw = _env("CRAZZYDOCS_LLM_ALTERNATES")
     out: List[Tuple[str, str]] = []
     for part in raw.split(","):
         t = parse_target(part)

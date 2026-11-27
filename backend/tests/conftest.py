@@ -233,6 +233,7 @@ def isolated_llm_quota_tracker(tmp_path, monkeypatch):
     from backend.app.services import llm_providers
     monkeypatch.delenv("CRAZZYDOCS_LLM_ALTERNATES", raising=False)
     monkeypatch.delenv("CRAZZYDOCS_LLM_PRIMARY", raising=False)
+    monkeypatch.setattr(llm_providers, "_file_env", lambda: {})       # never the real .env.local
     llm_providers.set_tracker(llm_providers.QuotaTracker(tmp_path / "llm_quota_state.json"))
     yield
     llm_providers.set_tracker(None)
