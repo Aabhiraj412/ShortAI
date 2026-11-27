@@ -1,0 +1,139 @@
+{
+ "_note": "TEST FIXTURE: a hand-written Hindi adaptation used only to exercise voice, render and QC before the translation provider answers. Never used as production translator output.",
+ "title_hi": "हिबिस्कस राइज़िंग",
+ "category_hi": "कला और इतिहास",
+ "scenes": [
+  {
+   "scene_id": "scene_01",
+   "narration_hi": "क्या इंग्लैंड के स्मारक हमेशा हर समुदाय का सम्मान करते आए हैं?",
+   "headline_hi": "हिबिस्कस राइज़िंग",
+   "highlight_hi": "राइज़िंग",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_02",
+   "narration_hi": "लीड्स में हाल तक ऐसा नहीं था।",
+   "headline_hi": "हाल तक नहीं",
+   "highlight_hi": "नहीं",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_03",
+   "narration_hi": "24 नवंबर 2023 को कलाकार यिंका शोनीबारे ने लीड्स 2023 में हिबिस्कस राइज़िंग पेश की।",
+   "headline_hi": "लीड्स 2023 में हिबिस्कस राइज़िंग",
+   "highlight_hi": "2023",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_04",
+   "narration_hi": "यह डेविड ओलुवाले को सम्मान देती है, जो ब्रिटिश-नाइजीरियाई थे।",
+   "headline_hi": "डेविड ओलुवाले",
+   "highlight_hi": "ओलुवाले",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_05",
+   "narration_hi": "1969 में लीड्स सिटी पुलिस के दो सदस्यों से जुड़ी घटना में उनकी मौत हुई। उनकी याद में,",
+   "headline_hi": "लीड्स सिटी पुलिस",
+   "highlight_hi": "पुलिस",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_06",
+   "narration_hi": "लीड्स 2023 ने लीड्स सिटी काउंसिल",
+   "headline_hi": "लीड्स सिटी काउंसिल",
+   "highlight_hi": "काउंसिल",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_07",
+   "narration_hi": "और डेविड ओलुवाले मेमोरियल एसोसिएशन के साथ इसे बनवाया।",
+   "headline_hi": "ओलुवाले मेमोरियल एसोसिएशन",
+   "highlight_hi": "मेमोरियल",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_08",
+   "narration_hi": "डॉक्टर एमिली ज़ोबेल मार्शल के मुताबिक़, इसका ऐतिहासिक महत्व बड़ा है।",
+   "headline_hi": "एमिली ज़ोबेल मार्शल",
+   "highlight_hi": "मार्शल",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_09",
+   "narration_hi": "यह लीड्स की पहली सार्वजनिक कलाकृति है जो शहर की विविधता दिखाती है।",
+   "headline_hi": "सांस्कृतिक विविधता",
+   "highlight_hi": "विविधता",
+   "labels_hi": [],
+   "units_hi": []
+  },
+  {
+   "scene_id": "scene_10",
+   "narration_hi": "हिबिस्कस राइज़िंग दर्दनाक इतिहास को सबको जोड़ने वाले प्रतीक में बदल देती है।",
+   "headline_hi": "हिबिस्कस राइज़िंग",
+   "highlight_hi": "राइज़िंग",
+   "labels_hi": [],
+   "units_hi": []
+  }
+ ],
+ "terms": [
+  {
+   "en": "Leeds",
+   "hi": "लीड्स",
+   "spoken": "लीड्स"
+  },
+  {
+   "en": "LEEDS 2023",
+   "hi": "लीड्स 2023",
+   "spoken": "लीड्स 2023"
+  },
+  {
+   "en": "Yinka Shonibare",
+   "hi": "यिंका शोनीबारे",
+   "spoken": "यिंका शोनीबारे"
+  },
+  {
+   "en": "Hibiscus Rising",
+   "hi": "हिबिस्कस राइज़िंग",
+   "spoken": "हिबिस्कस राइज़िंग"
+  },
+  {
+   "en": "David Oluwale",
+   "hi": "डेविड ओलुवाले",
+   "spoken": "डेविड ओलुवाले"
+  },
+  {
+   "en": "Leeds City Police",
+   "hi": "लीड्स सिटी पुलिस",
+   "spoken": "लीड्स सिटी पुलिस"
+  },
+  {
+   "en": "Leeds City Council",
+   "hi": "लीड्स सिटी काउंसिल",
+   "spoken": "लीड्स सिटी काउंसिल"
+  },
+  {
+   "en": "David Oluwale Memorial Association",
+   "hi": "डेविड ओलुवाले मेमोरियल एसोसिएशन",
+   "spoken": "डेविड ओलुवाले मेमोरियल एसोसिएशन"
+  },
+  {
+   "en": "Emily Zobel Marshall",
+   "hi": "एमिली ज़ोबेल मार्शल",
+   "spoken": "एमिली ज़ोबेल मार्शल"
+  },
+  {
+   "en": "British-Nigerian",
+   "hi": "ब्रिटिश-नाइजीरियाई",
+   "spoken": "ब्रिटिश नाइजीरियाई"
+  }
+ ]
+}

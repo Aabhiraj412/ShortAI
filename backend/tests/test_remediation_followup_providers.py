@@ -72,5 +72,5 @@ def test_missing_pexels_key_is_surfaced_not_hidden():
     cp = make_cp(pathlib.Path(tempfile.mkdtemp()), startup=False, policy=True)
     a = oa.attention(cp=cp, providers=lambda: {"providers": [{"name": "Pexels", "state": "KEY_MISSING", "production": True,
                                                               "env": "PEXELS_API_KEY", "fallback": "other photo providers"}]},
-                     creative=lambda: {}, topic_supply=lambda: {})
+                     creative=lambda: {}, topic_supply=lambda: {}, localizations=lambda: {})
     assert any(n["kind"] == "credential" and "PEXELS_API_KEY" in n["action"] for n in a["needs_you"])

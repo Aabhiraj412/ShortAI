@@ -54,7 +54,10 @@ logger = logging.getLogger(__name__)
 
 SHORTS = "SHORTS"
 LONG_FORM = "LONG_FORM"
-QUEUES = (SHORTS, LONG_FORM)
+LOCALIZATION = "LOCALIZATION"          # Stage 4.02: Hindi localizations of completed English Shorts
+QUEUES = (SHORTS, LONG_FORM, LOCALIZATION)
+WORK_QUEUES = (LONG_FORM, LOCALIZATION)   # queues of operator-enqueued, step-based jobs (Shorts is the scheduler)
+QUEUE_FLAGS = {LONG_FORM: "long_form_enabled", LOCALIZATION: "localization_enabled"}
 HEAVY = "HEAVY"
 LIGHT = "LIGHT"
 
@@ -70,6 +73,7 @@ TS_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "long_form_enabled": False,           # operator switch; OFF by default
+    "localization_enabled": True,         # runs only operator-enqueued localizations, in Shorts gaps
     "max_heavy_concurrency": 1,
     "max_light_concurrency": 1,
     "heavy_max_cpu_percent": 70.0,
@@ -191,6 +195,39 @@ def _default_resources() -> Dict[str, Any]:
     return resource_monitor.sample()
 
 
+_profile_loaded = [False]
+
+
+def _ensure_active_profile_loaded() -> None:
+    if _profile_loaded[0]:
+        return
+    from backend.app.services import control_center_service as cc
+    cc.restore_active_schedule_profile()
+    _profile_loaded[0] = True
+
+
+def _active_profile_for(db_path: str):
+    """The active Shorts schedule profile stored in *this coordinator's* database (read-only), so the Shorts demand
+    and the next Shorts start always come from the same database. The process-global profile is used only when
+    that database is the process database; a database without an active-profile row is otherwise unknown."""
+    from backend.app.core.paths import DATABASE_PATH
+    from backend.app.services import control_center_service as cc
+    conn = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)
+    try:
+        row = conn.execute("SELECT value FROM studio_settings WHERE key=?", (cc.ACTIVE_PROFILE_KEY,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    finally:
+        conn.close()
+    if row and row[0]:
+        return cc._profile_from_spec(cc.validate_schedule(json.loads(row[0])))
+    if Path(db_path).resolve() == Path(DATABASE_PATH).resolve():
+        _ensure_active_profile_loaded()
+        from backend.app.scheduler.schedule_profiles import get_active_profile
+        return get_active_profile()
+    raise LookupError("no active schedule profile in the coordinator database")
+
+
 def _default_shorts_view(now_utc: datetime, db_path: str) -> Dict[str, Any]:
     """Shorts demand from persistent_jobs (read-only) and the next scheduled Shorts start from the active profile.
     Any error -> ``known: False``, which blocks HEAVY long-form work (fail closed for long-form)."""
@@ -208,8 +245,10 @@ def _default_shorts_view(now_utc: datetime, db_path: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         view.update(known=False, error=f"persistent_jobs unreadable ({type(exc).__name__})")
     try:
-        from backend.app.scheduler.schedule_profiles import get_active_profile
-        profile = get_active_profile()
+        # Stage 4.02 fix: a process that never loaded the active schedule (any process other than the daemon and
+        # the dashboard) saw the DEFAULT profile, so "next Shorts start" was wrong and a heavy step was admitted six
+        # minutes before a cycle. The active profile now comes from the coordinator's own database.
+        profile = _active_profile_for(db_path)
         tz = profile.tz
         local = now_utc.astimezone(tz)
         best = None
@@ -353,9 +392,9 @@ class ProductionCoordinator:
         for k, v in changes.items():
             if k not in DEFAULT_CONFIG:
                 raise CoordinatorError(f"unknown setting: {k}", 400)
-            if k == "long_form_enabled":
+            if k in ("long_form_enabled", "localization_enabled"):
                 if not isinstance(v, bool):
-                    raise CoordinatorError("long_form_enabled must be true or false", 400)
+                    raise CoordinatorError(f"{k} must be true or false", 400)
                 cfg[k] = v
                 continue
             lo, hi = _CONFIG_BOUNDS[k]
@@ -377,9 +416,9 @@ class ProductionCoordinator:
         return cfg
 
     def set_queue_paused(self, queue: str, paused: bool, operator: str, reason: str) -> Dict[str, Any]:
-        if queue != LONG_FORM:
-            raise CoordinatorError("Only the long-form queue can be paused here; Shorts production is governed by "
-                                   "the schedule and the operating mode.", 400)
+        if queue not in WORK_QUEUES:
+            raise CoordinatorError("Only the long-form and localization queues can be paused here; Shorts production "
+                                   "is governed by the schedule and the operating mode.", 400)
         if not operator or not reason:
             raise CoordinatorError("operator and reason are required", 400)
         _, p = self._config_row()
@@ -415,8 +454,9 @@ class ProductionCoordinator:
         return out
 
     def enqueue(self, *, kind: str, title: str, steps: Any, requested_by: str, priority: int = 50,
-                job_id: Optional[str] = None, queue: str = LONG_FORM) -> Dict[str, Any]:
-        if queue != LONG_FORM:
+                job_id: Optional[str] = None, queue: str = LONG_FORM,
+                checkpoint: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if queue not in WORK_QUEUES:
             raise CoordinatorError("Shorts jobs are created only by the scheduler (24-cycle schedule).", 400)
         if not requested_by or not str(title).strip() or not str(kind).strip():
             raise CoordinatorError("kind, title and requested_by are required", 400)
@@ -431,9 +471,9 @@ class ProductionCoordinator:
         try:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO production_queue_jobs (id, queue, kind, title, priority, state, steps_json, "
-                "max_attempts, enqueued_at_utc, requested_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "checkpoint_json, max_attempts, enqueued_at_utc, requested_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (jid, queue, str(kind)[:60], str(title)[:200], int(priority), QUEUED, json.dumps(clean),
-                 int(cfg["max_attempts"]), now, str(requested_by)[:64]))
+                 json.dumps(checkpoint or {}, default=str), int(cfg["max_attempts"]), now, str(requested_by)[:64]))
             if cur.rowcount != 1:
                 return {"duplicate": True, "job": self.get_job(jid)}
             self._event(conn, "ENQUEUED", queue=queue, job_id=jid, actor=requested_by,
@@ -548,10 +588,10 @@ class ProductionCoordinator:
         conn = self._connect(True)
         try:
             rows = conn.execute("SELECT slot, holder_job_id FROM production_render_slots WHERE token IS NOT NULL "
-                                "AND holder_queue=?", (LONG_FORM,)).fetchall()
+                                f"AND holder_queue IN ({','.join('?' * len(WORK_QUEUES))})", WORK_QUEUES).fetchall()
             for r in rows:
                 conn.execute("UPDATE production_render_slots SET preempt_requested=1 WHERE slot=?", (r["slot"],))
-                self._event(conn, "PREEMPT_REQUESTED", queue=LONG_FORM, job_id=r["holder_job_id"],
+                self._event(conn, "PREEMPT_REQUESTED", queue=None, job_id=r["holder_job_id"],
                             detail={"for_shorts_job": by_job})
             return [r["holder_job_id"] for r in rows]
         finally:
@@ -596,6 +636,17 @@ class ProductionCoordinator:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("[COORDINATOR] slot release failed for %s: %s", job_id, type(exc).__name__)
 
+    def _register_builtin_executors(self) -> None:
+        """Stage 4.02: the Hindi localization executor, registered lazily and only for the production executor
+        table (tests inject their own)."""
+        if self.executors is not _EXECUTORS:
+            return
+        try:
+            from backend.app.localization.pipeline import KIND, executor
+            _EXECUTORS.setdefault(KIND, executor)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("localization executor unavailable: %s", type(exc).__name__)
+
     # -- admission ---------------------------------------------------------------------------------------------------
     def effective_priority(self, job: Dict[str, Any], now: datetime, cfg: Optional[Dict[str, Any]] = None) -> float:
         cfg = cfg or self.config()
@@ -627,8 +678,10 @@ class ProductionCoordinator:
             ids = ", ".join(j["job_id"] for j in shorts["active_jobs"][:3])
             return False, f"Shorts needs the renderer ({ids})"
         nxt = _parse(shorts.get("next_start_utc"))
+        if nxt is None:                 # fail closed: without the next Shorts start no heavy step can be placed safely
+            return False, "next Shorts start unknown (schedule not readable); heavy work waits"
         need = timedelta(minutes=float(step["estimate_minutes"]) + float(cfg["shorts_guard_minutes"]))
-        if nxt is not None and now + need > nxt:
+        if now + need > nxt:
             gap = max(0.0, (nxt - now).total_seconds() / 60.0)
             return False, (f"step needs {need.total_seconds() / 60:.0f} min but the next Shorts cycle starts in "
                            f"{gap:.0f} min")
@@ -804,20 +857,23 @@ class ProductionCoordinator:
         resources = resources if resources is not None else self.resource_probe()
         shorts = shorts if shorts is not None else self.shorts_view(now)
         jobs = self.list_jobs(states=(QUEUED, RUNNING), limit=200)
-        running = [j for j in jobs if j["state"] == RUNNING and j["queue"] == LONG_FORM]
+        self._register_builtin_executors()
+        running = [j for j in jobs if j["state"] == RUNNING and j["queue"] in WORK_QUEUES]
         light_running = sum(1 for j in running if j["steps"][j["next_step"]]["weight"] == LIGHT)
         heavy_free = any(s.get("token") is None for s in self.slots()[:cfg["max_heavy_concurrency"]])
-        waiting = sorted((j for j in jobs if j["state"] == QUEUED and j["queue"] == LONG_FORM),
+        waiting = sorted((j for j in jobs if j["state"] == QUEUED and j["queue"] in WORK_QUEUES),
                          key=lambda j: (-self.effective_priority(j, now, cfg), j["enqueued_at_utc"]))
         decisions = []
         selected = None
         for j in waiting:
             step = j["steps"][j["next_step"]]
             nb = _parse(j.get("not_before_utc"))
-            if not cfg["long_form_enabled"]:
-                ok, why = False, "long-form production is disabled (operator setting, OFF by default)"
-            elif paused.get(LONG_FORM):
-                ok, why = False, "long-form queue is paused"
+            qname = j["queue"]
+            if not cfg.get(QUEUE_FLAGS.get(qname, ""), False):
+                ok, why = False, (f"{qname.lower().replace('_', '-')} production is disabled "
+                                  f"(operator setting {QUEUE_FLAGS.get(qname)})")
+            elif paused.get(qname):
+                ok, why = False, f"{qname.lower().replace('_', '-')} queue is paused"
             elif j["kind"] not in self.executors:
                 ok, why = False, f"no executor registered for kind '{j['kind']}' (long-form pipeline not installed)"
             elif nb and now < nb:
@@ -859,7 +915,7 @@ class ProductionCoordinator:
                 step = job["steps"][job["next_step"]]
                 slot_token = None
                 if step["weight"] == HEAVY:
-                    slot_token = await asyncio.to_thread(self.acquire_slot, LONG_FORM, job["id"], step["name"])
+                    slot_token = await asyncio.to_thread(self.acquire_slot, job["queue"], job["id"], step["name"])
                 if step["weight"] == LIGHT or slot_token:
                     token = await asyncio.to_thread(self._claim, job)
                     if token:
@@ -931,12 +987,13 @@ class ProductionCoordinator:
                          "state_known": shorts.get("known"), "logical_concurrency": shorts_conc,
                          "priority": "highest (always first for the renderer)",
                          "publishing_cadence": "separate: the publishing queue and policy are unchanged"},
-                LONG_FORM: {"enabled": p["config"]["long_form_enabled"], "paused": bool(p["paused"].get(LONG_FORM)),
-                            "executors": sorted(k for k in self.executors), "jobs": lf_jobs,
-                            "waiting": sum(1 for j in lf_jobs if j["state"] == QUEUED),
-                            "running": sum(1 for j in lf_jobs if j["state"] == RUNNING),
-                            "starving": [d["job_id"] for d in p["decisions"] if d["starving"]],
-                            "selected_next": p["selected"]},
+                **{q: {"enabled": bool(p["config"].get(QUEUE_FLAGS[q])), "paused": bool(p["paused"].get(q)),
+                       "executors": sorted(k for k in self.executors), "jobs": [j for j in lf_jobs if j["queue"] == q],
+                       "waiting": sum(1 for j in lf_jobs if j["queue"] == q and j["state"] == QUEUED),
+                       "running": sum(1 for j in lf_jobs if j["queue"] == q and j["state"] == RUNNING),
+                       "starving": [d["job_id"] for d in p["decisions"] if d["starving"]
+                                    and any(j["id"] == d["job_id"] and j["queue"] == q for j in lf_jobs)],
+                       "selected_next": p["selected"]} for q in WORK_QUEUES},
             },
             "renderer": {"heavy_slots": p["config"]["max_heavy_concurrency"],
                          "benchmarked_max_heavy": BENCHMARKED_MAX_HEAVY, "occupied": len(occupied),

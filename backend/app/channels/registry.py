@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS content_localizations (
 );
 """
 
+LOCALIZATION_COLUMNS = (
+    ("step", "TEXT"), ("attempts", "INTEGER NOT NULL DEFAULT 0"), ("error_kind", "TEXT"), ("error", "TEXT"),
+    ("artifacts_json", "TEXT NOT NULL DEFAULT '{}'"), ("qc_json", "TEXT"), ("owner_token", "TEXT"),
+    ("owner_pid", "INTEGER"), ("version", "INTEGER NOT NULL DEFAULT 0"),
+)
+
 DEFAULT_CHANNELS = (
     {"channel_key": "en", "name": "CrazzyDocs (English)", "language": "en", "role": MASTER, "source_channel_key": None,
      "status": ACTIVE, "status_reason": "master channel; existing production",
@@ -156,6 +162,11 @@ class ChannelRegistry:
             conn = self._connect(True)
             try:
                 conn.executescript(SCHEMA)
+                # Stage 4.02: additive step tracking on the localization map (resumable, no duplicated work)
+                have = {r[1] for r in conn.execute("PRAGMA table_info(content_localizations)")}
+                for col, ddl in LOCALIZATION_COLUMNS:
+                    if col not in have:
+                        conn.execute(f"ALTER TABLE content_localizations ADD COLUMN {col} {ddl}")
                 now = _ts(self.clock())
                 for ch in DEFAULT_CHANNELS:
                     cur = conn.execute(
@@ -385,9 +396,10 @@ class ChannelRegistry:
         target = self.get(target_key)
         if target["role"] != LOCALIZED or not target.get("source_channel_key"):
             raise ChannelError(f"channel '{target_key}' is not a localized channel", 400)
-        if not self.is_active(target_key):
-            raise ChannelError(f"channel '{target_key}' is not verified and active ({target['status']}: "
-                               f"{target['status_reason']})")
+        if target["status"] == BLOCKED:
+            raise ChannelError(f"channel '{target_key}' is blocked: {target['status_reason']}")
+        # Stage 4.02: local production (translation, voice, render, QC) is allowed before the channel is verified;
+        # publishing eligibility is gated separately (verified + active + explicit authorization).
         conn = self._connect(True)
         try:
             job = conn.execute("SELECT id, status, topic_title, youtube_video_id FROM persistent_jobs WHERE id=?",
@@ -411,6 +423,19 @@ class ChannelRegistry:
         finally:
             conn.close()
         return {"duplicate": cur.rowcount == 0, "localization": dict(row)}
+
+    def publishing_eligibility(self, target_key: str, localization: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Stage 4.02: whether a localized video could be published. Never automatic; publishing itself is a later,
+        separately authorized milestone. Every unmet condition is listed."""
+        ch = self.get(target_key)
+        reasons = []
+        if ch["status"] != ACTIVE or not ch.get("youtube_channel_id"):
+            reasons.append(f"channel not verified and active ({ch['status']}: {ch['status_reason']})")
+        if not (ch.get("publishing_config") or {}).get("publishing_authorized"):
+            reasons.append("Hindi publishing has not been authorized (separate milestone)")
+        if localization is not None and localization.get("status") != "QC_PASSED":
+            reasons.append(f"video has not passed Hindi QC (status {localization.get('status')})")
+        return {"eligible": not reasons, "reasons": reasons, "automatic_publishing": False}
 
     def localizations(self, target_key: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         self.ensure()

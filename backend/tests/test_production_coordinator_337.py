@@ -535,7 +535,7 @@ def test_long_form_gets_gap_after_shorts_finishes(tmp_path):
 def test_status_shape(tmp_path):
     c, w, _ = make(tmp_path)
     s = c.status()
-    assert set(s["queues"]) == {SHORTS, LONG_FORM}
+    assert set(s["queues"]) == {SHORTS, LONG_FORM, pc.LOCALIZATION}   # Stage 4.02 added the localization queue
     assert s["queues"][SHORTS]["cycles"] == 24
     assert {"logical_jobs", "worker_threads", "os_processes"} <= set(s["execution_model"])
     assert s["renderer"]["heavy_slots"] == 1 and "gpu_used_percent" in s["resources"]
@@ -572,7 +572,7 @@ def test_api_routes_require_local_and_csrf(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_coordinator", lambda: c)
     client = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     r = client.get("/api/production/queues")
-    assert r.status_code == 200 and set(r.json()["queues"]) == {SHORTS, LONG_FORM}
+    assert r.status_code == 200 and set(r.json()["queues"]) == {SHORTS, LONG_FORM, pc.LOCALIZATION}   # Stage 4.02 added the localization queue
     body = {"operator": "op", "reason": "r", "confirm": True}
     assert client.post("/api/production/queues/long-form/pause", json=body).status_code == 403   # no CSRF token
     tok = client.get("/api/autonomy/session", headers={"origin": "http://127.0.0.1:8000"}).json()
@@ -672,3 +672,53 @@ def test_first_coordinator_tick_waits_for_daemon_warm_up(monkeypatch):
 
     asyncio.run(go())
     assert ticks == [1]
+
+
+def test_heavy_admission_fails_closed_without_next_shorts_start(tmp_path):
+    """Stage 4.02 fix: an unknown next Shorts start used to skip the window check and admit a heavy step."""
+    c, w, _ = make(tmp_path)
+    w.shorts["next_start_utc"] = None
+    ok, why = c.admit({"name": "render", "weight": HEAVY, "estimate_minutes": 5}, now=T0, resources=w.resources,
+                      shorts=w.shorts, light_running=0)
+    assert not ok and "next Shorts start unknown" in why
+
+
+def _shorts_db(path, spec=None):
+    import sqlite3
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE persistent_jobs (id TEXT, status TEXT, current_stage TEXT)")
+    c.execute("CREATE TABLE studio_settings (key TEXT PRIMARY KEY, value TEXT)")
+    if spec is not None:
+        import json
+        from backend.app.services.control_center_service import ACTIVE_PROFILE_KEY
+        c.execute("INSERT INTO studio_settings VALUES (?,?)", (ACTIVE_PROFILE_KEY, json.dumps(spec)))
+    c.commit()
+    c.close()
+    return str(path)
+
+
+def test_shorts_view_reads_the_profile_from_its_own_database(monkeypatch, tmp_path):
+    """A standalone process must not plan against the default profile, nor against another database's profile:
+    the active profile comes from the coordinator's own database (Stage 4.02 dry-run finding)."""
+    import backend.app.core.paths as paths
+    from backend.app.services.control_center_service import preset_schedule
+    spec = preset_schedule("SINGLE_DAILY")
+    db = _shorts_db(tmp_path / "own.db", spec)
+    v = pc._default_shorts_view(T0, db)
+    assert v["known"] is True and v["cycles"] == len(spec["cycles"]) and v["next_start_utc"]
+    other = _shorts_db(tmp_path / "other.db")                 # no active-profile row, not the process database
+    v2 = pc._default_shorts_view(T0, other)
+    assert v2["known"] is False and "schedule unreadable" in v2["error"]
+
+
+def test_process_database_falls_back_to_the_restored_profile_once(monkeypatch, tmp_path):
+    import backend.app.core.paths as paths
+    import backend.app.services.control_center_service as cc
+    db = _shorts_db(tmp_path / "proc.db")
+    monkeypatch.setattr(paths, "DATABASE_PATH", tmp_path / "proc.db")
+    calls = []
+    monkeypatch.setattr(pc, "_profile_loaded", [False])
+    monkeypatch.setattr(cc, "restore_active_schedule_profile", lambda: calls.append(1))
+    pc._default_shorts_view(T0, db)
+    v = pc._default_shorts_view(T0, db)
+    assert calls == [1] and v["known"] is True                # restored once per process

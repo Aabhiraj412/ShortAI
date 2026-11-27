@@ -28,7 +28,8 @@ def _safe(name: str, fn: Callable[[], Any], unavailable: List[str]) -> Any:
 
 def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]]] = None,
               creative: Optional[Callable[[], Dict[str, Any]]] = None,
-              topic_supply: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
+              topic_supply: Optional[Callable[[], Dict[str, Any]]] = None,
+              localizations: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
     unavailable: List[str] = []
     if cp is None:
         from backend.app.autonomy.control_plane import get_control_plane
@@ -39,6 +40,10 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
         from backend.app.creative_intel.feedback import feedback_report as creative
     if topic_supply is None:
         topic_supply = _topic_supply
+    if localizations is None:
+        def localizations():
+            from backend.app.localization.pipeline import overview
+            return overview()
     needs: List[Dict[str, Any]] = []
 
     control = _safe("control_state", lambda: cp.control_state(), unavailable) or {}
@@ -84,6 +89,28 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
     if ts.get("decision_needed"):
         needs.append({"kind": "decision", "severity": "medium", "title": "Topic supply is running low",
                       "why": ts.get("evidence"), "action": ts.get("action")})
+
+    # Stage 4.02: genuine Hindi localization blockers only (WAITING resolves itself and is not listed).
+    locs = (_safe("localizations", localizations, unavailable) or {}).get("localizations") or []
+    for l in locs:
+        if l.get("status") == "FAILED":
+            needs.append({"kind": "failed_recovery", "severity": "medium",
+                          "title": f"Hindi localization failed: {l.get('source_job_id')}",
+                          "why": l.get("error") or "technical failure after its attempts",
+                          "action": "Retry it from the Hindi localization card once the cause is fixed."})
+        elif l.get("status") == "QC_REJECTED":
+            needs.append({"kind": "decision", "severity": "low",
+                          "title": f"Hindi QC rejected {l.get('source_job_id')}",
+                          "why": "; ".join(((l.get("qc") or {}).get("creative") or [])[:2]) or l.get("error"),
+                          "action": "Retranslate it, or leave it (it never publishes)."})
+    passed = [l for l in locs if l.get("status") == "QC_PASSED"]
+    if passed:
+        reasons = (passed[0].get("publishing") or {}).get("reasons") or []
+        if reasons:
+            needs.append({"kind": "decision", "severity": "low",
+                          "title": f"{len(passed)} Hindi video(s) passed QC and wait for publishing authorization",
+                          "why": "; ".join(reasons[:2]),
+                          "action": "Verify the Hindi channel (Channels card); Hindi publishing is a separate milestone."})
 
     requests_by_id = {}
     for r in (_safe("approved", lambda: cp.list_requests(None, 200), unavailable) or []):

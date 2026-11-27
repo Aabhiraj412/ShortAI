@@ -2650,6 +2650,79 @@ async def api_channel_deactivate(key: str, req: ChannelChangeRequest, _: None = 
     return await _channel_call(lambda: get_registry().deactivate(k, req.operator, req.reason))
 
 
+# -- Stage 4.02: Hindi localization of completed English Shorts (never publishes) ------------------------------
+class LocalizationRequest(_AutonomyBody):
+    source_job_id: str = Field(min_length=3, max_length=80)
+    confirm: bool = False
+
+
+class LocalizationRetryRequest(_AutonomyBody):
+    from_step: Optional[str] = Field(default=None, max_length=20)
+    confirm: bool = False
+
+
+async def _localization_call(fn):
+    from backend.app.channels.registry import ChannelError
+    from backend.app.scheduler.production_coordinator import CoordinatorError
+    try:
+        return await asyncio.to_thread(fn)
+    except (ChannelError, CoordinatorError) as exc:
+        raise HTTPException(status_code=getattr(exc, "code", 409), detail=str(exc)[:300])
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)[:300])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Localization request failed")
+        raise HTTPException(status_code=503, detail="Localization unavailable; English production is unaffected.")
+
+
+@app.get("/api/localizations")
+def api_localizations(_: None = Depends(require_local_control)):
+    from backend.app.localization.pipeline import overview
+    return overview()
+
+
+@app.post("/api/localizations")
+async def api_localization_create(req: LocalizationRequest, _: None = Depends(require_local_control),
+                                  __: None = Depends(require_autonomy_write)):
+    """Plans (idempotent) and queues the Hindi localization of one completed English Short."""
+    from backend.app.localization.pipeline import enqueue
+    _require_confirm(req.confirm)
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", req.source_job_id):
+        raise HTTPException(status_code=400, detail="invalid source job id")
+    return await _localization_call(lambda: enqueue(req.source_job_id, operator=req.operator))
+
+
+@app.post("/api/localizations/{loc_id}/retry")
+async def api_localization_retry(loc_id: int, req: LocalizationRetryRequest, _: None = Depends(require_local_control),
+                                 __: None = Depends(require_autonomy_write)):
+    from backend.app.localization.pipeline import HindiLocalizer, enqueue
+    _require_confirm(req.confirm)
+
+    def go():
+        loc = HindiLocalizer()
+        row = loc.reopen(loc_id, actor=req.operator, from_step=req.from_step)
+        return enqueue(row["source_job_id"], operator=req.operator, localizer=loc)
+    return await _localization_call(go)
+
+
+@app.get("/api/localizations/{loc_id}/video")
+def api_localization_video(loc_id: int, _: None = Depends(require_local_control)):
+    """The generated Hindi MP4 for local review (never published from here)."""
+    from fastapi.responses import FileResponse
+    from backend.app.core.paths import MEDIA_DIR
+    from backend.app.localization.pipeline import HindiLocalizer
+    try:
+        loc = HindiLocalizer().get(loc_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="localization not found")
+    path = Path(str((loc.get("artifacts") or {}).get("final_mp4") or ""))
+    root = (Path(MEDIA_DIR) / "localizations").resolve()
+    if not path.is_file() or root not in path.resolve().parents:
+        raise HTTPException(status_code=404, detail="no Hindi video yet")
+    return FileResponse(str(path), media_type="video/mp4")
+
+
 # -- Stage 3.37: production queues and resource coordinator ------------------------------------------------------
 # Read: both logical queues, renderer occupancy, resources, recovery. Writes are operator-only (local origin, CSRF,
 # explicit confirmation) and limited to the long-form queue: Shorts production stays governed by the schedule.

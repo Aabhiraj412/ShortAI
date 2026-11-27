@@ -271,10 +271,22 @@ def _job(db, jid, status="COMPLETED", title="Halley's Comet"):
 
 
 def test_localization_requires_an_active_verified_hindi_channel(env):
+    """Stage 4.02 changed this contract on purpose: local production is allowed while Hindi OAuth is missing, and
+    publishing eligibility carries the verification gate instead. A BLOCKED channel still refuses planning."""
     reg, backend, db = env
     _job(db, "cycle_1_20261127_0000")
-    with pytest.raises(ChannelError, match="not verified and active"):
-        reg.plan_localization("cycle_1_20261127_0000", "hi")
+    planned = reg.plan_localization("cycle_1_20261127_0000", "hi")
+    assert planned["localization"]["status"] == "PLANNED"
+    elig = reg.publishing_eligibility("hi", planned["localization"])
+    assert elig["eligible"] is False and elig["automatic_publishing"] is False
+    assert any("not verified" in r for r in elig["reasons"]) and any("not been authorized" in r for r in elig["reasons"])
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE channel_registry SET status='BLOCKED', status_reason='IDENTITY_CONFLICT: test' WHERE channel_key='hi'")
+    conn.commit()
+    conn.close()
+    _job(db, "cycle_2_20261127_0100")
+    with pytest.raises(ChannelError, match="blocked"):
+        reg.plan_localization("cycle_2_20261127_0100", "hi")
 
 
 def test_localization_keeps_the_english_identity_and_is_deduplicated(env):

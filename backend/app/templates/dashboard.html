@@ -811,6 +811,12 @@
       <div id="chList" style="font-size:12px;overflow-x:auto;">--</div>
       <h3 style="font-size:13px;margin:10px 0 4px;">Channel history</h3><div id="chEvents" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
+    <!-- STAGE 4.02: Hindi localization of completed English Shorts -->
+    <div class="card" id="locCard"><div class="card-head"><div><h2 class="card-title">Hindi localization</h2>
+      <p class="card-desc">Completed English Shorts adapted into natural Hindi (script, voice, render, Hindi QC). It runs in the gaps between English Shorts and shares the one render slot. A Hindi video is never published automatically: publishing stays blocked until the Hindi channel is verified, active and Hindi publishing is explicitly authorized.</p></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><input id="locSource" maxlength="80" placeholder="English job id, e.g. cycle_9_20261127_0800" style="width:280px;" /><button class="btn sm" onclick="locCreate()">Localize</button><button class="btn sm" onclick="refreshLocalizations()">Refresh</button></div></div>
+      <div id="locList" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
     <div class="card">
       <div class="card-head">
         <div>
@@ -1463,7 +1469,7 @@ function switchTab(tabId, btn) {
   document.getElementById("tab-" + tabId).classList.add("active");
   if (btn) btn.classList.add("active");
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
-  if (tabId === "queue") { refreshPublishing(); refreshChannels(); }
+  if (tabId === "queue") { refreshPublishing(); refreshChannels(); refreshLocalizations(); }
   if (tabId === "ops") { refreshOps(); }
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
@@ -4243,6 +4249,54 @@ async function refreshChannels() {
       `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.channel_key)}</td><td>${escHtml(e.event)}</td><td>${escHtml((e.previous_status || "") + " → " + (e.new_status || ""))}</td><td>${escHtml(e.actor)}</td></tr>`))
       : `<div style="color:var(--muted)">No channel events yet.</div>`;
   } catch (err) { el.innerHTML = `<span class="auto-kill">channels unavailable: ${escHtml(err.message || String(err))}</span>`; }
+}
+
+// -- Stage 4.02 Hindi localization: status, QC, video and publishing eligibility (never publishes). --
+const LOC_COLOR = { QC_PASSED: "#86efac", QC_REJECTED: "#fca5a5", FAILED: "#fca5a5", WAITING: "#fcd34d", IN_PROGRESS: "#93c5fd", PLANNED: "var(--muted)" };
+async function locCreate() {
+  const src = ((document.getElementById("locSource") || {}).value || "").trim();
+  if (!src) { showToast("Enter a completed English job id.", true); return; }
+  try {
+    const op = ((document.getElementById("chOperator") || {}).value || "").trim();
+    const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
+    const r = await autoWrite("/api/localizations", "POST", { source_job_id: src, confirm: true });
+    showToast(r.queued ? "Hindi localization queued" : `Not queued: ${r.reason || "already queued"}`);
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshLocalizations();
+}
+async function locRetry(id, fromStep) {
+  if (fromStep && !(await askConfirm("Redo the Hindi adaptation?", "The rejected attempt's files are archived (not deleted) and the adaptation, voice, render and QC run again."))) return;
+  try {
+    const op = ((document.getElementById("chOperator") || {}).value || "").trim();
+    const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
+    await autoWrite(`/api/localizations/${encodeURIComponent(id)}/retry`, "POST", { from_step: fromStep || null, confirm: true });
+    showToast("Retry queued");
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshLocalizations();
+}
+function locRow(l) {
+  const qc = l.qc || {}, pub = l.publishing || {}, cj = l.coordinator_job || {};
+  const qcTxt = qc.classification ? `${qc.classification}${qc.measured && qc.measured.duration_sec ? " · " + qc.measured.duration_sec + " s" : ""}` : "--";
+  const why = [...(qc.creative || []), ...(qc.technical || [])].slice(0, 3).map(x => escHtml(x)).join("<br>") || escHtml(l.error || "");
+  const video = l.video_available ? `<a href="/api/localizations/${encodeURIComponent(l.id)}/video" target="_blank" rel="noopener">MP4</a>` : "--";
+  let act = "";
+  if (l.status === "WAITING" || l.status === "FAILED") act = `<button class="btn sm" data-id="${escHtml(l.id)}" onclick="locRetry(this.dataset.id)">Retry</button>`;
+  if (l.status === "QC_REJECTED") act = `<button class="btn sm" data-id="${escHtml(l.id)}" onclick="locRetry(this.dataset.id,'translate')">Retranslate</button>`;
+  return `<tr><td>${escHtml(l.source_job_id)}<div style="color:var(--muted);max-width:200px;overflow-wrap:anywhere;">${escHtml(l.source_topic_title || "")}</div></td>`
+    + `<td style="color:${LOC_COLOR[l.status] || "inherit"}">${escHtml(l.status)}<div style="color:var(--muted)">${escHtml(l.step || "")}${cj.state ? " · queue " + escHtml(cj.state) : ""}</div></td>`
+    + `<td>${escHtml(l.script)} / ${escHtml(l.voice)}</td><td>${escHtml(l.render)}</td><td>${escHtml(qcTxt)}</td><td>${video}</td>`
+    + `<td style="max-width:240px;overflow-wrap:anywhere;">${pub.eligible ? "eligible" : (pub.reasons || []).map(r => escHtml(r)).join("<br>")}</td>`
+    + `<td style="max-width:260px;overflow-wrap:anywhere;">${why || "--"}</td><td>${act}</td></tr>`;
+}
+async function refreshLocalizations() {
+  const el = document.getElementById("locList");
+  if (!el) return;
+  try {
+    const d = await apiJson("/api/localizations");
+    const rows = d.localizations || [];
+    el.innerHTML = rows.length ? apTable(["English source", "Status", "Script / voice", "Render", "Hindi QC", "Video", "Publishing", "Reasons", ""], rows.map(locRow))
+      : `<div style="color:var(--muted)">No Hindi localizations yet.</div>`;
+  } catch (err) { el.innerHTML = `<span class="auto-kill">localizations unavailable: ${escHtml(err.message || String(err))}</span>`; }
 }
 
 // -- Remediation follow-up: one global badge for genuine interventions; routine work never prompts. --
