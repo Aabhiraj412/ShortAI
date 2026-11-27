@@ -4,8 +4,8 @@ Benchmark free LLM providers for CrazzyDocs script writing (2026-11-28). Develop
 Reads research dossiers of existing productions (read-only), asks each target to write the 5-stage script with the
 production prompt (``grounded_script_writer.build_prompt``) and records, per target and topic:
 JSON compliance, the production validators' verdict (stages, length, invented numbers, copied runs), the structured
-script-quality scores (hook, storytelling, narration...), latency, tokens and the provider's rate-limit headers.
-Optionally (--hindi) it translates one accepted script with the Hindi localization prompt.
+script-quality score, latency, tokens and the provider's rate-limit headers. Each topic gets the production's two
+attempts (one retry with the validator feedback). Hindi translation is not benchmarked here.
 
 Results go to ``logs/llm_benchmark/<timestamp>.json`` only: separate from production configuration, which this
 script never changes. Quota use is recorded in the shared quota tracker like any other request.
@@ -53,24 +53,33 @@ def run_target(provider: str, model: str, topic, gemini_client):
     from backend.app.content import grounded_script_writer as gsw
     from backend.app.content.script_quality import evaluate_script
     hook_type = gsw.choose_hook_type(topic.job_id)
-    prompt = gsw.build_prompt(topic, hook_type, topic.winning_hook or "")
-    row = {"provider": provider, "model": model, "topic": topic.title, "job_id": topic.job_id}
-    try:
-        raw, info = gsw._call_with_backoff(gemini_client, model, prompt, provider=provider, sleep=lambda s: None)
-    except Exception as exc:
-        row.update(ok=False, error=gsw.describe_error(exc), calls=list(getattr(exc, "calls", [])))
-        return row
-    call = info["calls"][-1]
-    row.update(latency_ms=call.get("latency_ms"), tokens=call.get("total_tokens"), finish=call.get("finish_reason"))
-    try:
-        data = gsw._parse(raw)
-        row["json_ok"] = True
-    except Exception:
-        row.update(json_ok=False, ok=False)
-        return row
-    sections = data.get("sections") or []
-    problems = gsw.validate_sections(sections, gsw.fact_corpus(topic))
-    row.update(ok=True, accepted=not problems, problems=problems)
+    row = {"provider": provider, "model": model, "topic": topic.title, "job_id": topic.job_id, "attempts": []}
+    feedback, problems, sections = [], ["no attempt"], []
+    for attempt in range(1, gsw.MAX_ATTEMPTS + 1):        # same as production: one retry with the validator feedback
+        prompt = gsw.build_prompt(topic, hook_type, topic.winning_hook or "", feedback)
+        try:
+            raw, info = gsw._call_with_backoff(gemini_client, model, prompt, provider=provider, sleep=lambda s: None)
+        except Exception as exc:
+            row["attempts"].append({"error": gsw.describe_error(exc), "error_code": getattr(exc, "error_code", None)})
+            row.update(ok=False, error=gsw.describe_error(exc))
+            return row
+        call = info["calls"][-1]
+        row["attempts"].append({"latency_ms": call.get("latency_ms"), "tokens": call.get("total_tokens")})
+        row.update(latency_ms=call.get("latency_ms"), tokens=call.get("total_tokens"), finish=call.get("finish_reason"))
+        try:
+            data = gsw._parse(raw)
+            row["json_ok"] = True
+        except Exception:
+            row.update(json_ok=False)
+            feedback = ["the answer was not valid JSON"]
+            continue
+        sections = data.get("sections") or []
+        problems = gsw.validate_sections(sections, gsw.fact_corpus(topic))
+        if not problems:
+            break
+        feedback = problems
+        time.sleep(15)                                   # stay inside the per-minute token limit
+    row.update(ok=True, accepted=not problems, problems=problems, attempts_used=len(row["attempts"]))
     if not problems:
         script = gsw._assemble(sections, ["question", "mechanism", "evidence", "revelation"], topic.category or "",
                                script_source=f"llm:{provider}:{model}")

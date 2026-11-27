@@ -8,7 +8,7 @@ On 2026-11-27 the Gemini free tier's per-model daily caps were exceeded: Gemini 
 
 | Provider | Free API? | Free limits (as documented) | Decision |
 |---|---|---|---|
-| **Groq** | Yes (Free plan) | `openai/gpt-oss-120b` and `openai/gpt-oss-20b`: 30 RPM, 1,000 RPD, 8K TPM, 200K TPD each ([rate-limits](https://console.groq.com/docs/rate-limits); the tab label was not confirmed in the extracted page). Both are "Production" models. JSON object mode is available on all models; strict `json_schema` on gpt-oss. OpenAI-compatible: `https://api.groq.com/openai/v1`. Headers: `x-ratelimit-limit/remaining/reset-requests` (RPD), `-tokens` (TPM), `retry-after` on 429. | **Integrated as the first alternate, disabled by default.** It needs `GROQ_API_KEY` and `CRAZZYDOCS_LLM_ALTERNATES`. Not benchmarked: no key is configured. |
+| **Groq** | Yes (Free plan) | `openai/gpt-oss-120b` and `openai/gpt-oss-20b`: 30 RPM, 1,000 RPD, 8K TPM, 200K TPD each ([rate-limits](https://console.groq.com/docs/rate-limits); the tab label was not confirmed in the extracted page). Both are "Production" models. JSON object mode is available on all models; strict `json_schema` on gpt-oss. OpenAI-compatible: `https://api.groq.com/openai/v1`. Headers: `x-ratelimit-limit/remaining/reset-requests` (RPD), `-tokens` (TPM), `retry-after` on 429. | **Integrated as the first alternate, disabled by default.** The key exists (free plan confirmed by live headers). It is used only once `CRAZZYDOCS_LLM_ALTERNATES` names it. Benchmarked (below). |
 | Cloudflare Workers AI | Yes | 10,000 Neurons/day, reset 00:00 UTC. On Workers Free, going over **fails with an error (not billed)**. Text generation 300 RPM. gpt-oss-120b costs 31,818 Neurons per M input and 68,182 per M output tokens, so a script is roughly 250–300 Neurons, about 35 scripts/day. | Evaluated; **not integrated**. It needs an account id + API token and a live integration test. The REST/OpenAI-compatible endpoint is not on the pages read. Good candidate for the next step. |
 | OpenRouter | `:free` models only | 20 RPM. 50 requests/day with fewer than 10 credits ever purchased, 1,000/day otherwise. Extra per-IP burst limits. A negative credit balance can cause errors even on free models. | Not integrated: 50 RPD is too low to rely on, and model availability varies. |
 | Mistral | No | "Free mode … doesn't include API access. Creating API keys and using the API require billing activation." | Rejected: no zero-cost API. |
@@ -52,19 +52,40 @@ On 2026-11-27 the Gemini free tier's per-model daily caps were exceeded: Gemini 
 
 The script reads existing research dossiers (read-only) and uses the production prompt and validators. It records JSON compliance, acceptance, quality scores, latency, tokens and headers to `logs/llm_benchmark/`, separate from configuration.
 
-Run on 2026-11-28 at about 02:50 IST (Gemini only; no Groq key):
+Runs on 2026-11-28, 02:50–03:40 IST, on 5 recent production topics (Hibiscus Rising, a pneumatic-muscle paper, Toy Story, NSA encryption systems, Guiengola). The key in `.env.local` is on Groq's **free plan**: live header `x-ratelimit-limit-requests: 1000` equals the documented free RPD.
 
-| Model | Result |
-|---|---|
-| `gemini-3.8-flash` | HTTP 429, daily quota. The tracker set the cooldown to 08:05 UTC (13:35 IST); the next topics were skipped with no request. |
-| `gemma-4-31b-it` | HTTP 503 ×3 (overloaded); then a 60 s cooldown. |
+| Target | Final run (strict JSON schema, 5,000-token cap, production retry) | All runs, accepted scripts | Median latency | Overall quality (mean) |
+|---|---|---|---|---|
+| `groq:openai/gpt-oss-20b` | 3 of 3 executed accepted (2 skipped by the TPM guard) | 9 | ~3.5 s | **83.9** (n=9) |
+| `groq:openai/gpt-oss-120b` | 4 of 4 executed accepted (1 skipped by the TPM guard) | 9 | ~6.5 s | 78.5 (n=9) |
+| `gemini:gemma-4-31b-it` | HTTP 503 (overloaded) on 3 of 4 attempts | 1 | 90 s | 88.1 (n=1) |
+| `gemini:gemini-3.8-flash` | HTTP 429, daily quota until 13:35 IST | 0 | — | — |
 
-No quality comparison was possible. **Groq is not production-ready until this benchmark passes with a real key.**
+**Reference from production history (different topics):**
+- Gemini model scripts: 89.7 overall.
+- Extractive fallback: 76.2.
+
+**What the numbers mean:**
+- **Quality.** Groq scripts score between extractive and Gemini.
+- **Factual accuracy.** Every accepted Groq script passed the production validators: five stages, length, every number present in the research, and no copied 9-word run.
+- **Rejected drafts.** Two drafts were rejected for copied text and fixed on the retry.
+- **Measured problems, both fixed:**
+  - About 20 % of answers in plain JSON object mode failed with `json_validate_failed` (truncated by reasoning at a 3,000-token cap).
+  - With strict `json_schema`, a 5,000-token cap and invalid JSON treated as a rejected draft (one retry), the failure rate in the final run was 0 of 7.
+- **Throughput.** A script call uses about 2,300–4,600 tokens, so 8K TPM allows about 1–2 calls per minute. The tracker reserves 4,500 tokens per call and skips the model rather than exceeding the limit. Production makes at most about 2 calls an hour.
+- **Not measured:**
+  - Hook strength separately (the overall score only).
+  - Hindi translation quality.
+  - A same-topic Gemini Flash comparison, because the quota is exhausted until 13:35 IST.
+
+**Verdict:** Groq is integrated, verified against the real API and benchmarked. It is **not enabled**: enabling it is an explicit configuration step (below). Gemini stays primary.
 
 ## To enable Groq (operator)
 
-1. Create a key in a **Free-plan** Groq organisation and add `GROQ_API_KEY=…` to `.env.local`.
-2. Run the benchmark against Groq and a Gemini model after the Gemini reset (13:35 IST).
-3. If it passes, set `CRAZZYDOCS_LLM_ALTERNATES=groq:openai/gpt-oss-120b` and restart through the deploy procedure.
+`GROQ_API_KEY` is already in `.env.local` (free plan). To use Groq when Gemini is exhausted:
+1. Add `CRAZZYDOCS_LLM_ALTERNATES=groq:openai/gpt-oss-20b,groq:openai/gpt-oss-120b` to `.env.local`.
+2. Restart through the deploy procedure.
+
+Optionally, re-run the benchmark against Gemini Flash after 13:35 IST for a same-topic comparison.
 
 Hindi translation (`localization/translator.py`) still uses only its own Gemini/Gemma chain. Groq Hindi quality has not been evaluated.

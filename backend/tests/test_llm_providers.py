@@ -222,3 +222,43 @@ def test_status_view_never_contains_key_values(monkeypatch, clock):
     monkeypatch.setenv("GROQ_API_KEY", "gsk_secret_value_xyz")
     v = lp.status_view()
     assert "gsk_secret_value_xyz" not in json.dumps(v) and v["providers"]["groq"]["key_set"] is True
+
+
+def test_strict_schema_is_sent_for_gpt_oss_and_matches_the_production_contract(monkeypatch, clock):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    s = FakeSession([_ok(json.dumps({"angle": "a", "sections": GOOD}))])
+    lp.generate_openai_compat("groq", "openai/gpt-oss-120b", "x", session=s, schema=gsw.SCRIPT_SCHEMA)
+    rf = s.sent[0]["json"]["response_format"]
+    assert rf["type"] == "json_schema" and rf["json_schema"]["strict"] is True
+    assert rf["json_schema"]["schema"]["properties"]["sections"]["items"]["properties"]["stage"]["enum"] == list(gsw.STAGES)
+
+
+def test_tpm_reservation_skips_groq_when_the_minute_budget_is_used(monkeypatch, clock):
+    lp.tracker().record_success("groq", "openai/gpt-oss-120b", 4100)
+    ok, why = lp.tracker().available("groq", "openai/gpt-oss-120b", est_tokens=gsw.EST_CALL_TOKENS["groq"])
+    assert not ok and "per-minute token" in why
+
+
+def test_invalid_json_from_the_provider_is_a_rejected_draft_not_an_outage(monkeypatch, clock):
+    monkeypatch.setattr(lp, "key_set", lambda p: True)
+    monkeypatch.setenv("CRAZZYDOCS_LLM_ALTERNATES", "groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b")
+    answers = iter([lp.InvalidOutput("groq answer was not valid JSON"),
+                    (json.dumps({"angle": "a", "sections": GOOD}), {"total_tokens": 3000}, {})])
+
+    def fake(*a, **k):
+        x = next(answers)
+        if isinstance(x, Exception):
+            raise x
+        return x
+    monkeypatch.setattr(lp, "generate_openai_compat", fake)
+    out = _write(None, monkeypatch, model=None)
+    assert out["script_source"] == "llm:groq:openai/gpt-oss-120b"        # second attempt, same model
+    v = lp.tracker().view()["models"]["groq:openai/gpt-oss-120b"]
+    assert v["cooldown_until_utc"] is None
+
+
+def test_json_validate_failed_maps_to_invalid_output(monkeypatch, clock):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    s = FakeSession([FakeResp(400, {"error": {"code": "json_validate_failed", "message": "..."}})])
+    with pytest.raises(lp.InvalidOutput):
+        lp.generate_openai_compat("groq", "openai/gpt-oss-120b", "x", session=s)

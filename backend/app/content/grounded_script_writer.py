@@ -40,6 +40,7 @@ SECTION_IDS = {"HOOK": "seg_01_hook", "CONTEXT": "seg_02_context", "ESCALATION":
 MIN_WORDS, MAX_WORDS = 95, 126          # ~2.3 words/s: 41-55 s of speech + 2 s outro <= 58 s
 COPY_NGRAM = 9
 MAX_ATTEMPTS = 2
+EST_CALL_TOKENS = {"groq": 4500}         # measured 2026-11-28: ~4,100 tokens per script call (prompt + reasoning + JSON)
 TRANSIENT_RETRIES = 2                    # per attempt, for 429 / 5xx / timeouts only
 BACKOFF_SEC = (4.0, 12.0)
 _TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
@@ -277,11 +278,23 @@ def _generate(client: Any, model: str, prompt: str, telemetry: Optional[Dict[str
     return resp.text
 
 
+# The production JSON contract (see build_prompt), for providers with strict structured outputs.
+SCRIPT_SCHEMA: Dict[str, Any] = {
+    "type": "object", "additionalProperties": False, "required": ["angle", "sections"],
+    "properties": {
+        "angle": {"type": "string"},
+        "sections": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["stage", "text"],
+            "properties": {"stage": {"type": "string", "enum": list(STAGES)}, "text": {"type": "string"}}}},
+    },
+}
+
+
 def _generate_on(provider: str, client: Any, model: str, prompt: str, tel: Dict[str, Any]) -> str:
     if provider == "gemini":
         return _generate(client, model, prompt, tel)
     from backend.app.services import llm_providers
-    text, usage, headers = llm_providers.generate_openai_compat(provider, model, prompt)
+    text, usage, headers = llm_providers.generate_openai_compat(provider, model, prompt, schema=SCRIPT_SCHEMA)
     tel.update(usage)
     tel["_headers"] = headers
     return text
@@ -385,7 +398,8 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
             for target in targets:
                 current, provider = target["model"], target["provider"]
                 label = current if provider == "gemini" else f"{provider}:{current}"
-                ok, why = llm_providers.tracker().available(provider, current, ignore_overload=round_no == 2)
+                ok, why = llm_providers.tracker().available(provider, current, est_tokens=EST_CALL_TOKENS.get(provider, 0),
+                                                            ignore_overload=round_no == 2)
                 if not ok:      # quota exhausted / cooling down: no request is sent
                     attempts.append({"model": label, "provider": provider, "skipped": why, "round": round_no})
                     continue

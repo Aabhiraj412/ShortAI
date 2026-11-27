@@ -60,9 +60,9 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         # https://console.groq.com/docs/rate-limits (free plan table) and /docs/models (both "Production").
         "models": {
             "openai/gpt-oss-120b": {"rpm": 30, "rpd": 1000, "tpm": 8000, "tpd": 200000, "json": "json_object",
-                                    "max_output_tokens": 3000},
+                                    "json_schema_strict": True, "max_output_tokens": 5000},
             "openai/gpt-oss-20b": {"rpm": 30, "rpd": 1000, "tpm": 8000, "tpd": 200000, "json": "json_object",
-                                   "max_output_tokens": 3000},
+                                   "json_schema_strict": True, "max_output_tokens": 5000},
         },
         "allow_unlisted": False,
         "reset": "headers",
@@ -75,6 +75,14 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
 # Neurons/day, blocked not billed on Workers Free; needs an account id + token and an integration test), OpenRouter
 # (":free" models, 50 requests/day without purchased credits), Mistral (free mode has no API access), SambaNova (free
 # tier could not be verified), xAI (no zero-cost API allowance stated).
+
+
+class InvalidOutput(ValueError):
+    """The provider rejected its own answer as invalid JSON (e.g. Groq json_validate_failed): a bad draft, retried
+    with feedback like malformed JSON from any model, not an API outage."""
+
+    status_code = code = 400
+    transient = False
 
 
 class NotFreeError(RuntimeError):
@@ -389,7 +397,7 @@ def set_tracker(t: Optional[QuotaTracker]) -> None:
 
 # ---- OpenAI-compatible call (Groq) --------------------------------------------------------------------------------
 def generate_openai_compat(provider: str, model: str, prompt: str, *, temperature: float = 0.85,
-                           session=None) -> Tuple[str, Dict[str, Any], Dict[str, str]]:
+                           session=None, schema: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any], Dict[str, str]]:
     """One chat completion in JSON mode. Returns (text, usage telemetry, response headers). Raises ProviderError
     (status, retry_after, transient) or NotFreeError. The API key is sent only in the Authorization header."""
     limits = check_free(provider, model)
@@ -403,7 +411,11 @@ def generate_openai_compat(provider: str, model: str, prompt: str, *, temperatur
                             "temperature": temperature}
     if limits.get("max_output_tokens"):
         body["max_completion_tokens"] = limits["max_output_tokens"]
-    if limits.get("json") == "json_object":
+    if schema is not None and limits.get("json_schema_strict"):
+        # Constrained decoding (documented for gpt-oss on Groq): the answer is always schema-valid JSON.
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "crazzydocs_output", "strict": True, "schema": schema}}
+    elif limits.get("json") == "json_object":
         body["response_format"] = {"type": "json_object"}
     t0 = time.perf_counter()
     try:
@@ -417,8 +429,16 @@ def generate_openai_compat(provider: str, model: str, prompt: str, *, temperatur
     status = getattr(resp, "status_code", None)
     if status != 200:
         ra = parse_duration(headers.get("retry-after") or headers.get("Retry-After"))
-        err = ProviderError(f"{provider} HTTP {status}", status=status, retry_after=ra,
+        code = None
+        try:                                       # the provider's error code only (e.g. json_validate_failed)
+            code = str(((resp.json() or {}).get("error") or {}).get("code") or "")[:60] or None
+        except Exception:
+            pass
+        err = ProviderError(f"{provider} HTTP {status}" + (f" ({code})" if code else ""), status=status, retry_after=ra,
                             transient=status in (408, 429, 500, 502, 503, 504))
+        err.error_code = code                      # type: ignore[attr-defined]
+        if status == 400 and code == "json_validate_failed":
+            raise InvalidOutput(f"{provider} answer was not valid JSON ({code})")
         err.headers = headers                      # type: ignore[attr-defined]
         err.latency_ms = latency                   # type: ignore[attr-defined]
         raise err
