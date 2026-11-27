@@ -48,14 +48,16 @@ def hindi_models(english_chain: Sequence[str] = ()) -> List[str]:
     return [m for m in models if m and m not in exclude]
 
 
-def build_request(*, topic: str, category: str, script: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+def build_request(*, topic: str, category: str, script: Dict[str, Any], plan: Dict[str, Any],
+                  scale: float = 1.0) -> Dict[str, Any]:
+    """``scale`` < 1 shrinks the word targets after the voice measured the previous adaptation as too long."""
     scenes = []
     for sc in plan.get("scenes") or []:
         secs = round(float(sc["end_sec"]) - float(sc["start_sec"]), 2)
         scenes.append({"scene_id": sc["scene_id"], "stage": sc.get("stage"), "seconds": secs,
-                       "target_words": max(3, round(secs * HINDI_WORDS_PER_SEC)),
+                       "target_words": max(3, round(secs * HINDI_WORDS_PER_SEC * scale)),
                        # hard ceiling: what the fastest natural voice rate (+18 %) fits into the scene's time
-                       "max_words": max(4, int(secs * MAX_HINDI_WORDS_PER_SEC)),
+                       "max_words": max(4, int(secs * MAX_HINDI_WORDS_PER_SEC * scale)),
                        "narration": sc.get("narration") or "", "headline": sc.get("headline") or "",
                        "highlight": sc.get("highlight") or "", "labels": list(sc.get("labels") or []),
                        "number_units": [n.get("unit") for n in (sc.get("numbers") or []) if n.get("unit")]})
@@ -112,7 +114,7 @@ def _status_of(exc: BaseException) -> Optional[int]:
 
 
 def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], validate,
-              sleep=time.sleep) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+              sleep=time.sleep, initial_feedback: Sequence[str] = ()) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Returns (hindi, attempts). ``validate(req, hindi) -> problems`` is the Hindi script QC.
 
     Per model: up to two attempts (the second with the first one's problems as feedback). A provider error moves to
@@ -122,7 +124,7 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
     attempts: List[Dict[str, Any]] = []
     rule_problems: List[str] = []
     for model in models:
-        feedback: List[str] = []
+        feedback: List[str] = list(initial_feedback)
         for attempt in (1, 2):
             t0 = time.perf_counter()
             cfg = (types.GenerateContentConfig(temperature=0.6, response_mime_type="application/json")
@@ -143,7 +145,8 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
             if not problems:
                 hindi["_model"] = model
                 return hindi, attempts
-            feedback = rule_problems = problems
+            rule_problems = problems
+            feedback = list(problems) + list(initial_feedback)
         if rule_problems:
             break                                # the model answered but broke the rules: another model is not the fix
     if rule_problems:

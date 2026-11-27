@@ -18,16 +18,19 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
 STEPS = ("translate", "voice", "render", "qc")
 TERMINAL = ("QC_PASSED", "QC_REJECTED", "FAILED")
 KIND = "hindi_short_localization"
+MAX_LENGTH_CORRECTIONS = 2       # automatic shortenings driven by the measured voice length
+LENGTH_MARGIN_SEC = 3.0          # aim this far under the voice limit when shortening
 COORDINATOR_STEPS = [{"name": "translate", "weight": "LIGHT", "estimate_minutes": 3},
                      {"name": "voice", "weight": "LIGHT", "estimate_minutes": 3},
                      {"name": "render", "weight": "HEAVY", "estimate_minutes": 12},
@@ -203,37 +206,68 @@ class HindiLocalizer:
         out = wd / "script_hi.json"
         if out.is_file():                                   # retry: the adaptation is already done
             return {"script_hi": str(out)}
+        self._translate_to(loc, out)
+        return {"script_hi": str(out)}
+
+    def _translate_to(self, loc, out: Path, *, scale: float = 1.0, feedback: Sequence[str] = (),
+                      length_corrections: int = 0) -> Dict[str, Any]:
         from backend.app.content.grounded_script_writer import default_client, model_chain
         from backend.app.localization import script_qc, translator
         script, plan = self._english(loc)
         req = translator.build_request(topic=plan.get("topic") or loc.get("source_topic_title") or "",
-                                       category=plan.get("category") or "", script=script, plan=plan)
+                                       category=plan.get("category") or "", script=script, plan=plan, scale=scale)
         client, model = default_client()
         if client is None:
             raise InfrastructureWait("no Gemini key configured (translation provider unavailable)")
         models = translator.hindi_models(model_chain(model))
         try:
-            hindi, attempts = translator.translate(req, client=client, models=models, validate=script_qc.validate)
+            hindi, attempts = translator.translate(req, client=client, models=models, validate=script_qc.validate,
+                                                   initial_feedback=feedback)
         except translator.ProviderUnavailable as exc:
             raise InfrastructureWait(str(exc)) from exc
         except translator.TranslationRejected as exc:
             raise CreativeRejection("translation: " + "; ".join(exc.problems[:5])) from exc
         doc = {"source_job_id": loc["source_job_id"], "language": "hi", "model": hindi.pop("_model", None),
-               "request": req, "hindi": hindi, "attempts": attempts, "created_at_utc": _now()}
+               "request": req, "hindi": hindi, "attempts": attempts, "created_at_utc": _now(),
+               "length_corrections": length_corrections, "scale": scale}
         out.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-        return {"script_hi": str(out)}
+        return doc
 
     def _default_voice(self, loc, wd: Path, arts) -> Dict[str, Any]:
+        """Synthesizes the voice. When even the fastest natural rate is over the limit, the script is shortened
+        automatically with the MEASURED duration as evidence (a corrective change, not a blind retry), at most
+        MAX_LENGTH_CORRECTIONS times; every earlier attempt is archived. Nothing over-length reaches the renderer."""
         from backend.app.localization import voice
         meta = wd / "voice" / "voice_hi.json"
         if meta.is_file():
             return {"voice_meta": str(meta)}
-        doc = json.loads(Path(arts["script_hi"]).read_text(encoding="utf-8"))
-        try:
-            voice.synthesize(doc["hindi"]["scenes"], doc["hindi"].get("terms") or [], wd / "voice", ffmpeg=self.ffmpeg)
-        except voice.VoiceUnavailable as exc:
-            raise InfrastructureWait(str(exc)) from exc
-        return {"voice_meta": str(meta)}
+        script_path = Path(arts["script_hi"])
+        while True:
+            doc = json.loads(script_path.read_text(encoding="utf-8"))
+            done = int(doc.get("length_corrections") or 0)
+            try:
+                voice.synthesize(doc["hindi"]["scenes"], doc["hindi"].get("terms") or [], wd / "voice", ffmpeg=self.ffmpeg)
+                return {"voice_meta": str(meta)}
+            except voice.VoiceUnavailable as exc:
+                raise InfrastructureWait(str(exc)) from exc
+            except voice.ScriptTooLong as exc:
+                if done >= MAX_LENGTH_CORRECTIONS:
+                    raise CreativeRejection(f"{exc} after {done} automatic shortening(s); the adaptation needs a "
+                                            "human edit or a shorter source") from exc
+                limit = voice.MAX_TOTAL_SEC - LENGTH_MARGIN_SEC
+                scale = float(doc.get("scale") or 1.0) * limit / exc.seconds
+                words = sum(len(s.get("narration_hi", "").split()) for s in doc["hindi"]["scenes"])
+                feedback = [f"MEASURED: your previous Hindi narration ({words} words) takes {exc.seconds:.1f} s to speak "
+                            f"even at the fastest natural voice rate; it must take at most {limit:.0f} s. Write about "
+                            f"{int(words * limit / exc.seconds)} words in total, at most max_words per scene: shorter, "
+                            "simpler sentences with the same facts, numbers and names."]
+                arch = wd / f"length_attempt_{done + 1}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+                arch.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(script_path), str(arch / script_path.name))     # archived, never deleted
+                if (wd / "voice").exists():
+                    shutil.move(str(wd / "voice"), str(arch / "voice"))          # old clips must never be reused
+                self._update(loc["id"], error=f"automatic shortening {done + 1}: {exc}")
+                self._translate_to(loc, script_path, scale=scale, feedback=feedback, length_corrections=done + 1)
 
     def _default_render(self, loc, wd: Path, arts) -> Dict[str, Any]:
         from backend.app.localization import render

@@ -32,6 +32,14 @@ class VoiceUnavailable(RuntimeError):
     """No Hindi voice could speak (network down, provider refusing, no offline voice): retry later."""
 
 
+class ScriptTooLong(RuntimeError):
+    """The voice works, but the script is too long even at the fastest rate (a content problem, never rendered)."""
+
+    def __init__(self, seconds: float, voice: str, rate: str):
+        super().__init__(f"spoken Hindi is {seconds:.1f} s with {voice} at {rate}, over the {MAX_TOTAL_SEC:.0f} s limit")
+        self.seconds, self.voice, self.rate = seconds, voice, rate
+
+
 def apply_pronunciation(text: str, terms: Sequence[Dict[str, Any]]) -> str:
     """Replaces display spellings (Hindi or English) with their spoken Devanagari forms."""
     out = text
@@ -98,6 +106,7 @@ def synthesize(scenes: Sequence[Dict[str, Any]], terms: Sequence[Dict[str, Any]]
     """One clip per scene, concatenated with SCENE_GAP_SEC between scenes. Returns the timing and the provider."""
     out_dir.mkdir(parents=True, exist_ok=True)
     errors: List[str] = []
+    shortest: Optional[Tuple[float, str, str]] = None      # the best over-length measurement (never returned)
     providers: List[Tuple[str, str]] = [("edge-tts", v) for v in voices] + [("sapi", v) for v in (sapi_list() or [])]
     for kind, voice in providers:
         for rate in (RATES if kind == "edge-tts" else ("0",)):
@@ -120,9 +129,15 @@ def synthesize(scenes: Sequence[Dict[str, Any]], terms: Sequence[Dict[str, Any]]
                     clips.append({"scene_id": sc["scene_id"], "path": str(wav), "duration": round(dur, 3),
                                   "mean_volume_db": vol, "spoken": spoken})
                 total = sum(c["duration"] for c in clips) + SCENE_GAP_SEC * (len(clips) - 1)
-                if total > MAX_TOTAL_SEC and rate != RATES[-1] and kind == "edge-tts":
-                    errors.append(f"{voice} at {rate}: {total:.1f}s is too long; trying a faster rate")
-                    continue
+                if total > MAX_TOTAL_SEC:
+                    if rate != RATES[-1] and kind == "edge-tts":
+                        errors.append(f"{voice} at {rate}: {total:.1f}s is too long; trying a faster rate")
+                        continue
+                    # Even the fastest rate is over the limit: never hand an over-length voice to the renderer.
+                    errors.append(f"{voice} at {rate}: {total:.1f}s is too long even at the fastest rate")
+                    if shortest is None or total < shortest[0]:
+                        shortest = (total, voice, rate)
+                    break
                 voice_wav = out_dir / "voice_hi.wav"
                 _concat(ffmpeg, clips, voice_wav)
                 start, timings = 0.0, []
@@ -136,6 +151,8 @@ def synthesize(scenes: Sequence[Dict[str, Any]], terms: Sequence[Dict[str, Any]]
             except Exception as exc:              # next rate/voice/provider
                 errors.append(f"{kind}:{voice}@{rate}: {type(exc).__name__}: {str(exc)[:160]}")
                 break
+    if shortest is not None:
+        raise ScriptTooLong(*shortest)
     raise VoiceUnavailable("no Hindi voice could speak: " + " | ".join(errors[-4:]))
 
 

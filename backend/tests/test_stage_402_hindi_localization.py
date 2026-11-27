@@ -246,6 +246,15 @@ def test_voice_uses_a_faster_rate_when_too_long(tmp_path):
     assert res["rate"] != voice.RATES[0] and any("too long" in e for e in res["errors"])
 
 
+def test_voice_never_returns_an_over_length_voice(tmp_path):
+    ffmpeg, _ = _ffmpeg()
+    edge, calls = _tone_edge(ffmpeg, seconds_per_word=1.2)          # too long even at +25 %
+    with pytest.raises(voice.ScriptTooLong) as e:
+        voice.synthesize(fixture_hindi()["scenes"], [], tmp_path, ffmpeg=ffmpeg, edge=edge, sapi_list=lambda: [])
+    assert e.value.seconds > voice.MAX_TOTAL_SEC and e.value.rate == voice.RATES[-1]
+    assert not (tmp_path / "voice_hi.json").exists()
+
+
 def test_silent_clip_is_rejected(tmp_path):
     ffmpeg, _ = _ffmpeg()
 
@@ -451,6 +460,52 @@ def test_creative_rejection_is_final_until_retranslated_and_archives_files(world
     archived = [p for p in wd.iterdir() if p.name.startswith("attempt_")]
     assert archived and (archived[0] / "script_hi.json").is_file()        # archived, never deleted
     assert world.loc.get(lid)["status"] == "PLANNED" and world.loc.get(lid)["artifacts"] == {}
+
+
+def _length_world(world, monkeypatch, too_long_times):
+    """The default voice step with a fake synthesizer (too long N times) and a fake re-translation."""
+    from backend.app.localization import pipeline as pl
+    calls = {"synth": 0, "translate": []}
+
+    def synth(scenes, terms, out_dir, ffmpeg):
+        calls["synth"] += 1
+        if calls["synth"] <= too_long_times:
+            raise voice.ScriptTooLong(61.0, "hi-IN-SwaraNeural", "+25%")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "voice_hi.json").write_text("{}", encoding="utf-8")
+
+    def retranslate(self, loc, out, *, scale=1.0, feedback=(), length_corrections=0):
+        calls["translate"].append({"scale": scale, "feedback": list(feedback), "n": length_corrections})
+        out.write_text(json.dumps({"request": request(), "hindi": fixture_hindi(), "scale": scale,
+                                   "length_corrections": length_corrections}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(voice, "synthesize", synth)
+    monkeypatch.setattr(pl.HindiLocalizer, "_translate_to", retranslate)
+    world.loc.voice_fn = world.loc._default_voice
+    return calls
+
+
+def test_measured_over_length_voice_is_shortened_automatically(world, monkeypatch):
+    calls = _length_world(world, monkeypatch, too_long_times=1)
+    lid = world.loc.plan(JOB)["localization"]["id"]
+    world.loc.run_step(lid, "translate")
+    assert world.loc.run_step(lid, "voice")["status"] == "IN_PROGRESS"
+    t = calls["translate"][0]
+    assert t["n"] == 1 and t["scale"] < 1 and "MEASURED" in t["feedback"][0] and "61.0 s" in t["feedback"][0]
+    wd = world.loc.work_dir(world.loc.get(lid))
+    arch = [p for p in wd.iterdir() if p.name.startswith("length_attempt_1_")]
+    assert arch and (arch[0] / "script_hi.json").is_file()            # the long attempt is archived, not deleted
+    assert world.calls["render"] == 0
+
+
+def test_length_corrections_are_bounded_then_creative_rejection(world, monkeypatch):
+    calls = _length_world(world, monkeypatch, too_long_times=99)
+    lid = world.loc.plan(JOB)["localization"]["id"]
+    world.loc.run_step(lid, "translate")
+    res = world.loc.run_step(lid, "voice")
+    row = world.loc.get(lid)
+    assert row["status"] == "QC_REJECTED" and "automatic shortening" in (row["error"] or "")
+    from backend.app.localization.pipeline import MAX_LENGTH_CORRECTIONS
+    assert len(calls["translate"]) == MAX_LENGTH_CORRECTIONS and world.calls["render"] == 0
 
 
 def test_source_must_have_its_english_artifacts(world, tmp_path):
