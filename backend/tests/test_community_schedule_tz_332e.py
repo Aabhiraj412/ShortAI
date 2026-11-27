@@ -311,7 +311,7 @@ def test_schedule_api_security_and_validation(world, monkeypatch):
     local = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     remote = TestClient(main.app)
     h = {"X-CrazzyDocs-CSRF": local.get("/api/autonomy/session").json()["csrf_token"]}
-    body = {"operator": OP, "timezone": "America/New_York", "generation_time": "09:00", "max_auto_attempts": 2}
+    body = {"timezone": "America/New_York", "generation_time": "09:00", "max_auto_attempts": 2}
     for path in ("/api/community/timezones", "/api/community/schedule",
                  "/api/community/schedule/preview?timezone=America/New_York&generation_time=09:00"):
         assert remote.get(path).status_code == 403 and local.get(path).status_code == 200, path
@@ -320,7 +320,7 @@ def test_schedule_api_security_and_validation(world, monkeypatch):
     assert local.post("/api/community/schedule", json=body, headers={**h, "Origin": "https://evil.example"}).status_code == 403
     assert local.post("/api/community/schedule", content=json.dumps(body),
                       headers={**h, "Content-Type": "text/plain"}).status_code == 415
-    assert local.post("/api/community/schedule", json={**body, "operator": "system"}, headers=h).status_code == 403
+    assert local.post("/api/community/schedule", json={**body, "operator": "system"}, headers=h).status_code == 422
     assert local.post("/api/community/schedule", json={**body, "publish_at": "09:00"}, headers=h).status_code == 422
     assert local.post("/api/community/schedule", json={**body, "max_auto_attempts": 9}, headers=h).status_code == 422
     r = local.post("/api/community/schedule", json={**body, "timezone": "Etc/GMT+5"}, headers=h)

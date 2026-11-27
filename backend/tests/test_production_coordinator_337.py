@@ -573,18 +573,18 @@ def test_api_routes_require_local_and_csrf(tmp_path, monkeypatch):
     client = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     r = client.get("/api/production/queues")
     assert r.status_code == 200 and set(r.json()["queues"]) == {SHORTS, LONG_FORM, pc.LOCALIZATION}   # Stage 4.02 added the localization queue
-    body = {"operator": "op", "reason": "r", "confirm": True}
+    body = {"reason": "r", "confirm": True}
     assert client.post("/api/production/queues/long-form/pause", json=body).status_code == 403   # no CSRF token
     tok = client.get("/api/autonomy/session", headers={"origin": "http://127.0.0.1:8000"}).json()
     h = {tok["csrf_header"]: tok["csrf_token"], "origin": "http://127.0.0.1:8000"}
     assert client.post("/api/production/queues/long-form/pause", json={**body, "confirm": False}, headers=h).status_code == 400
     assert client.post("/api/production/queues/long-form/pause", json=body, headers=h).json()["paused"] is True
     r = client.post("/api/production/queues/long-form/jobs", headers=h,
-                    json={"operator": "op", "kind": "lf", "title": "doc", "confirm": True,
+                    json={"kind": "lf", "title": "doc", "confirm": True,
                           "steps": [{"name": "render", "weight": "HEAVY", "estimate_minutes": 20}]})
     assert r.status_code == 200 and r.json()["job"]["state"] == QUEUED
     r = client.put("/api/production/queues/config", headers=h,
-                   json={"operator": "op", "reason": "r", "confirm": True, "changes": {"max_heavy_concurrency": 2}})
+                   json={"reason": "r", "confirm": True, "changes": {"max_heavy_concurrency": 2}})
     assert r.status_code == 400
 
 

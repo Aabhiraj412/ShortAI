@@ -16,6 +16,10 @@ from backend.app.services import thumbnail_pipeline as tpl
 
 HI_ID = "UC_hindi_channel"
 NOW = datetime(2026, 11, 28, 6, 0, tzinfo=timezone.utc)        # 11:30 IST
+JOB = "cycle_20_20261128_1900"                                  # English cycle 20: 19:00 production, 20:00 publish
+ENGLISH = [{"cycle_id": "cycle_20", "name": "Cycle 20", "start_time": "19:00", "target_publish_time": "20:00"},
+           {"cycle_id": "cycle_24", "name": "Cycle 24", "start_time": "23:00", "target_publish_time": "00:00"},
+           {"cycle_id": "cycle_5", "name": "Cycle 5", "start_time": "04:00", "target_publish_time": None}]
 
 
 class Req:
@@ -82,15 +86,15 @@ def env(tmp_path):
     reg = ChannelRegistry(str(db), backend_dir=backend, oauth_factory=lambda *a: None)
     reg.ensure()
     media = tmp_path / "media"
-    good = media / "localizations" / "hi" / "cycle_1" / "hindi_cycle_1.mp4"
+    good = media / "localizations" / "hi" / JOB / f"hindi_{JOB}.mp4"
     good.parent.mkdir(parents=True)
     good.write_bytes(b"\x00" * 64)
     english = media / "productions" / "cycle_2" / "final.mp4"
     english.parent.mkdir(parents=True)
     english.write_bytes(b"\x00" * 64)
     c = sqlite3.connect(db)
-    for i, (job, path, status) in enumerate([("cycle_1", good, "QC_PASSED"), ("cycle_2", english, "QC_PASSED"),
-                                             ("cycle_3", good, "WAITING")], start=1):
+    for i, (job, path, status) in enumerate([(JOB, good, "QC_PASSED"), ("cycle_21_20261128_2000", english, "QC_PASSED"),
+                                             ("cycle_22_20261128_2100", good, "WAITING")], start=1):
         c.execute("INSERT INTO content_localizations (id, source_channel_key, source_job_id, source_identity, "
                   "target_channel_key, language, status, artifacts_json, created_at_utc, updated_at_utc) "
                   "VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -99,9 +103,12 @@ def env(tmp_path):
     c.close()
     svc = FakeService()
     clock = SimpleNamespace(t=NOW)
-    pub = hp.HindiPublisher(str(db), registry=reg, media_dir=media, service_factory=lambda: svc, quota=FakeQuota(),
-                            clock=lambda: clock.t)
-    return SimpleNamespace(pub=pub, reg=reg, db=db, svc=svc, clock=clock)
+    english_cycles = [dict(c) for c in ENGLISH]
+
+    def make():
+        return hp.HindiPublisher(str(db), registry=reg, media_dir=media, service_factory=lambda: svc, quota=FakeQuota(),
+                                 clock=lambda: clock.t, english_cycles=lambda: english_cycles)
+    return SimpleNamespace(pub=make(), make=make, reg=reg, db=db, svc=svc, clock=clock, english=english_cycles)
 
 
 def authorize(env, enabled=True):
@@ -110,32 +117,88 @@ def authorize(env, enabled=True):
               "WHERE channel_key='hi'", (HI_ID, json.dumps({"publishing_authorized": True})))
     c.commit()
     c.close()
-    env.pub.set_schedule({"enabled": enabled, "times": ["19:30"], "daily_limit": 1})
+    env.pub.set_schedule(dict(env.pub.schedule(), enabled=enabled))
 
 
 def test_queue_holds_only_qc_passed_hindi_files_once(env):
     q = env.pub.queue()
-    assert [i["source_job_id"] for i in q["items"]] == ["cycle_1"]      # English file and non-QC rows never enter
+    assert [i["source_job_id"] for i in q["items"]] == [JOB]          # English file and non-QC rows never enter
     env.pub.queue()
     assert len(env.pub.queue()["items"]) == 1
     assert q["schedule"]["enabled"] is False and not q["gates"]["can_publish"]
     assert q["items"][0]["title"].endswith("| Hinglish")
 
 
-def test_schedule_validation_slots_and_daily_limit(env):
+def test_hindi_time_defaults_to_the_english_target_time(env):
+    q = env.pub.queue()
+    row = next(r for r in q["cycle_times"] if r["cycle_id"] == "cycle_20")
+    assert row["same_as_english"] and row["effective_hindi_time"] == "20:00"
+    item = q["items"][0]
+    assert item["state"] == "SCHEDULED" and item["scheduled_at_utc"] == "2026-11-28T14:30:00Z"   # 20:00 IST
+    env.english[0]["target_publish_time"] = "21:00"                     # English changes -> Hindi follows
+    assert next(r for r in env.pub.cycle_times() if r["cycle_id"] == "cycle_20")["effective_hindi_time"] == "21:00"
+
+
+def test_independent_hindi_time_persists_and_reloads(env):
+    env.pub.set_cycle_times({"cycle_20": {"same_as_english": False, "time": "22:15"}})
+    again = env.make()                                                  # a new process reads the same config
+    row = next(r for r in again.cycle_times() if r["cycle_id"] == "cycle_20")
+    assert row["same_as_english"] is False and row["effective_hindi_time"] == "22:15"
+    assert row["english_target_publish_time"] == "20:00"                 # English untouched
+    assert again.queue()["items"][0]["scheduled_at_utc"] == "2026-11-28T16:45:00Z"   # 22:15 IST
+    env.pub.set_schedule(dict(env.pub.schedule(), enabled=True))         # other settings keep the cycle times
+    assert env.make().schedule()["cycles"]["cycle_20"]["time"] == "22:15"
     with pytest.raises(hp.PublishingError):
-        hp.validate_schedule({"times": ["25:00"]})
+        env.pub.set_cycle_times({"cycle_20": {"same_as_english": False, "time": None}})
     with pytest.raises(hp.PublishingError):
-        hp.validate_schedule({"times": ["19:30", "19:30"]})
-    with pytest.raises(hp.PublishingError):
-        hp.validate_schedule({"timezone": "UTC"})
-    authorize(env, enabled=False)
+        hp.validate_schedule({"strategy": "ANALYTICAL"})                 # reserved, not available yet
+    assert hp.validate_schedule({"times": ["19:30"]})["strategy"] == "MANUAL"   # legacy key ignored
+
+
+def test_midnight_target_is_the_next_day(env):
+    r = env.pub._plan_manual("cycle_24_20261128_2300", NOW)
+    assert hp._ts(r["at"]) == "2026-11-28T18:30:00Z"                     # 00:00 IST on 29 Nov
+    env.pub.set_cycle_times({"cycle_20": {"same_as_english": False, "time": "01:30"}})
+    r = env.pub._plan_manual(JOB, NOW)                                   # 19:00 production, Hindi 01:30
+    assert hp._ts(r["at"]) == "2026-11-28T20:00:00Z"                     # 01:30 IST on 29 Nov
+    assert env.pub._plan_manual("cycle_5_20261128_0400", NOW)["at"] is None   # English has no time: must choose
+
+
+def test_late_localization_uses_the_next_occurrence_never_now(env):
+    env.clock.t = datetime(2026, 11, 28, 15, 0, tzinfo=timezone.utc)    # 20:30 IST: the 20:00 target has passed
     item = env.pub.queue()["items"][0]
-    s = env.pub.schedule_item(item["id"])
-    assert s["state"] == "SCHEDULED" and s["scheduled_at_utc"] == "2026-11-28T14:00:00Z"   # 19:30 IST today
-    with pytest.raises(hp.PublishingError, match="configured daily time"):
-        env.pub.schedule_item(item["id"], "2026-11-28T15:00:00Z")
-    assert env.pub.unschedule(item["id"])["state"] == "DRAFT"
+    assert item["scheduled_at_utc"] == "2026-11-29T14:30:00Z"            # 20:00 IST the next day
+
+
+def test_missed_time_is_replanned_not_published(env, monkeypatch):
+    monkeypatch.setattr(hp.HindiPublisher, "_thumbnails", lambda self: [])
+    env.pub.queue()                                                      # planned 20:00 IST today; not authorized
+    env.clock.t = datetime(2026, 11, 28, 14, 40, tzinfo=timezone.utc)   # 20:10 IST: passed, never uploaded
+    env.pub.tick()
+    assert env.pub.get(1)["scheduled_at_utc"] == "2026-11-29T14:30:00Z" and not env.svc.inserted
+    authorize(env)                                                       # authorized later: uploads for the next time
+    env.clock.t = datetime(2026, 11, 29, 13, 0, tzinfo=timezone.utc)
+    env.pub.tick()
+    assert env.svc.inserted[0]["status"]["publishAt"] == "2026-11-29T14:30:00Z"
+
+
+def test_daily_limit_and_individual_timestamps(env):
+    authorize(env, enabled=False)
+    env.pub.queue()
+    with pytest.raises(hp.PublishingError, match="20 minutes"):
+        env.pub.schedule_item(1, "2026-11-28T06:05:00Z")
+    s = env.pub.schedule_item(1, "2026-11-28T10:07:00Z")                 # any individual time (future strategies)
+    assert s["scheduled_at_utc"] == "2026-11-28T10:07:00Z"
+    env.pub.set_schedule(dict(env.pub.schedule(), daily_limit=1))
+    assert env.pub.plan(env.pub.get(1), exclude=None)["at"].date().isoformat() == "2026-11-29"   # day full -> next day
+    assert env.pub.unschedule(1)["state"] == "DRAFT"
+
+
+def test_english_schedule_is_never_written():
+    src = Path(hp.__file__).read_text(encoding="utf-8")
+    for forbidden in ("activate_schedule", "save_draft", "UPDATE production_schedule", "schedule_service.activate",
+                      "publishing_ledger SET", "INSERT INTO publishing_ledger"):
+        assert forbidden not in src, forbidden
 
 
 def test_no_upload_without_every_gate(env):
@@ -156,7 +219,7 @@ def test_upload_once_with_hindi_identity(env, monkeypatch):
     res = env.pub.tick()
     assert res["upload"]["uploaded"] and len(env.svc.inserted) == 1
     body = env.svc.inserted[0]
-    assert body["status"]["privacyStatus"] == "private" and body["status"]["publishAt"] == "2026-11-28T14:00:00Z"
+    assert body["status"]["privacyStatus"] == "private" and body["status"]["publishAt"] == "2026-11-28T14:30:00Z"
     env.pub.tick()
     assert len(env.svc.inserted) == 1                                    # never uploaded twice
     assert env.pub.get(1)["state"] == "UPLOADED"

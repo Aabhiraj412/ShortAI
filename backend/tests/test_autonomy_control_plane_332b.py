@@ -527,7 +527,7 @@ def test_unauthorized_api_requests(api):
                  "/api/autonomy/audit", "/api/autonomy/kill-switches", "/api/autonomy/session", "/api/autonomy/executions"):
         assert remote.get(path).status_code == 403, path
         assert local.get(path).status_code == 200, path
-    body = {"operator": OP, "reason": "x"}
+    body = {"reason": "x"}
     assert remote.post("/api/autonomy/kill-switch/activate", json=body, headers=_h(token)).status_code == 403
     assert local.post("/api/autonomy/kill-switch/activate", json=body).status_code == 403          # no CSRF token
     assert local.get("/api/autonomy/session", headers={"Origin": "http://evil.example"}).status_code == 403
@@ -538,12 +538,12 @@ def test_unauthorized_api_requests(api):
     assert not any(re.search(r"/(run|execute|actions?)$", r.path) and "{request_id}" not in r.path
                    and "assessment" not in r.path for r in routes)
     exec_model = main.AutonomyExecuteRequest.model_fields
-    assert set(exec_model) == {"operator", "confirm"}
+    assert set(exec_model) == {"confirm"}                     # no operator identity field (removed from the API)
 
 
 def test_csrf_protection(api):
     cp, main, local, token = api
-    url, body = "/api/autonomy/kill-switch/activate", {"operator": OP, "reason": "drill"}
+    url, body = "/api/autonomy/kill-switch/activate", {"reason": "drill"}
     assert local.post(url, json=body, headers=_h("wrong-token")).status_code == 403
     assert local.post(url, json=body, headers=_h(token, Origin="http://evil.example")).status_code == 403
     assert local.post(url, json=body, headers=_h(token, **{"Sec-Fetch-Site": "cross-site"})).status_code == 403
@@ -563,25 +563,25 @@ def test_api_approval_flow_and_errors(api):
     cp, main, local, token = api
     req = proposal(cp, action="operator.notify", payload={"subject": "hi", "message": "there", "severity": "info"})
     base = f"/api/autonomy/approvals/{req['id']}"
-    assert local.post(base + "/approve", json={"operator": OP, "payload_hash": req["payload_hash"]}, headers=_h(token)).status_code == 400
+    assert local.post(base + "/approve", json={"payload_hash": req["payload_hash"]}, headers=_h(token)).status_code == 400
     assert local.post(base + "/approve", json={"operator": "autonomy-engine", "payload_hash": req["payload_hash"], "confirm": True},
-                      headers=_h(token)).status_code == 403
-    assert local.post(base + "/approve", json={"operator": OP, "payload_hash": "0" * 64, "confirm": True},
+                      headers=_h(token)).status_code == 422          # no identity can be supplied (field removed)
+    assert local.post(base + "/approve", json={"payload_hash": "0" * 64, "confirm": True},
                       headers=_h(token)).status_code == 409
-    r = local.post(base + "/approve", json={"operator": OP, "payload_hash": req["payload_hash"], "confirm": True}, headers=_h(token))
+    r = local.post(base + "/approve", json={"payload_hash": req["payload_hash"], "confirm": True}, headers=_h(token))
     assert r.status_code == 200 and r.json()["request"]["status"] == APPROVED
-    r = local.post(base + "/execute", json={"operator": OP, "confirm": True}, headers=_h(token))
+    r = local.post(base + "/execute", json={"confirm": True}, headers=_h(token))
     assert r.status_code == 200 and r.json()["executed"] is True
     assert local.get(base).json()["status"] == COMPLETED
     assert local.get("/api/autonomy/approvals?status=BOGUS").status_code == 400
     assert local.get("/api/autonomy/approvals/apr_nothere").status_code == 404
-    lv = local.put("/api/autonomy/permissions/levels", json={"operator": OP, "scope": "global", "level": "OBSERVE",
+    lv = local.put("/api/autonomy/permissions/levels", json={"scope": "global", "level": "OBSERVE",
                                                           "reason": "lower", "confirm": True}, headers=_h(token))
     assert lv.status_code == 200 and lv.json()["global_level"] == "OBSERVE"
-    sa = local.post("/api/autonomy/permissions/standing-approvals", json={"operator": OP, "action_type": "community.draft.prepare",
+    sa = local.post("/api/autonomy/permissions/standing-approvals", json={"action_type": "community.draft.prepare",
                     "max_per_day": 1, "valid_hours": 1, "reason": "x", "confirm": True}, headers=_h(token))
     assert sa.status_code == 403                                      # explicit-each action: no standing approval
-    pr = local.post("/api/autonomy/permissions/standing-approvals", json={"operator": OP, "action_type": "youtube.video.publish",
+    pr = local.post("/api/autonomy/permissions/standing-approvals", json={"action_type": "youtube.video.publish",
                     "max_per_day": 1, "valid_hours": 1, "reason": "x", "confirm": True}, headers=_h(token))
     assert pr.status_code == 403
     audit = local.get("/api/autonomy/audit?verify=true").json()
@@ -599,7 +599,7 @@ def test_api_fails_closed_when_database_missing(tmp_path, monkeypatch):
     st = local.get("/api/autonomy/status").json()
     assert st["database_available"] is False and st["kill_switches"]["any_active"] and not st["execution_permitted"]
     token = local.get("/api/autonomy/session").json()["csrf_token"]
-    r = local.post("/api/autonomy/approvals/apr_0123456789abcdef/execute", json={"operator": OP, "confirm": True}, headers=_h(token))
+    r = local.post("/api/autonomy/approvals/apr_0123456789abcdef/execute", json={"confirm": True}, headers=_h(token))
     assert r.status_code == 503 and "blocked" in r.json()["detail"]
     assert not Path(c.db_path).exists()
 
@@ -614,8 +614,9 @@ def test_dashboard_autonomy_section():
     for tab in ("overview", "schedule", "queue", "ops", "controls", "prodconfig", "processes", "autonomy"):
         assert f'data-tab="{tab}"' in html and f'id="tab-{tab}"' in html
     for el in ("pillAutonomy", "autoEnabled", "autoGlobal", "autoKill", "autoKillBody", "autoLevelsBody", "autoQueueBody",
-               "autoActionsBody", "autoFailuresBody", "autoPermBody", "autoAuditBody", "autoStandingBody", "autoOperator"):
+               "autoActionsBody", "autoFailuresBody", "autoPermBody", "autoAuditBody", "autoStandingBody"):
         assert f'id="{el}"' in html, el
+    assert 'id="autoOperator"' not in html                    # the Operator field was removed (owner request)
     js = "\n".join(re.findall(r"<script>([\s\S]*?)</script>", html))
     names = re.findall(r"^\s*(?:async\s+)?function\s+(\w+)", js, flags=re.M)
     assert len(names) == len(set(names)), "duplicate dashboard function names"

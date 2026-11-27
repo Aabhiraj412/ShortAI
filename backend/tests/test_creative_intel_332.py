@@ -263,15 +263,15 @@ def test_intelligence_and_experiment_api(tmp_path, monkeypatch):
     assert remote.get("/api/intelligence/topic-creative-rendering").status_code == 403
     view = local.get("/api/intelligence/topic-creative-rendering").json()
     assert set(view) == {"topic", "creative", "rendering", "analytics", "providers", "visual"} and "demand_signals" in view["topic"]["flags"]
-    body = {"operator": "abhi", "dimension": "hook_type", "arms": ["contradiction", "scale"], "hypothesis": "numbers win"}
+    body = {"dimension": "hook_type", "arms": ["contradiction", "scale"], "hypothesis": "numbers win"}
     assert local.post("/api/creative/experiments", json=body).status_code == 403                    # no CSRF
     assert local.post("/api/creative/experiments", json=body | {"dimension": "music"}, headers=h).status_code == 422
     assert local.post("/api/creative/experiments", json=body | {"arms": ["contradiction", "x"]}, headers=h).status_code == 400
-    assert local.post("/api/creative/experiments", json=body | {"operator": "autonomy-engine"}, headers=h).status_code in (400, 403)
+    assert local.post("/api/creative/experiments", json=body | {"operator": "abhi"}, headers=h).status_code == 422   # no operator field
     e = local.post("/api/creative/experiments", json=body, headers=h).json()
     assert e["status"] == "DRAFT"
     url = f"/api/creative/experiments/{e['id']}/status"
-    assert local.post(url, json={"operator": "abhi", "status": "DRAFT"}, headers=h).status_code == 422
-    assert local.post(url, json={"operator": "abhi", "status": "ACTIVE"}, headers=h).json()["status"] == "ACTIVE"
-    assert local.post("/api/creative/experiments/exp_zzzz/status", json={"operator": "abhi", "status": "PAUSED"},
+    assert local.post(url, json={"status": "DRAFT"}, headers=h).status_code == 422
+    assert local.post(url, json={"status": "ACTIVE"}, headers=h).json()["status"] == "ACTIVE"
+    assert local.post("/api/creative/experiments/exp_zzzz/status", json={"status": "PAUSED"},
                       headers=h).status_code == 404

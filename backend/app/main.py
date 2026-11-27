@@ -2175,9 +2175,14 @@ async def _autonomy_call(fn, *args, **kwargs):
         raise HTTPException(status_code=503, detail="Autonomy control plane unavailable; autonomous execution stays blocked.")
 
 
+# The dashboard asks for no operator name: a write that passed loopback, same-origin and CSRF checks is attributed to
+# this neutral local identity in every audit record (it is a human identity for the control plane: machine
+# identities still cannot approve or change permissions).
+DASHBOARD_ACTOR = "local-dashboard"
+
+
 class _AutonomyBody(BaseModel):
     model_config = {"extra": "forbid"}
-    operator: str = Field(min_length=1, max_length=64)
 
 
 class AutonomyDecisionRequest(_AutonomyBody):
@@ -2276,19 +2281,19 @@ async def api_autonomy_audit(limit: int = 100, before_seq: Optional[int] = None,
 async def api_autonomy_approve(request_id: str, req: AutonomyApproveRequest, _: None = Depends(require_local_control),
                                __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _autonomy_call(lambda: _autonomy().approve(request_id, req.operator, req.payload_hash, req.reason))
+    return await _autonomy_call(lambda: _autonomy().approve(request_id, DASHBOARD_ACTOR, req.payload_hash, req.reason))
 
 
 @app.post("/api/autonomy/approvals/{request_id}/reject")
 async def api_autonomy_reject(request_id: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
                               __: None = Depends(require_autonomy_write)):
-    return await _autonomy_call(lambda: _autonomy().reject(request_id, req.operator, req.reason))
+    return await _autonomy_call(lambda: _autonomy().reject(request_id, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autonomy/approvals/{request_id}/cancel")
 async def api_autonomy_cancel(request_id: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
                               __: None = Depends(require_autonomy_write)):
-    return await _autonomy_call(lambda: _autonomy().cancel(request_id, req.operator, req.reason))
+    return await _autonomy_call(lambda: _autonomy().cancel(request_id, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autonomy/approvals/{request_id}/execute")
@@ -2301,7 +2306,7 @@ async def api_autonomy_execute(request_id: str, req: AutonomyExecuteRequest, _: 
 
     def _run():
         from backend.app.autonomy.control_plane import PermissionDenied
-        op = validate_operator(req.operator)
+        op = validate_operator(DASHBOARD_ACTOR)
         cp = _autonomy()
         if str(cp.get_request(request_id).get("action_type") or "").startswith("production."):
             # Stage 3.36: production dispatches run only inside the scheduler daemon's Autopilot controller.
@@ -2317,7 +2322,7 @@ async def api_autonomy_execute(request_id: str, req: AutonomyExecuteRequest, _: 
 async def api_autonomy_set_level(req: AutonomyLevelRequest, _: None = Depends(require_local_control),
                                  __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _autonomy_call(lambda: _autonomy().set_level(req.scope, req.level, req.operator, req.reason))
+    return await _autonomy_call(lambda: _autonomy().set_level(req.scope, req.level, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autonomy/permissions/standing-approvals")
@@ -2325,20 +2330,20 @@ async def api_autonomy_grant_standing(req: AutonomyStandingRequest, _: None = De
                                       __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
     return await _autonomy_call(lambda: _autonomy().grant_standing_approval(
-        req.action_type, req.operator, req.reason, max_per_day=req.max_per_day, valid_hours=req.valid_hours))
+        req.action_type, DASHBOARD_ACTOR, req.reason, max_per_day=req.max_per_day, valid_hours=req.valid_hours))
 
 
 @app.post("/api/autonomy/permissions/standing-approvals/{action_type}/revoke")
 async def api_autonomy_revoke_standing(action_type: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
                                        __: None = Depends(require_autonomy_write)):
-    return await _autonomy_call(lambda: _autonomy().revoke_standing_approval(action_type, req.operator, req.reason))
+    return await _autonomy_call(lambda: _autonomy().revoke_standing_approval(action_type, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autonomy/kill-switch/activate")
 async def api_autonomy_kill_activate(req: AutonomyKillSwitchRequest, _: None = Depends(require_local_control),
                                      __: None = Depends(require_autonomy_write)):
     """Stops AUTONOMOUS execution only. Production (scheduler, cycles, workers, publishing) is not affected."""
-    return await _autonomy_call(lambda: _autonomy().set_dashboard_kill_switch(True, req.operator, req.reason))
+    return await _autonomy_call(lambda: _autonomy().set_dashboard_kill_switch(True, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autonomy/kill-switch/deactivate")
@@ -2346,7 +2351,7 @@ async def api_autonomy_kill_deactivate(req: AutonomyKillSwitchRequest, _: None =
                                        __: None = Depends(require_autonomy_write)):
     if (req.confirm_text or "").strip() != "RESUME AUTONOMY":
         raise HTTPException(status_code=400, detail='Type "RESUME AUTONOMY" to deactivate the dashboard kill switch.')
-    return await _autonomy_call(lambda: _autonomy().set_dashboard_kill_switch(False, req.operator, req.reason))
+    return await _autonomy_call(lambda: _autonomy().set_dashboard_kill_switch(False, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autonomy/assessment/run")
@@ -2358,7 +2363,7 @@ async def api_autonomy_assessment(req: _AutonomyBody, _: None = Depends(require_
     from backend.app.autonomy.engine import run_assessment
 
     def _run():
-        validate_operator(req.operator)
+        validate_operator(DASHBOARD_ACTOR)
         return run_assessment(_autonomy())
     return await _autonomy_call(_run)
 
@@ -2417,7 +2422,7 @@ async def api_recommendations_run(req: RecommendationRunRequest, _: None = Depen
     from backend.app.autonomy.control_plane import validate_operator
 
     def _run():
-        op = validate_operator(req.operator)
+        op = validate_operator(DASHBOARD_ACTOR)
         return _recommendations().run(triggered_by=f"operator:{op}", force=req.force)
     return await _autonomy_call(_run)
 
@@ -2429,26 +2434,26 @@ async def _rec_status(rec_id: str, status: str, operator: str, reason: Optional[
 @app.post("/api/recommendations/{rec_id}/acknowledge")
 async def api_recommendation_ack(rec_id: str, req: RecommendationNoteRequest, _: None = Depends(require_local_control),
                                  __: None = Depends(require_autonomy_write)):
-    return await _rec_status(rec_id, "ACKNOWLEDGED", req.operator, reason=req.note)
+    return await _rec_status(rec_id, "ACKNOWLEDGED", DASHBOARD_ACTOR, reason=req.note)
 
 
 @app.post("/api/recommendations/{rec_id}/approve")
 async def api_recommendation_approve(rec_id: str, req: RecommendationNoteRequest, _: None = Depends(require_local_control),
                                      __: None = Depends(require_autonomy_write)):
     """Records the operator's agreement with the suggestion. Nothing is executed."""
-    return await _rec_status(rec_id, "APPROVED", req.operator, reason=req.note)
+    return await _rec_status(rec_id, "APPROVED", DASHBOARD_ACTOR, reason=req.note)
 
 
 @app.post("/api/recommendations/{rec_id}/reject")
 async def api_recommendation_reject(rec_id: str, req: RecommendationRejectRequest, _: None = Depends(require_local_control),
                                     __: None = Depends(require_autonomy_write)):
-    return await _rec_status(rec_id, "REJECTED", req.operator, reason=req.reason)
+    return await _rec_status(rec_id, "REJECTED", DASHBOARD_ACTOR, reason=req.reason)
 
 
 @app.post("/api/recommendations/{rec_id}/resolve")
 async def api_recommendation_resolve(rec_id: str, req: RecommendationResolveRequest, _: None = Depends(require_local_control),
                                      __: None = Depends(require_autonomy_write)):
-    return await _rec_status(rec_id, "RESOLVED", req.operator, evidence=req.evidence)
+    return await _rec_status(rec_id, "RESOLVED", DASHBOARD_ACTOR, evidence=req.evidence)
 
 
 # -- Stage 3.32D self-healing operations ------------------------------------------------------------------------
@@ -2502,7 +2507,7 @@ async def api_self_healing_scan(req: SelfHealingScanRequest, _: None = Depends(r
     from backend.app.autonomy.control_plane import validate_operator
 
     def _scan():
-        op = validate_operator(req.operator)
+        op = validate_operator(DASHBOARD_ACTOR)
         return _self_healing().scan(triggered_by=f"operator:{op}", force=req.force)
     return await _autonomy_call(_scan)
 
@@ -2510,13 +2515,13 @@ async def api_self_healing_scan(req: SelfHealingScanRequest, _: None = Depends(r
 @app.post("/api/self-healing/recoveries/{recovery_id}/approve")
 async def api_self_healing_approve(recovery_id: str, req: AutonomyApproveRequest, _: None = Depends(require_local_control),
                                    __: None = Depends(require_autonomy_write)):
-    return await _autonomy_call(lambda: _self_healing().approve(recovery_id, req.operator, req.payload_hash, req.reason))
+    return await _autonomy_call(lambda: _self_healing().approve(recovery_id, DASHBOARD_ACTOR, req.payload_hash, req.reason))
 
 
 @app.post("/api/self-healing/recoveries/{recovery_id}/reject")
 async def api_self_healing_reject(recovery_id: str, req: AutonomyDecisionRequest, _: None = Depends(require_local_control),
                                   __: None = Depends(require_autonomy_write)):
-    return await _autonomy_call(lambda: _self_healing().reject(recovery_id, req.operator, req.reason))
+    return await _autonomy_call(lambda: _self_healing().reject(recovery_id, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/self-healing/recoveries/{recovery_id}/execute")
@@ -2524,7 +2529,7 @@ async def api_self_healing_execute(recovery_id: str, req: _AutonomyBody, _: None
                                    __: None = Depends(require_autonomy_write)):
     """Runs one APPROVED recovery through ControlPlane.execute (every 3.32B gate) after re-checking job and resource
     preconditions. Blocked while any kill switch is active or the self_healing level is below APPROVED_EXECUTION."""
-    return await _autonomy_call(lambda: _self_healing().execute(recovery_id, req.operator))
+    return await _autonomy_call(lambda: _self_healing().execute(recovery_id, DASHBOARD_ACTOR))
 
 
 # -- Stage 3.32G Controlled Autopilot -------------------------------------------------------------------------------
@@ -2573,14 +2578,14 @@ async def api_autopilot_controller(_: None = Depends(require_local_control)):
 async def api_autopilot_controller_start(req: AutopilotControllerRequest, _: None = Depends(require_local_control),
                                          __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _autonomy_call(lambda: _production_controller().request_start(req.operator, req.reason))
+    return await _autonomy_call(lambda: _production_controller().request_start(DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/autopilot/controller/stop")
 async def api_autopilot_controller_stop(req: AutopilotControllerRequest, _: None = Depends(require_local_control),
                                         __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _autonomy_call(lambda: _production_controller().request_stop(req.operator, req.reason))
+    return await _autonomy_call(lambda: _production_controller().request_stop(DASHBOARD_ACTOR, req.reason))
 
 
 # -- Stage 4.01: channel registry (English master, Hindi localized) -------------------------------------------
@@ -2714,10 +2719,22 @@ async def api_localization_retry(loc_id: int, req: LocalizationRetryRequest, _: 
 # -- Hindi publishing queue and schedule (separate from the English ledger; Hindi credentials only) ---------------
 class HindiScheduleRequest(BaseModel):
     model_config = {"extra": "forbid"}
+    strategy: Literal["MANUAL"] = "MANUAL"        # future: an analytical strategy (per-video timestamps)
     enabled: bool = False
-    times: List[str] = Field(default_factory=lambda: ["19:30"], max_length=6)
-    daily_limit: int = 1
+    daily_limit: int = 24
     max_attempts: int = 3
+    confirm: bool = False
+
+
+class HindiCycleTime(BaseModel):
+    model_config = {"extra": "forbid"}
+    same_as_english: bool = True
+    time: Optional[str] = Field(default=None, max_length=5)
+
+
+class HindiCycleTimesRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    cycles: Dict[str, HindiCycleTime] = Field(max_length=96)
     confirm: bool = False
 
 
@@ -2759,9 +2776,33 @@ async def api_hindi_schedule(req: HindiScheduleRequest, _: None = Depends(requir
     """The Hindi channel's own schedule. Enabling it never authorizes publishing (a separate operator flag)."""
     from backend.app.localization.publishing import get_publisher
     _require_confirm(req.confirm)
-    cfg = req.model_dump(exclude={"confirm"})
-    cfg["timezone"] = "Asia/Kolkata"
-    return await _hindi_call(lambda: get_publisher().set_schedule(cfg))
+
+    def go():
+        pub = get_publisher()
+        return pub.set_schedule(dict(pub.schedule(), **req.model_dump(exclude={"confirm"})))   # cycle times kept
+    return await _hindi_call(go)
+
+
+@app.get("/api/hindi-publishing/cycle-times")
+async def api_hindi_cycle_times(_: None = Depends(require_local_control)):
+    """Per production cycle: English Target Publish Time, the Hindi setting and the effective Hindi time."""
+    from backend.app.localization.publishing import get_publisher
+    return await _hindi_call(lambda: {"cycles": get_publisher().cycle_times()})
+
+
+@app.post("/api/hindi-publishing/cycle-times")
+async def api_hindi_cycle_times_save(req: HindiCycleTimesRequest, _: None = Depends(require_local_control),
+                                     __: None = Depends(require_autonomy_write)):
+    """Saves Hindi publish times per production cycle (Hindi channel config only; the English schedule, its revision
+    and its target times are never written)."""
+    from backend.app.localization.publishing import get_publisher
+    _require_confirm(req.confirm)
+
+    def go():
+        pub = get_publisher()
+        pub.set_cycle_times({k: v.model_dump() for k, v in req.cycles.items()})
+        return {"cycles": pub.cycle_times()}
+    return await _hindi_call(go)
 
 
 @app.post("/api/hindi-publishing/{pid}/metadata")
@@ -2865,14 +2906,14 @@ async def api_production_queues(_: None = Depends(require_local_control)):
 async def api_long_form_pause(req: ProductionQueueReasonRequest, _: None = Depends(require_local_control),
                               __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _coordinator_call(lambda: _coordinator().set_queue_paused("LONG_FORM", True, req.operator, req.reason))
+    return await _coordinator_call(lambda: _coordinator().set_queue_paused("LONG_FORM", True, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/production/queues/long-form/resume")
 async def api_long_form_resume(req: ProductionQueueReasonRequest, _: None = Depends(require_local_control),
                                __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _coordinator_call(lambda: _coordinator().set_queue_paused("LONG_FORM", False, req.operator, req.reason))
+    return await _coordinator_call(lambda: _coordinator().set_queue_paused("LONG_FORM", False, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/production/queues/long-form/jobs")
@@ -2881,21 +2922,21 @@ async def api_long_form_enqueue(req: LongFormEnqueueRequest, _: None = Depends(r
     _require_confirm(req.confirm)
     steps = [s.model_dump() for s in req.steps]
     return await _coordinator_call(lambda: _coordinator().enqueue(kind=req.kind, title=req.title, steps=steps,
-                                                                  priority=req.priority, requested_by=req.operator))
+                                                                  priority=req.priority, requested_by=DASHBOARD_ACTOR))
 
 
 @app.post("/api/production/queues/long-form/jobs/{job_id}/cancel")
 async def api_long_form_cancel(job_id: str, req: ProductionQueueReasonRequest, _: None = Depends(require_local_control),
                                __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _coordinator_call(lambda: _coordinator().cancel(job_id[:80], req.operator, req.reason))
+    return await _coordinator_call(lambda: _coordinator().cancel(job_id[:80], DASHBOARD_ACTOR, req.reason))
 
 
 @app.put("/api/production/queues/config")
 async def api_coordinator_config(req: CoordinatorConfigRequest, _: None = Depends(require_local_control),
                                  __: None = Depends(require_autonomy_write)):
     _require_confirm(req.confirm)
-    return await _coordinator_call(lambda: _coordinator().set_config(req.changes, req.operator, req.reason))
+    return await _coordinator_call(lambda: _coordinator().set_config(req.changes, DASHBOARD_ACTOR, req.reason))
 
 
 # -- Stage 3.32H/I/J: operations, phased activation, operational reports ----------------------------------------
@@ -2989,7 +3030,7 @@ async def api_autopilot_activation_advance(req: ActivationAdvanceRequest, _: Non
                                            __: None = Depends(require_autonomy_write)):
     """Advances ONE phase after re-validating readiness. RECOMMEND and above need the exact authorization phrase;
     restricted execution also needs the operator-created autonomy_startup.json. Never grants standing approvals."""
-    return await _autonomy_call(lambda: _activation().advance(req.target, req.operator, req.reason, confirm=req.confirm,
+    return await _autonomy_call(lambda: _activation().advance(req.target, DASHBOARD_ACTOR, req.reason, confirm=req.confirm,
                                                               authorization=req.authorization,
                                                               authorized_actions=req.authorized_actions))
 
@@ -2997,7 +3038,7 @@ async def api_autopilot_activation_advance(req: ActivationAdvanceRequest, _: Non
 @app.post("/api/autopilot/activation/retreat")
 async def api_autopilot_activation_retreat(req: ActivationRetreatRequest, _: None = Depends(require_local_control),
                                            __: None = Depends(require_autonomy_write)):
-    return await _autonomy_call(lambda: _activation().retreat(req.target, req.operator, req.reason))
+    return await _autonomy_call(lambda: _activation().retreat(req.target, DASHBOARD_ACTOR, req.reason))
 
 
 @app.get("/api/autopilot/reports")
@@ -3021,7 +3062,7 @@ async def api_autopilot_report(kind: str, key: str, _: None = Depends(require_lo
 async def api_autopilot_report_generate(req: ReportGenerateRequest, _: None = Depends(require_local_control),
                                         __: None = Depends(require_autonomy_write)):
     from backend.app.autonomy.control_plane import validate_operator
-    op = await _autonomy_call(validate_operator, req.operator)
+    op = await _autonomy_call(validate_operator, DASHBOARD_ACTOR)
     return await _autonomy_call(lambda: _reports().generate(req.kind, req.key, generated_by=op, force=req.force))
 
 
@@ -3121,7 +3162,7 @@ async def api_creative_experiment_create(req: CreativeExperimentCreate, _: None 
     """Creates a DRAFT experiment (nothing changes until it is activated)."""
     from backend.app.autonomy.control_plane import validate_operator
     from backend.app.creative_intel.store import CreativeStoreError
-    op = await _autonomy_call(validate_operator, req.operator)
+    op = await _autonomy_call(validate_operator, DASHBOARD_ACTOR)
     try:
         return await asyncio.to_thread(_creative_store().create_experiment, req.dimension, req.arms, req.hypothesis, op)
     except CreativeStoreError as exc:
@@ -3136,7 +3177,7 @@ async def api_creative_experiment_status(exp_id: str, req: CreativeExperimentSta
     from backend.app.creative_intel.store import CreativeStoreError
     if not re.fullmatch(r"exp_[0-9a-f]{10}", exp_id or ""):
         raise HTTPException(status_code=404, detail="experiment not found")
-    op = await _autonomy_call(validate_operator, req.operator)
+    op = await _autonomy_call(validate_operator, DASHBOARD_ACTOR)
     try:
         return await asyncio.to_thread(_creative_store().set_experiment_status, exp_id, req.status, op)
     except CreativeStoreError as exc:
@@ -3150,7 +3191,7 @@ async def api_autopilot_propose(rec_id: str, req: AutopilotProposeRequest, _: No
     for the action's category). Approval and execution stay in Autonomy Control."""
     if not re.fullmatch(r"rec_[0-9a-f]{16}", rec_id or ""):
         raise HTTPException(status_code=404, detail="recommendation not found")
-    return await _autonomy_call(lambda: _autopilot().propose_from_recommendation(rec_id, req.action_type, req.operator))
+    return await _autonomy_call(lambda: _autopilot().propose_from_recommendation(rec_id, req.action_type, DASHBOARD_ACTOR))
 
 
 # -- Stage 3.32E Community post drafts ---------------------------------------------------------------------------
@@ -3189,11 +3230,9 @@ def _community_draft_id(draft_id: str) -> str:
 
 
 class _CommunityBody(BaseModel):
-    """Community writes. ``operator`` is optional: the dashboard sends none, and the action is attributed to the
-    neutral identity ``local-dashboard`` (an unauthenticated local dashboard request that passed loopback,
-    same-origin and CSRF checks). A supplied label is validated and recorded, but it is not authentication."""
+    """Community writes. No operator name: the action is attributed to ``local-dashboard`` (a local dashboard request
+    that passed loopback, same-origin and CSRF checks)."""
     model_config = {"extra": "forbid"}
-    operator: Optional[str] = Field(default=None, max_length=64)
 
 
 class CommunityVersionedRequest(_CommunityBody):
@@ -3263,8 +3302,8 @@ async def api_community_schedule_preview(timezone: str, generation_time: str, ca
 @app.post("/api/community/schedule")
 async def api_community_schedule_update(req: CommunityScheduleRequest, _: None = Depends(require_local_control),
                                         __: None = Depends(require_autonomy_write)):
-    changes = req.model_dump(exclude={"operator"}, exclude_none=True)
-    return await _community_call(lambda: _community().update_config(req.operator, changes))
+    changes = req.model_dump(exclude_none=True)
+    return await _community_call(lambda: _community().update_config(DASHBOARD_ACTOR, changes))
 
 
 @app.get("/api/community/drafts")
@@ -3336,28 +3375,28 @@ async def api_community_history(limit: int = 50, _: None = Depends(require_local
 @app.post("/api/community/generate")
 async def api_community_generate(req: _CommunityBody, _: None = Depends(require_local_control),
                                  __: None = Depends(require_autonomy_write)):
-    return await _community_call(lambda: _community().generate_manual(req.operator))
+    return await _community_call(lambda: _community().generate_manual(DASHBOARD_ACTOR))
 
 
 @app.post("/api/community/drafts/{draft_id}/edit")
 async def api_community_edit(draft_id: str, req: CommunityEditRequest, _: None = Depends(require_local_control),
                              __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _community().edit(did, req.operator, req.version, req.text))
+    return await _community_call(lambda: _community().edit(did, DASHBOARD_ACTOR, req.version, req.text))
 
 
 @app.post("/api/community/drafts/{draft_id}/regenerate-text")
 async def api_community_regen_text(draft_id: str, req: CommunityVersionedRequest, _: None = Depends(require_local_control),
                                    __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _community().regenerate_text(did, req.operator, req.version))
+    return await _community_call(lambda: _community().regenerate_text(did, DASHBOARD_ACTOR, req.version))
 
 
 @app.post("/api/community/drafts/{draft_id}/regenerate-image")
 async def api_community_regen_image(draft_id: str, req: CommunityImageRequest, _: None = Depends(require_local_control),
                                     __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _community().regenerate_image(did, req.operator, req.version, req.choice))
+    return await _community_call(lambda: _community().regenerate_image(did, DASHBOARD_ACTOR, req.version, req.choice))
 
 
 @app.post("/api/community/drafts/{draft_id}/approve")
@@ -3365,7 +3404,7 @@ async def api_community_approve(draft_id: str, req: CommunityApproveRequest, _: 
                                 __: None = Depends(require_autonomy_write)):
     """Approves the DRAFT only. Nothing is published, uploaded or sent to YouTube."""
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _community().approve(did, req.operator, req.version, req.acknowledge_warnings,
+    return await _community_call(lambda: _community().approve(did, DASHBOARD_ACTOR, req.version, req.acknowledge_warnings,
                                                               req.reason))
 
 
@@ -3373,14 +3412,14 @@ async def api_community_approve(draft_id: str, req: CommunityApproveRequest, _: 
 async def api_community_reject(draft_id: str, req: CommunityRejectRequest, _: None = Depends(require_local_control),
                                __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _community().reject(did, req.operator, req.version, req.reason))
+    return await _community_call(lambda: _community().reject(did, DASHBOARD_ACTOR, req.version, req.reason))
 
 
 @app.post("/api/community/drafts/{draft_id}/archive")
 async def api_community_archive(draft_id: str, req: CommunityArchiveRequest, _: None = Depends(require_local_control),
                                 __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _community().archive(did, req.operator, req.version, req.reason))
+    return await _community_call(lambda: _community().archive(did, DASHBOARD_ACTOR, req.version, req.reason))
 
 
 # -- Stage 3.32F Community publishing (fail closed; OFF by default) ------------------------------------------------
@@ -3440,27 +3479,27 @@ async def api_community_publishing(_: None = Depends(require_local_control)):
 async def api_community_capability_check(req: _CommunityBody, _: None = Depends(require_local_control),
                                          __: None = Depends(require_autonomy_write)):
     """Read-only YouTube probe (channels.list + posts.list, 1 quota unit each). Never uploads or posts."""
-    return await _community_call(lambda: _publishing().check_capability(req.operator))
+    return await _community_call(lambda: _publishing().check_capability(DASHBOARD_ACTOR))
 
 
 @app.post("/api/community/publishing/enabled")
 async def api_community_publishing_enabled(req: CommunityPublishingEnableRequest, _: None = Depends(require_local_control),
                                            __: None = Depends(require_autonomy_write)):
-    return await _community_call(lambda: _publishing().set_enabled(req.operator, req.enabled, req.confirm))
+    return await _community_call(lambda: _publishing().set_enabled(DASHBOARD_ACTOR, req.enabled, req.confirm))
 
 
 @app.post("/api/community/drafts/{draft_id}/publish")
 async def api_community_publish(draft_id: str, req: CommunityPublishRequest, _: None = Depends(require_local_control),
                                 __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _publishing().publish(did, req.operator, req.version, req.confirm))
+    return await _community_call(lambda: _publishing().publish(did, DASHBOARD_ACTOR, req.version, req.confirm))
 
 
 @app.post("/api/community/drafts/{draft_id}/authorize-publication")
 async def api_community_authorize(draft_id: str, req: CommunityAuthorizeRequest, _: None = Depends(require_local_control),
                                   __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _publishing().authorize(did, req.operator, req.version, req.confirm,
+    return await _community_call(lambda: _publishing().authorize(did, DASHBOARD_ACTOR, req.version, req.confirm,
                                                                  req.publish_at))
 
 
@@ -3469,42 +3508,42 @@ async def api_community_cancel_publication(publication_id: str, req: CommunityCa
                                            _: None = Depends(require_local_control),
                                            __: None = Depends(require_autonomy_write)):
     pid = _community_pub_id(publication_id)
-    return await _community_call(lambda: _publishing().cancel_publication(pid, req.operator, req.reason))
+    return await _community_call(lambda: _publishing().cancel_publication(pid, DASHBOARD_ACTOR, req.reason))
 
 
 @app.post("/api/community/drafts/{draft_id}/handoff")
 async def api_community_handoff(draft_id: str, req: _CommunityBody, _: None = Depends(require_local_control),
                                 __: None = Depends(require_autonomy_write)):
     did = _community_draft_id(draft_id)
-    return await _community_call(lambda: _publishing().prepare_handoff(did, req.operator))
+    return await _community_call(lambda: _publishing().prepare_handoff(did, DASHBOARD_ACTOR))
 
 
 @app.post("/api/community/publications/{publication_id}/reconcile")
 async def api_community_reconcile(publication_id: str, req: _CommunityBody, _: None = Depends(require_local_control),
                                   __: None = Depends(require_autonomy_write)):
     pid = _community_pub_id(publication_id)
-    return await _community_call(lambda: _publishing().reconcile(pid, req.operator))
+    return await _community_call(lambda: _publishing().reconcile(pid, DASHBOARD_ACTOR))
 
 
 @app.post("/api/community/publications/{publication_id}/resolve")
 async def api_community_resolve(publication_id: str, req: CommunityResolveRequest, _: None = Depends(require_local_control),
                                 __: None = Depends(require_autonomy_write)):
     pid = _community_pub_id(publication_id)
-    return await _community_call(lambda: _publishing().resolve_uncertain(pid, req.operator, req.outcome, req.reason, req.post_id))
+    return await _community_call(lambda: _publishing().resolve_uncertain(pid, DASHBOARD_ACTOR, req.outcome, req.reason, req.post_id))
 
 
 @app.post("/api/community/publications/{publication_id}/manual-posted")
 async def api_community_manual_posted(publication_id: str, req: CommunityManualPostedRequest,
                                       _: None = Depends(require_local_control), __: None = Depends(require_autonomy_write)):
     pid = _community_pub_id(publication_id)
-    return await _community_call(lambda: _publishing().report_manual_post(pid, req.operator, req.post_url))
+    return await _community_call(lambda: _publishing().report_manual_post(pid, DASHBOARD_ACTOR, req.post_url))
 
 
 @app.post("/api/community/publications/{publication_id}/cancel-handoff")
 async def api_community_cancel_handoff(publication_id: str, req: _CommunityBody, _: None = Depends(require_local_control),
                                        __: None = Depends(require_autonomy_write)):
     pid = _community_pub_id(publication_id)
-    return await _community_call(lambda: _publishing().cancel_handoff(pid, req.operator))
+    return await _community_call(lambda: _publishing().cancel_handoff(pid, DASHBOARD_ACTOR))
 
 
 @app.get("/api/youtube/quota")
@@ -3563,6 +3602,48 @@ async def api_junk_cleaner_dry_run(_: None = Depends(require_local_control)):
     from backend.app.services.junk_cleaner import JunkCleaner
     rec = await asyncio.to_thread(lambda: JunkCleaner().run(trigger="dashboard_manual", live=False))
     return {k: v for k, v in rec.items() if k != "eligible_files"} | {"eligible_files_sample": rec.get("eligible_files", [])[:50]}
+
+
+class JunkRetentionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    retention_days: Dict[str, Optional[int]] = Field(default_factory=dict, max_length=40)
+    protected_tests: Optional[List[str]] = Field(default=None, max_length=200)
+    confirm: bool = False
+
+
+class JunkLiveRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    authorization: str = Field(min_length=8, max_length=64)   # id of a successful dry run from the last hour
+    confirm: bool = False
+
+
+@app.post("/api/junk-cleaner/retention")
+async def api_junk_cleaner_retention(req: JunkRetentionRequest, _: None = Depends(require_local_control),
+                                     __: None = Depends(require_autonomy_write)):
+    """Saves per-category retention (days, or null = protected) and the protected test folders. Fixed categories
+    (user media, manifests, quarantine, unknown, unpublished deliverables) cannot be configured. Nothing is moved."""
+    from backend.app.services import junk_cleaner
+    _require_confirm(req.confirm)
+    cfg = {"retention_days": req.retention_days}
+    if req.protected_tests is not None:
+        cfg["protected_tests"] = req.protected_tests
+    try:
+        return await asyncio.to_thread(lambda: junk_cleaner.save_lifecycle(cfg))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300])
+
+
+@app.post("/api/junk-cleaner/live")
+async def api_junk_cleaner_live(req: JunkLiveRequest, _: None = Depends(require_local_control),
+                                __: None = Depends(require_autonomy_write)):
+    """Live cleanup for ONE run: explicit confirmation plus a successful dry run from the last hour with the same
+    retention policy, no active production job, a fresh YouTube check of every deliverable, and only reversible
+    quarantine moves. Never scheduled."""
+    from backend.app.services.junk_cleaner import JunkCleaner
+    _require_confirm(req.confirm)
+    rec = await asyncio.to_thread(lambda: JunkCleaner().run(trigger="dashboard_live", live=True, confirm=True,
+                                                            authorization=req.authorization))
+    return {k: v for k, v in rec.items() if k != "eligible_files"}
 
 
 @app.get("/api/providers/health")

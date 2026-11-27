@@ -866,18 +866,18 @@ def test_api_guards(world, monkeypatch):
     main, svc, local, h = _client(world, monkeypatch)
     remote = TestClient(main.app)
     assert remote.get("/api/community").status_code == 403                                   # not loopback
-    assert remote.post("/api/community/generate", json={"operator": OP}, headers=h).status_code == 403
-    assert local.post("/api/community/generate", json={"operator": OP}).status_code == 403   # no CSRF token
-    assert local.post("/api/community/generate", content=json.dumps({"operator": OP}),
+    assert remote.post("/api/community/generate", json={}, headers=h).status_code == 403
+    assert local.post("/api/community/generate", json={}).status_code == 403   # no CSRF token
+    assert local.post("/api/community/generate", content=json.dumps({}),
                       headers={**h, "Content-Type": "text/plain"}).status_code == 415
-    assert local.post("/api/community/generate", json={"operator": OP, "publish": True}, headers=h).status_code == 422
-    assert local.post("/api/community/generate", json={"operator": OP},
+    assert local.post("/api/community/generate", json={"publish": True}, headers=h).status_code == 422
+    assert local.post("/api/community/generate", json={},
                       headers={**h, "Origin": "https://evil.example"}).status_code == 403
-    assert local.post("/api/community/generate", json={"operator": OP},
+    assert local.post("/api/community/generate", json={},
                       headers={**h, "Sec-Fetch-Site": "cross-site"}).status_code == 403
-    assert local.post("/api/community/generate", json={"operator": "system"}, headers=h).status_code == 403
-    assert local.post("/api/community/schedule", json={"operator": OP, "command": "rm"}, headers=h).status_code == 422
-    assert local.post("/api/community/schedule", json={"operator": OP, "generation_time": "9am"}, headers=h).status_code == 400
+    assert local.post("/api/community/generate", json={"operator": "system"}, headers=h).status_code == 422   # no identity field
+    assert local.post("/api/community/schedule", json={"command": "rm"}, headers=h).status_code == 422
+    assert local.post("/api/community/schedule", json={"generation_time": "9am"}, headers=h).status_code == 400
     for q in ("?limit=0", "?limit=999", "?status=DROP", "?format=x", "?date_from=yesterday", "?q=" + "x" * 101):
         assert local.get("/api/community/drafts" + q).status_code == 400, q
     assert local.get("/api/community/history?limit=9999").status_code == 400
@@ -885,7 +885,7 @@ def test_api_guards(world, monkeypatch):
 
 def test_api_path_traversal_and_file_access(world, monkeypatch):
     main, svc, local, h = _client(world, monkeypatch)
-    r = local.post("/api/community/generate", json={"operator": OP}, headers=h)
+    r = local.post("/api/community/generate", json={}, headers=h)
     assert r.status_code == 200
     d = r.json()["draft"]["draft"]
     for bad in ("..%2F..%2Fstudio.db", "cdraft_xyz", "cdraft_0000000000000000", "C:%5CWindows"):
@@ -906,20 +906,20 @@ def test_api_path_traversal_and_file_access(world, monkeypatch):
 def test_api_end_to_end_flow(world, monkeypatch):
     main, svc, local, h = _client(world, monkeypatch)
     assert local.get("/api/community").json()["schedule"]["configured"] is False
-    s = local.post("/api/community/schedule", json={"operator": OP, "enabled": True, "generation_time": "10:00",
+    s = local.post("/api/community/schedule", json={"enabled": True, "generation_time": "10:00",
                                                      "timezone": "Asia/Kolkata", "formats": ["fact", "trivia"]}, headers=h)
     assert s.status_code == 200 and s.json()["config"]["enabled"] is True
-    d = local.post("/api/community/generate", json={"operator": OP}, headers=h).json()["draft"]["draft"]
-    assert local.post("/api/community/generate", json={"operator": OP}, headers=h).status_code == 409
+    d = local.post("/api/community/generate", json={}, headers=h).json()["draft"]["draft"]
+    assert local.post("/api/community/generate", json={}, headers=h).status_code == 409
     v = local.get(f"/api/community/drafts/{d['id']}/validation").json()
     assert v["validation_status"] == d["validation_status"]
-    e = local.post(f"/api/community/drafts/{d['id']}/edit", json={"operator": OP, "version": d["version"],
+    e = local.post(f"/api/community/drafts/{d['id']}/edit", json={"version": d["version"],
                                                                      "text": d["text"] + " Tell us below."}, headers=h)
     assert e.status_code == 200
     d2 = e.json()["draft"]
-    assert local.post(f"/api/community/drafts/{d['id']}/approve", json={"operator": OP, "version": d["version"]},
+    assert local.post(f"/api/community/drafts/{d['id']}/approve", json={"version": d["version"]},
                       headers=h).status_code == 409                                         # stale version
-    body = {"operator": OP, "version": d2["version"]}
+    body = {"version": d2["version"]}
     if d2["validation_status"] != "VALID":
         body.update(acknowledge_warnings=True, reason="reviewed by operator")
     a = local.post(f"/api/community/drafts/{d['id']}/approve", json=body, headers=h)
@@ -928,24 +928,24 @@ def test_api_end_to_end_flow(world, monkeypatch):
     assert opts and opts[-1]["choice"] == "title_card"
     a2 = a.json()["draft"]
     ri = local.post(f"/api/community/drafts/{d['id']}/regenerate-image",
-                    json={"operator": OP, "version": a2["version"], "choice": "title_card"}, headers=h)
+                    json={"version": a2["version"], "choice": "title_card"}, headers=h)
     assert ri.status_code == 200 and ri.json()["draft"]["status"] == "READY_FOR_REVIEW"     # approval withdrawn
     rv = ri.json()["draft"]
-    rj = local.post(f"/api/community/drafts/{d['id']}/reject", json={"operator": OP, "version": rv["version"], "reason": "x"},
+    rj = local.post(f"/api/community/drafts/{d['id']}/reject", json={"version": rv["version"], "reason": "x"},
                     headers=h)
     assert rj.status_code == 422                                                           # reason too short
     rj = local.post(f"/api/community/drafts/{d['id']}/reject",
-                    json={"operator": OP, "version": rv["version"], "reason": "off topic"}, headers=h)
+                    json={"version": rv["version"], "reason": "off topic"}, headers=h)
     assert rj.status_code == 200
     ar = local.post(f"/api/community/drafts/{d['id']}/archive",
-                    json={"operator": OP, "version": rj.json()["draft"]["version"]}, headers=h)
+                    json={"version": rj.json()["draft"]["version"]}, headers=h)
     assert ar.status_code == 200
     hist = local.get("/api/community/drafts?status=ARCHIVED&q=" + d["topic_title"][:10]).json()["drafts"]
     assert [x["id"] for x in hist] == [d["id"]]
     assert local.get("/api/community/history").json()["runs"]
-    k = local.post("/api/community/schedule", json={"operator": OP, "kill_switch": True}, headers=h)
+    k = local.post("/api/community/schedule", json={"kill_switch": True}, headers=h)
     assert k.status_code == 200
-    assert local.post("/api/community/generate", json={"operator": OP}, headers=h).status_code == 423
+    assert local.post("/api/community/generate", json={}, headers=h).status_code == 423
 
 
 def test_secrets_are_redacted_from_errors(world, monkeypatch):

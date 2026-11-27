@@ -434,12 +434,21 @@
     </div>
 
     <div class="card" id="junkCard">
-      <div class="card-head"><div><h2 class="card-title">Junk Cleaner</h2>
-        <p class="card-desc" id="junkDesc">Audits generated assets against the retention policy. Health reflects recorded runs, not the switch.</p></div>
+      <div class="card-head"><div><h2 class="card-title">Junk Cleaner · Storage lifecycle</h2>
+        <p class="card-desc" id="junkDesc">Audits generated assets against the configurable retention policy. Dry-run by default; a live run never starts automatically and only moves files into the reversible quarantine. Health reflects recorded runs, not the switch.</p></div>
         <button class="btn sm" onclick="runJunkDryRun(this)">Run dry-run now</button></div>
       <div class="meta" style="font-size:12px;" id="junkMeta">Loading…</div>
-      <div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Category</th><th>Scanned</th><th>Eligible</th><th>Removed</th><th>Main skip reason</th></tr></thead>
+      <div id="junkStorage" style="font-size:12px;margin-top:6px;"></div>
+      <div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Category</th><th>Retention</th><th>Occupied</th><th>Eligible now</th><th>Awaiting YouTube check</th><th>Waiting for age</th><th>Protected</th><th>Next eligible</th><th>Moved to quarantine</th><th>Main reason</th></tr></thead>
       <tbody id="junkBody"></tbody></table></div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Retention forecast (IST days)</h3><div id="junkForecast" style="font-size:12px;"></div>
+      <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:13px;">Retention settings</summary>
+        <div id="junkRetention" style="font-size:12px;margin-top:6px;"></div>
+        <div class="btn-row" style="margin-top:6px;flex-wrap:wrap;gap:6px;font-size:12px;">
+          <label>Protected test folders <input id="junkProtectedTests" maxlength="2000" placeholder="folder names, comma separated" style="width:280px;" /></label>
+          <button class="btn sm" onclick="saveJunkRetention()">Save retention</button></div>
+        <div style="color:var(--muted);font-size:11px;margin-top:4px;">Changing retention never moves anything. It applies from the next dry run; a live run needs a new dry run made with the same settings.</div>
+      </details>
     </div>
 
     <div class="card" id="provCard">
@@ -673,14 +682,16 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Cycle</th><th>Production Start</th><th>Recovery Duration</th><th>Target Publish Time</th><th>Days</th><th>Status</th><th></th></tr></thead>
-          <tbody id="schedCyclesBody"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
+          <thead><tr><th>Cycle</th><th>Production Start</th><th>Recovery Duration</th><th>Target Publish Time</th><th title="The Hindi channel's own publish time for this cycle's Hindi version. Saved separately; the English schedule is not changed.">Hindi Target Publish Time</th><th>Days</th><th>Status</th><th></th></tr></thead>
+          <tbody id="schedCyclesBody"><tr><td colspan="8" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
       </div>
       <div id="schedEditNote" style="display:none;margin-top:10px;color:#fcd34d;font-size:13px;">You have unsaved changes. Validate, then Activate Schedule to apply them.</div>
+      <div id="hiTimesNote" style="display:none;margin-top:6px;color:#fcd34d;font-size:13px;">Unsaved Hindi publish times. Use Save Hindi Times (the English schedule is not affected).</div>
       <div id="schedMessages" style="margin-top:10px;font-size:13px;"></div>
       <div class="btn-row" style="margin-top:12px;">
         <button class="btn" onclick="saveScheduleDraft()">Save Draft</button>
+        <button class="btn" onclick="saveHindiCycleTimes()" title="Saves only the Hindi Target Publish Time column, immediately. Hindi publishing still needs QC, the Hindi schedule enabled and Hindi publishing authorization.">Save Hindi Times</button>
         <button class="btn primary" onclick="validateSchedule()">Validate</button>
         <button class="btn ok" id="schedActivateBtn" onclick="activateSchedule()">Activate Schedule</button>
         <button class="btn sm" onclick="discardScheduleEdits()">Discard changes</button>
@@ -824,8 +835,8 @@
       <div id="hpGates" style="font-size:12px;margin-bottom:6px;">--</div>
       <div class="btn-row" style="flex-wrap:wrap;gap:6px;font-size:12px;">
         <label><input type="checkbox" id="hpEnabled" /> Schedule enabled</label>
-        <label>Daily times <input id="hpTimes" maxlength="40" placeholder="19:30, 21:00" style="width:120px;" /></label>
-        <label>Daily limit <input id="hpLimit" type="number" min="1" max="6" style="width:52px;" /></label>
+        <span>Strategy: Manual · times per cycle in Production Schedule → Hindi Target Publish Time</span>
+        <label>Daily limit <input id="hpLimit" type="number" min="1" max="24" style="width:52px;" /></label>
         <label>Max attempts <input id="hpAttempts" type="number" min="1" max="5" style="width:52px;" /></label>
         <button class="btn sm" onclick="hpSaveSchedule()">Save schedule</button></div>
       <div id="hpList" style="font-size:12px;overflow-x:auto;margin-top:8px;">--</div>
@@ -970,7 +981,6 @@
       <div id="intelCreative" style="font-size:12px;overflow-x:auto;">--</div>
       <div style="margin-top:8px;font-size:12px;"><strong>Hook-style experiment</strong> (limits the per-job hook rotation to the chosen styles; nothing changes until activated):
         <div class="btn-row" style="margin-top:4px;align-items:center;flex-wrap:wrap;">
-          <label for="intelOperator" style="color:var(--muted)">Operator</label><input id="intelOperator" maxlength="64" style="width:120px;" />
           <span id="intelArms"></span>
           <input id="intelHypothesis" maxlength="500" placeholder="hypothesis" style="width:260px;" />
           <button class="btn sm" onclick="intelCreateExperiment()">Create draft</button></div>
@@ -996,8 +1006,6 @@
       <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Recommendation Center</h2>
         <p class="card-desc">Findings come from the Operations data with deterministic rules. Routine follow-ups (read-only diagnostics, reports) run automatically under the current control state; anything that needs you is listed once in <a href="#" onclick="openAttention();return false;">Needs your attention</a>. Approving a recommendation here only records your agreement.</p></div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <label for="recOperator" style="font-size:12px;color:var(--muted);">Operator</label>
-          <input id="recOperator" maxlength="64" placeholder="your name" style="width:130px;" />
           <button class="btn sm primary" onclick="recRun()">Analyse now</button>
           <button class="btn sm" onclick="refreshRecommendations(true)">Refresh</button></div></div>
       <div class="meta" style="font-size:12px;" id="recMeta">Open this tab to load.</div>
@@ -1032,8 +1040,6 @@
       <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Self-Healing Operations</h2>
         <p class="card-desc">Detects failures, classifies them (transient, deterministic, resource, configuration, data, unknown), diagnoses them from recorded evidence and proposes <strong>allow-listed</strong> recovery actions for your approval. Job retries, re-renders, restarts and configuration stay with the scheduler and you. Every action passes the Autonomy Control gates and is verified before it counts as recovered.</p></div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <label for="healOperator" style="font-size:12px;color:var(--muted);">Operator</label>
-          <input id="healOperator" maxlength="64" placeholder="your name" style="width:130px;" />
           <button class="btn sm primary" onclick="healScan()">Scan now</button>
           <button class="btn sm" onclick="refreshSelfHealing(true)">Refresh</button></div></div>
       <div class="meta" style="font-size:12px;" id="healMeta">Open this tab to load.</div>
@@ -1165,8 +1171,6 @@
       <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Autopilot</h2>
         <p class="card-desc">One view of the controlled autonomy lifecycle: <strong>observe</strong> (Operational Intelligence) &rarr; <strong>recommend</strong> (Recommendations, Self-Healing) &rarr; <strong>approval request</strong> &rarr; <strong>approved execution</strong> (Autonomy Control). Everything shown is read from the stored backend state. Nothing here executes an action; approvals and execution stay in Autonomy Control with every gate.</p></div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <label for="apOperator" style="font-size:12px;color:var(--muted);">Operator</label>
-          <input id="apOperator" maxlength="64" placeholder="your name" style="width:130px;" />
           <button class="btn sm" onclick="refreshAutopilot(true)">Refresh</button></div></div>
       <div class="meta" style="font-size:12px;" id="apMeta">Open this tab to load.</div>
     </div>
@@ -1266,8 +1270,6 @@
       <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Autonomy Control</h2>
         <p class="card-desc">Governs what autonomy may observe, recommend and execute. Kill switches stop <strong>autonomous actions only</strong>; the production scheduler, cycles, workers and publishing are never affected. Prohibited actions can never be executed at any level.</p></div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <label for="autoOperator" style="font-size:12px;color:var(--muted);">Operator</label>
-          <input id="autoOperator" maxlength="64" placeholder="your name" style="width:140px;" />
           <button class="btn sm" onclick="refreshAutonomy(true)">Refresh</button>
           <button class="btn sm" onclick="autoRunAssessment()">Run assessment</button></div></div>
       <div class="meta" style="font-size:12px;" id="autoMeta">Open this tab to load.</div>
@@ -1830,7 +1832,7 @@ function renderScheduleTable() {
     return statusById[c.cycle_id] || (c.enabled ? "Scheduled" : "Disabled");
   };
   if (!schedState.cycles.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">No cycles. Add a cycle or load a preset.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" style="color:var(--muted)">No cycles. Add a cycle or load a preset.</td></tr>`;
   } else {
     tbody.innerHTML = schedState.cycles.map((c, i) => `
       <tr style="${c.enabled ? "" : "opacity:0.55"}">
@@ -1838,6 +1840,7 @@ function renderScheduleTable() {
         <td>${escHtml(c.start_time)}</td>
         <td>${fmtMinutes(c.recovery_duration_minutes)}</td>
         <td>${targetLabel(c.start_time, c.target_publish_time)}</td>
+        <td>${hindiTimeCell(c)}</td>
         <td>${daysLabel(c.active_weekdays)}</td>
         <td><span class="chip">${escHtml(rowStatus(c))}</span></td>
         <td><div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -1848,6 +1851,46 @@ function renderScheduleTable() {
       </tr>`).join("");
   }
   document.getElementById("schedEditNote").style.display = schedState.dirty ? "block" : "none";
+  const hn = document.getElementById("hiTimesNote"); if (hn) hn.style.display = hiTimes.dirty ? "block" : "none";
+}
+
+// Hindi Target Publish Time per cycle (stored with the Hindi channel; "Same as English" by default)
+const hiTimes = { cycles: {}, dirty: false, loaded: false };
+function hiSetting(cid) { return hiTimes.cycles[cid] || { same_as_english: true, time: null }; }
+function hindiTimeCell(c) {
+  const s = hiSetting(c.cycle_id), cid = escHtml(c.cycle_id);
+  const shown = s.same_as_english ? (c.target_publish_time || "") : (s.time || "");
+  return `<label style="font-size:11px;white-space:nowrap;"><input type="checkbox" data-c="${cid}" ${s.same_as_english ? "checked" : ""} onchange="hiToggle(this.dataset.c,this.checked)"> Same as English</label><br>`
+    + `<input type="time" data-c="${cid}" value="${escHtml(shown)}" ${s.same_as_english ? "disabled" : ""} onchange="hiSetTime(this.dataset.c,this.value)" style="width:96px;" />`
+    + (s.same_as_english && !c.target_publish_time ? `<div style="color:#fcd34d;font-size:11px;">English has no target time</div>` : "");
+}
+function hiToggle(cid, same) {
+  const cyc = (schedState.cycles || []).find(c => c.cycle_id === cid) || {};
+  const cur = hiSetting(cid);
+  hiTimes.cycles[cid] = { same_as_english: same, time: same ? null : (cur.time || cyc.target_publish_time || "19:30") };
+  hiTimes.dirty = true; renderScheduleTable();
+}
+function hiSetTime(cid, value) {
+  hiTimes.cycles[cid] = { same_as_english: false, time: value || null };
+  hiTimes.dirty = true; renderScheduleTable();
+}
+async function loadHindiCycleTimes() {
+  if (hiTimes.dirty) return;
+  try {
+    const d = await apiJson("/api/hindi-publishing/cycle-times");
+    hiTimes.cycles = {};
+    (d.cycles || []).forEach(r => { hiTimes.cycles[r.cycle_id] = { same_as_english: !!r.same_as_english, time: r.hindi_time || null }; });
+    hiTimes.loaded = true; renderScheduleTable();
+  } catch (err) { /* the Hindi column falls back to "Same as English" */ }
+}
+async function saveHindiCycleTimes() {
+  const bad = Object.entries(hiTimes.cycles).filter(([, v]) => !v.same_as_english && !v.time).map(([k]) => k);
+  if (bad.length) { showToast("Choose a Hindi time for: " + bad.join(", "), true); return; }
+  try {
+    await dashWrite("/api/hindi-publishing/cycle-times", { cycles: hiTimes.cycles, confirm: true });
+    hiTimes.dirty = false; showToast("Hindi publish times saved");
+  } catch (err) { showToast(err.message || String(err), true); return; }
+  loadHindiCycleTimes();
 }
 
 function renderOverviewCycles(view) {
@@ -1902,7 +1945,7 @@ function renderScheduleView(view) {
 }
 
 async function refreshSchedule() {
-  try { renderScheduleView(await apiJson("/api/schedule")); }
+  try { renderScheduleView(await apiJson("/api/schedule")); loadHindiCycleTimes(); }
   catch (err) { showToast("Schedule refresh failed: " + err.message, true); }
 }
 
@@ -2661,13 +2704,60 @@ async function refreshJunk() {
            + `eligible ${r.eligible} (${fmtBytes(r.eligible_bytes)}), removed ${r.deleted} (${fmtBytes(r.bytes_reclaimed)}), skipped ${r.skipped}${(r.errors || []).length ? ", errors " + r.errors.length : ""}`
          : "No run recorded yet.")
       + `<br>Cumulative reclaimed: ${fmtBytes(d.cumulative_bytes_reclaimed)} (${d.cumulative_note})`;
-    const cats = (r && r.categories) || {};
+    const sto = d.storage || {}, ret = d.retention || {}, days = ret.days || {};
+    const disk = sto.disk || {};
+    document.getElementById("junkStorage").innerHTML = sto.run_id ? apTable(
+        ["Scanned", "Occupied (media)", "Protected", "Temporary", "Eligible now", "Estimated reclaimable", "Moved to quarantine", "Disk free"],
+        [`<tr><td>${fmtBytes(sto.scanned_bytes)} · ${escHtml(String(sto.scanned_files || 0))} files</td><td>${fmtBytes(sto.occupied_bytes)}</td><td>${fmtBytes(sto.protected_bytes)}</td>`
+         + `<td>${fmtBytes(sto.temporary_bytes)}</td><td><strong>${fmtBytes(sto.eligible_bytes)}</strong></td>`
+         + `<td>${fmtBytes(sto.estimated_reclaimable_bytes)} <span style="color:var(--muted)">(incl. ${fmtBytes(sto.pending_remote_bytes)} awaiting a fresh YouTube check)</span></td>`
+         + `<td>${fmtBytes(d.cumulative_bytes_reclaimed)}</td><td>${fmtBytes(disk.free)}</td></tr>`])
+        + `<div style="color:var(--muted);font-size:11px;">Occupied = everything scanned. Eligible now = could be quarantined by a live run today. Estimated reclaimable also counts final deliverables that a live run re-verifies with YouTube first. Moved to quarantine = actually removed from the media folders by live runs (reversible; disk space is freed only if the quarantine is purged, which never happens automatically).</div>`
+      : `<div style="color:var(--muted)">No completed run with the storage breakdown yet. Run a dry run.</div>`;
+    const cats = sto.categories || (r && r.categories) || {};
+    const retLabel = k => k === "test_renders" ? `${days.test_renders_success ?? "protected"} d success · ${days.test_renders_failed ?? "protected"} d failed`
+      : (k in days ? (days[k] === null ? "protected" : days[k] + " d") : escHtml(((ret.fixed || {})[k]) || "fixed"));
     document.getElementById("junkBody").innerHTML = Object.entries(cats).sort((a, b) => b[1].scanned_bytes - a[1].scanned_bytes).map(([k, c]) => {
       const top = Object.entries(c.skip_reasons || {}).sort((a, b) => b[1] - a[1])[0];
-      return `<tr><td title="${k}">${c.label}</td><td>${c.scanned} · ${fmtBytes(c.scanned_bytes)}</td><td>${c.eligible} · ${fmtBytes(c.eligible_bytes)}</td>`
-        + `<td>${c.deleted} · ${fmtBytes(c.bytes_reclaimed)}</td><td>${top ? top[0] + " (" + top[1] + ")" : "--"}</td></tr>`;
+      return `<tr><td title="${escHtml(k)}">${escHtml(c.label)}</td><td>${retLabel(k)}</td><td>${c.scanned} · ${fmtBytes(c.scanned_bytes)}</td><td>${c.eligible} · ${fmtBytes(c.eligible_bytes)}</td>`
+        + `<td>${c.pending_remote || 0} · ${fmtBytes(c.pending_remote_bytes)}</td><td>${c.waiting || 0} · ${fmtBytes(c.waiting_bytes)}</td><td>${c.protected || 0} · ${fmtBytes(c.protected_bytes)}</td>`
+        + `<td>${c.next_eligible_utc ? autoTime(c.next_eligible_utc) : "--"}</td><td>${c.deleted} · ${fmtBytes(c.bytes_reclaimed)}</td>`
+        + `<td style="max-width:280px;overflow-wrap:anywhere;">${top ? escHtml(top[0]) + " (" + top[1] + ")" : "--"}</td></tr>`;
     }).join("");
+    const fc = Object.entries(sto.forecast || {}).sort((a, b) => a[0] < b[0] ? -1 : 1);
+    let cum = 0;
+    document.getElementById("junkForecast").innerHTML = fc.length ? apTable(["Day (IST)", "Becomes eligible", "Cumulative"],
+        fc.map(([day, b]) => { cum += b; return `<tr><td>${escHtml(day)}</td><td>${fmtBytes(b)}</td><td>${fmtBytes(cum)}</td></tr>`; }))
+      + `<div style="color:var(--muted);font-size:11px;">Files that wait only for their retention age (other protections may still apply on that day). Next 30 days.</div>`
+      : `<div style="color:var(--muted)">Nothing waits only for its age.</div>`;
+    if (!junkRetDirty) {
+      document.getElementById("junkRetention").innerHTML = apTable(["Category", "Retention (days)", "Protected", "Default"],
+        Object.keys(ret.defaults || {}).map(k => `<tr><td>${escHtml((ret.labels || {})[k] || k)}</td>`
+          + `<td><input type="number" min="1" max="3650" data-k="${escHtml(k)}" class="junkDays" value="${days[k] ?? ""}" ${days[k] === null ? "disabled" : ""} style="width:70px;" oninput="junkRetDirty=true" /></td>`
+          + `<td><input type="checkbox" data-k="${escHtml(k)}" class="junkProt" ${days[k] === null ? "checked" : ""} onchange="junkRetDirty=true;junkToggleProt(this)" /></td>`
+          + `<td>${(ret.defaults || {})[k] === null ? "protected" : (ret.defaults || {})[k] + " d"}</td></tr>`))
+        + `<div style="margin-top:4px;color:var(--muted);">Always protected: ${Object.values(ret.fixed || {}).map(escHtml).join("; ")}</div>`;
+      document.getElementById("junkProtectedTests").value = (ret.protected_tests || []).join(", ");
+    }
   } catch (err) { meta.textContent = "Junk Cleaner status unavailable."; }
+}
+let junkRetDirty = false;
+function junkToggleProt(cb) {
+  const inp = document.querySelector(`.junkDays[data-k="${cb.dataset.k}"]`);
+  if (inp) { inp.disabled = cb.checked; if (!cb.checked && !inp.value) inp.value = 7; }
+}
+async function saveJunkRetention() {
+  const retention_days = {};
+  document.querySelectorAll(".junkDays").forEach(inp => {
+    const prot = document.querySelector(`.junkProt[data-k="${inp.dataset.k}"]`);
+    retention_days[inp.dataset.k] = prot && prot.checked ? null : parseInt(inp.value, 10);
+  });
+  const protected_tests = (document.getElementById("junkProtectedTests").value || "").split(",").map(t => t.trim()).filter(Boolean);
+  try {
+    await dashWrite("/api/junk-cleaner/retention", { retention_days, protected_tests, confirm: true });
+    junkRetDirty = false; showToast("Retention saved; it applies from the next dry run. Nothing was moved.");
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshJunk();
 }
 async function runJunkDryRun(btn) {
   btn.disabled = true; btn.textContent = "Running…";
@@ -2907,9 +2997,6 @@ async function refreshOps(force = false) {
 // -- Roadmap 3.31 / 3.32 / 3.33 intelligence (persisted backend data; loads with the Ops tab, no own polling) --
 const INTEL_HOOKS = ["surprising_fact", "direct_question", "contradiction", "stakes", "scale"];
 async function intelWrite(url, body) {
-  const op = ((document.getElementById("intelOperator") || {}).value || "").trim();
-  const ao = document.getElementById("autoOperator");
-  if (op && ao) ao.value = op;
   return autoWrite(url, "POST", body);
 }
 async function refreshIntel() {
@@ -3017,24 +3104,14 @@ const recState = { list: [], open: new Set(), categories: {} };
 const REC_COLOURS = { CRITICAL: "#fca5a5", HIGH: "#fcd34d", MEDIUM: "#93c5fd", LOW: "var(--muted)" };
 const REC_EVIDENCE = { CONFIRMED: "Confirmed observation", STRONG: "Strongly supported hypothesis", WEAK: "Weak hypothesis" };
 
-function recOperator() {
-  const el = document.getElementById("recOperator");
-  let v = ((el && el.value) || "").trim();
-  if (!v) { try { v = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} if (el) el.value = v; }
-  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
-  return v;
-}
-
 async function recWrite(url, body) {
-  const op = recOperator();
-  if (!op) throw new Error("Enter your operator name first.");
   if (!autoState.csrf) {
     const s = await apiJson("/api/autonomy/session");
     autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
   }
   try {
     return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
-                                body: JSON.stringify({ operator: op, ...body }) });
+                                body: JSON.stringify(body || {}) });
   } catch (err) { if (/CSRF/i.test(err.message || "")) autoState.csrf = null; throw err; }
 }
 
@@ -3068,7 +3145,7 @@ function recCard(r) {
     + (((r.related || {}).jobs || []).length ? `<div style="margin-top:4px;"><strong>Related jobs:</strong> <span style="font-size:11px;">${r.related.jobs.map(escHtml).join(", ")}</span></div>` : "")
     + `<div style="margin-top:6px;color:var(--muted);font-size:11px;">Confidence ${escHtml(conf.score)} = ${escHtml(JSON.stringify(conf.components || {}))} · Priority ${escHtml(prio.score)} from ${escHtml(JSON.stringify(prio.components || {}))}</div>`
     + `<div style="color:var(--muted);font-size:11px;">First detected ${autoTime(r.first_detected_at)} · last ${autoTime(r.last_detected_at)} · seen in ${escHtml(r.detections)} analyses · expires ${autoTime(r.expires_at)} · ${escHtml(r.id)}</div>`
-    + (r.status_by ? `<div style="color:var(--muted);font-size:11px;">${escHtml(r.status)} by ${escHtml(r.status_by)} ${autoTime(r.status_at)}${r.status_reason ? " — " + escHtml(r.status_reason) : ""}${r.resolution_evidence ? " — evidence: " + escHtml(r.resolution_evidence) : ""}</div>` : "")
+    + (r.status_by ? `<div style="color:var(--muted);font-size:11px;">${escHtml(r.status)} by ${escHtml(actorLabel(r.status_by))} ${autoTime(r.status_at)}${r.status_reason ? " — " + escHtml(r.status_reason) : ""}${r.resolution_evidence ? " — evidence: " + escHtml(r.resolution_evidence) : ""}</div>` : "")
     + `</div>` : "";
   return `<div class="control-doc" style="border-left:3px solid ${colour};padding-left:10px;margin-bottom:8px;">`
     + `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start;">`
@@ -3089,7 +3166,6 @@ function recToggle(id) {
 async function refreshRecommendations(force = false) {
   const panel = document.getElementById("tab-recs");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
-  recOperator();
   const meta = document.getElementById("recMeta");
   try {
     const status = document.getElementById("recFilter").value || "open";
@@ -3153,29 +3229,19 @@ async function recAct(kind, id) {
 
 // ---------------------------------------------------------------------------
 // Stage 3.32D Self-Healing Operations. Loads only while the tab is open. Every write goes through the 3.32B
-// authorization (operator identity + per-process CSRF token) and the control plane's approval / execution gates.
+// authorization (local origin + per-process CSRF token) and the control plane's approval / execution gates.
 const healState = { incidents: [], open: new Set(), detail: {}, awaiting: [] };
 const HEAL_SEV = { critical: "#fca5a5", high: "#fcd34d", medium: "#93c5fd", low: "var(--muted)" };
 const HEAL_ROOT = { CONFIRMED_MECHANISM: "Confirmed mechanism (cause of the inputs not proven)", SUSPECTED: "Suspected cause", UNKNOWN: "Unknown: insufficient evidence" };
 
-function healOperator() {
-  const el = document.getElementById("healOperator");
-  let v = ((el && el.value) || "").trim();
-  if (!v) { try { v = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} if (el) el.value = v; }
-  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
-  return v;
-}
-
 async function healWrite(url, body) {
-  const op = healOperator();
-  if (!op) throw new Error("Enter your operator name first.");
   if (!autoState.csrf) {
     const s = await apiJson("/api/autonomy/session");
     autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
   }
   try {
     return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
-                                body: JSON.stringify({ operator: op, ...body }) });
+                                body: JSON.stringify(body || {}) });
   } catch (err) { if (/CSRF/i.test(err.message || "")) autoState.csrf = null; throw err; }
 }
 
@@ -3243,7 +3309,7 @@ function healDetail(d) {
     + `<div style="margin-top:4px;"><strong>Media metadata</strong> <code style="font-size:11px;">${escHtml(JSON.stringify(ev.media_metadata || null).slice(0, 500))}</code></div></div></details>`
     + `<div style="margin-top:6px;"><strong>Recoveries</strong>${(d.recoveries || []).map(r => healRecoveryRow(r, true)).join("") || " none"}</div>`
     + `<details style="margin-top:6px;"><summary style="cursor:pointer;">Audit trail (${(d.audit || []).length})</summary>`
-    + (d.audit || []).map(e => `<div style="font-size:11px;">${autoTime(e.ts_utc)} ${escHtml(e.event_type)} by ${escHtml(e.actor)} ${escHtml(e.previous_state || "")}→${escHtml(e.new_state || "")} ${escHtml(e.reason || "")}</div>`).join("")
+    + (d.audit || []).map(e => `<div style="font-size:11px;">${autoTime(e.ts_utc)} ${escHtml(e.event_type)} by ${escHtml(actorLabel(e.actor))} ${escHtml(e.previous_state || "")}→${escHtml(e.new_state || "")} ${escHtml(e.reason || "")}</div>`).join("")
     + `</details></div>`;
 }
 
@@ -3277,7 +3343,6 @@ async function healToggle(id) {
 async function refreshSelfHealing(force = false) {
   const panel = document.getElementById("tab-heal");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
-  healOperator();
   const meta = document.getElementById("healMeta");
   try {
     const filter = document.getElementById("healFilter").value || "open";
@@ -3367,13 +3432,6 @@ function autoTime(ts) {
   return escHtml(d.toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }));
 }
 
-function autoOperator() {
-  const el = document.getElementById("autoOperator");
-  const v = ((el && el.value) || "").trim();
-  if (v) { try { localStorage.setItem("crazzydocs.operator", v); } catch (_) {} }
-  return v;
-}
-
 // Confirmed dashboard writes that take no operator name (channels, localizations): same CSRF/origin protection.
 async function dashWrite(url, body) {
   if (!autoState.csrf) {
@@ -3390,15 +3448,13 @@ async function dashWrite(url, body) {
 }
 
 async function autoWrite(url, method, body) {
-  const op = autoOperator();
-  if (!op) throw new Error("Enter your operator name first.");
   if (!autoState.csrf) {
     const s = await apiJson("/api/autonomy/session");
     autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
   }
   try {
     return await apiJson(url, { method, headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
-                                body: JSON.stringify({ operator: op, ...body }) });
+                                body: JSON.stringify(body || {}) });
   } catch (err) {
     if (/CSRF/i.test(err.message || "")) autoState.csrf = null;   // dashboard restarted: fetch a new token next time
     throw err;
@@ -3435,8 +3491,6 @@ async function refreshAutonomy(force = false) {
   const panel = document.getElementById("tab-autonomy");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
   const meta = document.getElementById("autoMeta");
-  const opEl = document.getElementById("autoOperator");
-  if (opEl && !opEl.value) { try { opEl.value = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} }
   try {
     const filter = (document.getElementById("autoQueueFilter") || {}).value || "";
     const qs = filter === "ALL" ? "?limit=100" : (filter ? `?status=${encodeURIComponent(filter)}&limit=100` : "?limit=100");
@@ -3491,7 +3545,7 @@ async function refreshAutonomy(force = false) {
         btns.push(`<button class="btn sm" data-id="${escHtml(r.id)}" onclick="autoDecide('cancel', this.dataset.id)">Cancel</button>`);
       }
       const res = r.execution_result ? `<pre class="auto-pre">${escHtml(JSON.stringify(r.execution_result, null, 1))}</pre>` : "";
-      return `<tr><td><strong>${escHtml(r.status)}</strong><div style="color:var(--muted);font-size:11px;">${escHtml(r.approval_mode || "")} ${escHtml(r.approved_by || "")}</div></td>`
+      return `<tr><td><strong>${escHtml(r.status)}</strong><div style="color:var(--muted);font-size:11px;">${escHtml(r.approval_mode || "")} ${escHtml(actorLabel(r.approved_by) || "")}</div></td>`
         + `<td><strong>${escHtml(r.action_type)}</strong><div style="color:var(--muted);font-size:11px;">${escHtml(r.description)}</div><div style="font-size:10px;color:var(--muted);">${escHtml(r.id)} · by ${escHtml(r.proposed_by)}</div></td>`
         + `<td>${escHtml(r.reason)}<pre class="auto-pre">${escHtml(JSON.stringify(r.evidence || {}, null, 1))}</pre></td>`
         + `<td><pre class="auto-pre">${escHtml(JSON.stringify(r.payload || {}, null, 1))}</pre><div style="font-size:10px;color:var(--muted);">hash ${escHtml(String(r.payload_hash || "").slice(0, 16))}…</div>${res}</td>`
@@ -3499,7 +3553,7 @@ async function refreshAutonomy(force = false) {
     }).join("") : `<tr><td colspan="7" style="color:var(--muted)">No requests.</td></tr>`;
 
     const execCols = [["When", e => autoTime(e.started_at_utc)], ["Action", e => escHtml(e.action_type)], ["Attempt", e => escHtml(e.attempt)],
-                      ["Outcome", e => `<strong>${escHtml(e.outcome)}</strong>`], ["By", e => escHtml(e.executed_by)], ["Error", e => escHtml(e.error || "")]];
+                      ["Outcome", e => `<strong>${escHtml(e.outcome)}</strong>`], ["By", e => escHtml(actorLabel(e.executed_by))], ["Error", e => escHtml(e.error || "")]];
     document.getElementById("autoActionsBody").innerHTML = autoTable(s.recent_actions, execCols, "No autonomous actions yet.");
     document.getElementById("autoFailuresBody").innerHTML = autoTable(s.recent_failures, execCols, "No failures.");
     document.getElementById("autoInboxBody").innerHTML = autoTable(s.recent_notifications, [["When", e => autoTime(e.started_at_utc)],
@@ -3526,7 +3580,7 @@ async function refreshAutonomy(force = false) {
     }).join("");
 
     document.getElementById("autoAuditBody").innerHTML = (a.events || []).map(e =>
-      `<tr><td>${escHtml(e.seq)}</td><td>${autoTime(e.ts_utc)}</td><td><strong>${escHtml(e.event_type)}</strong></td><td>${escHtml(e.actor)}</td>`
+      `<tr><td>${escHtml(e.seq)}</td><td>${autoTime(e.ts_utc)}</td><td><strong>${escHtml(e.event_type)}</strong></td><td>${escHtml(actorLabel(e.actor))}</td>`
       + `<td>${escHtml(e.action_type || "")}<div style="font-size:10px;color:var(--muted);">${escHtml(e.request_id || "")}</div></td>`
       + `<td>${escHtml(e.previous_state || "")}${e.new_state ? " → " + escHtml(e.new_state) : ""}</td><td>${escHtml(e.reason || "")}</td></tr>`).join("")
       || `<tr><td colspan="7" style="color:var(--muted)">No audit events yet.</td></tr>`;
@@ -3636,7 +3690,7 @@ setInterval(() => refreshAutonomy(), 60000);   // only loads while the Autonomy 
 setInterval(() => refreshRecommendations(), 120000);   // only loads while the Recommendations tab is open
 setInterval(() => refreshSelfHealing(), 120000);   // only loads while the Self-Healing tab is open
 
-// Stage 3.32E Community Posts. Loads only while the tab is open. Every write sends the operator identity, the
+// Stage 3.32E Community Posts. Loads only while the tab is open. Every write sends the
 // per-process CSRF token and the draft version it was shown (stale views are refused with 409). Nothing publishes.
 const cmState = { formats: [], drafts: {}, editing: new Set(), options: {}, open: null, busy: false, loaded: false };
 const CM_VALID = { VALID: "#86efac", VALID_WITH_WARNINGS: "#fcd34d", NEEDS_OPERATOR_REVIEW: "#fdba74", REJECTED: "#fca5a5" };
@@ -3725,7 +3779,7 @@ function cmDetailsHtml(detail) {
              ["Run", escHtml(detail.run ? `${detail.run.trigger} · ${detail.run.status} · ${JSON.stringify(detail.run.metrics || {})}` : "n/a")]])
     + `<div style="margin-top:6px;"><strong>Audit history</strong></div>`
     + `<table class="ops-table"><thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Detail</th></tr></thead><tbody>`
-    + ev.map(e => `<tr><td>${cmLocal(e.created_at_utc)}</td><td>${escHtml(e.event)}</td><td>${escHtml(e.actor)}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml(JSON.stringify(e.detail || {}).slice(0, 400))}</td></tr>`).join("")
+    + ev.map(e => `<tr><td>${cmLocal(e.created_at_utc)}</td><td>${escHtml(e.event)}</td><td>${escHtml(actorLabel(e.actor))}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml(JSON.stringify(e.detail || {}).slice(0, 400))}</td></tr>`).join("")
     + `</tbody></table></div>`;
 }
 
@@ -4161,11 +4215,12 @@ const AP_TIER = { AUTONOMOUS_ELIGIBLE: "#86efac", APPROVAL_REQUIRED: "#fcd34d", 
 const AP_BAD = new Set(["REJECTED", "CANCELLED", "EXECUTION_BLOCKED", "PROPOSAL_REFUSED", "BRIDGE_REFUSED", "PROHIBITED_ACTION_BLOCKED", "EXECUTION_FAILED"]);
 
 async function apWrite(url, body) {
-  const op = ((document.getElementById("apOperator") || {}).value || "").trim();
-  const ao = document.getElementById("autoOperator");
-  if (op && ao) ao.value = op;                         // the same identity as Autonomy Control
   return autoWrite(url, "POST", body);
 }
+
+// Actor display: machine actors are shown as they are (audit meaning kept); a person's identity is never shown.
+const MACHINE_ACTORS = /^(autonomy|standing-approval|system|engine|control-plane|recommendation|self-?healing|selfheal|autopilot|scheduler|coordinator|localization-policy|policy|daemon|monitor|deploy)/i;
+function actorLabel(a) { return !a ? "" : (MACHINE_ACTORS.test(String(a)) ? String(a) : "dashboard"); }
 
 function apTable(head, rows) {
   return `<table class="ops-table"><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
@@ -4174,8 +4229,6 @@ function apTable(head, rows) {
 async function refreshAutopilot(force = false) {
   const panel = document.getElementById("tab-autopilot");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
-  const opEl = document.getElementById("apOperator");
-  if (opEl && !opEl.value) { try { opEl.value = localStorage.getItem("crazzydocs.operator") || ""; } catch (_) {} }
   const meta = document.getElementById("apMeta");
   try {
     const a = await apiJson("/api/autopilot");
@@ -4221,7 +4274,7 @@ async function refreshAutopilot(force = false) {
       : `<div style="color:var(--muted)">No executions yet.</div>`);
     const ev = a.recent_decisions || [];
     document.getElementById("apDecisions").innerHTML = ev.length ? apTable(["When", "Event", "Actor", "Action", "Reason"],
-      ev.map(e => `<tr${AP_BAD.has(e.event_type) ? ` style="color:#fca5a5"` : ""}><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.event_type)}</td><td>${escHtml(e.actor)}</td><td>${escHtml(e.action_type || "")}</td><td>${escHtml((e.reason || "").slice(0, 160))}</td></tr>`))
+      ev.map(e => `<tr${AP_BAD.has(e.event_type) ? ` style="color:#fca5a5"` : ""}><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.event_type)}</td><td>${escHtml(actorLabel(e.actor))}</td><td>${escHtml(e.action_type || "")}</td><td>${escHtml((e.reason || "").slice(0, 160))}</td></tr>`))
       : `<div style="color:var(--muted)">No decisions recorded.</div>`;
     const pol = (a.policy || {}).entries || [];
     document.getElementById("apPolicy").innerHTML = apTable(["Action", "Tier", "Category", "Risk", "Approval", "Timeout / retries", "Postcondition"],
@@ -4357,7 +4410,6 @@ async function refreshHindiPublishing() {
       ? `<span class="auto-on">Hindi publishing can run</span>`
       : `<span style="color:#fcd34d">Hindi publishing is off:</span> ${escHtml((g.reasons || []).join("; "))}`;
     document.getElementById("hpEnabled").checked = !!sc.enabled;
-    document.getElementById("hpTimes").value = (sc.times || []).join(", ");
     document.getElementById("hpLimit").value = sc.daily_limit || 1;
     document.getElementById("hpAttempts").value = sc.max_attempts || 3;
     hpItems = {}; (d.items || []).forEach(i => { hpItems[i.id] = i; });
@@ -4371,8 +4423,7 @@ async function refreshHindiPublishing() {
 }
 
 async function hpSaveSchedule() {
-  const times = (document.getElementById("hpTimes").value || "").split(",").map(t => t.trim()).filter(Boolean);
-  const body = { enabled: document.getElementById("hpEnabled").checked, times,
+  const body = { strategy: "MANUAL", enabled: document.getElementById("hpEnabled").checked,
                  daily_limit: parseInt(document.getElementById("hpLimit").value || "1", 10),
                  max_attempts: parseInt(document.getElementById("hpAttempts").value || "3", 10), confirm: true };
   if (!(await askConfirm("Save the Hindi publishing schedule?", "Enabling the schedule does not authorize Hindi publishing; uploads still need the Hindi channel to be active and Hindi publishing authorized."))) return;
@@ -4524,10 +4575,8 @@ async function apCtlStop() {
 async function apCtlSetLevel() {
   let reason; try { reason = apCtlReason(); } catch (e) { showToast(e.message, true); return; }
   const level = document.getElementById("apCtlLevel").value;
-  if (!(await askConfirm(`Set the production autonomy level to ${level}?`, "The effective mode is the lower of the global level and this category level. This uses the existing Autonomy Control permission change: it is audited, and it needs your operator name and a reason. It grants no standing approval."))) return;
+  if (!(await askConfirm(`Set the production autonomy level to ${level}?`, "The effective mode is the lower of the global level and this category level. This uses the existing Autonomy Control permission change: it is audited and needs a reason. It grants no standing approval."))) return;
   try {
-    const op = ((document.getElementById("apOperator") || {}).value || "").trim();
-    const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
     await autoWrite("/api/autonomy/permissions/levels", "PUT", { scope: "production", level, reason, confirm: true });
     showToast(`Production level set to ${level}`);
   } catch (err) { showToast(err.message || String(err), true); }
@@ -4592,7 +4641,7 @@ async function refreshAutopilotController(force = false) {
                 ...(c.events || []).filter(e => e.event_type !== "AUTOPILOT_STATE_CHANGED").map(e => ({ at: e.ts_utc, kind: e.event_type, text: e.new_state || "", actor: e.actor, reason: e.reason }))]
       .sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 40);
     document.getElementById("apCtlHistory").innerHTML = ev.length ? apTable(["When", "Event", "Change", "Actor", "Reason"],
-      ev.map(e => `<tr><td>${autoTime(e.at)}</td><td>${escHtml(e.kind)}</td><td>${escHtml(e.text)}</td><td>${escHtml(e.actor)}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml((e.reason || "").slice(0, 240))}</td></tr>`))
+      ev.map(e => `<tr><td>${autoTime(e.at)}</td><td>${escHtml(e.kind)}</td><td>${escHtml(e.text)}</td><td>${escHtml(actorLabel(e.actor))}</td><td style="max-width:420px;overflow-wrap:anywhere;">${escHtml((e.reason || "").slice(0, 240))}</td></tr>`))
       : `<div style="color:var(--muted)">No Autopilot events yet.</div>`;
     document.getElementById("apCtlStart").disabled = !(c.controls || {}).can_start;
     document.getElementById("apCtlStop").disabled = !(c.controls || {}).can_stop;
@@ -4668,9 +4717,6 @@ const AP_STATE_COLOR = { HEALTHY: "#86efac", DEGRADED: "#fcd34d", UNAVAILABLE: "
 let apReportShown = null;
 
 async function apOpsWrite(url, body) {
-  const op = ((document.getElementById("apOperator") || {}).value || "").trim();
-  const ao = document.getElementById("autoOperator");
-  if (op && ao) ao.value = op;
   return autoWrite(url, "POST", body);
 }
 
@@ -4736,7 +4782,7 @@ async function refreshAutopilotOps(force = false) {
            <button class="btn sm" ${nx.ready ? "" : "disabled title=\"readiness checks are not passing\""} data-target="${escHtml(nx.target_phase)}" onclick="apAdvancePhase(this.dataset.target)">Advance to ${escHtml(nx.target_phase)}</button>
            ${lower.length ? `<select id="apRetreatTarget">${lower.map(p => `<option>${escHtml(p)}</option>`).join("")}</select><button class="btn sm" onclick="apRetreatPhase()">Retreat</button>` : ""}
          </div>` : "")
-    + ((a.history || []).length ? `<div style="margin-top:8px;"><strong>History</strong></div>` + apTable(["When", "Change", "Outcome", "Operator", "Reason"], (a.history || []).slice(0, 10).map(e => `<tr${e.outcome === "REFUSED" ? ` style="color:#fca5a5"` : ""}><td>${autoTime(e.at_utc)}</td><td>${escHtml(e.from_phase)} → ${escHtml(e.to_phase)}</td><td>${escHtml(e.outcome)}</td><td>${escHtml(e.operator)}</td><td>${escHtml((e.reason || "").slice(0, 120))}${(e.blockers || []).length ? " · blockers: " + escHtml(e.blockers.map(b => b.id).join(", ")) : ""}</td></tr>`)) : ""));
+    + ((a.history || []).length ? `<div style="margin-top:8px;"><strong>History</strong></div>` + apTable(["When", "Change", "Outcome", "Reason"], (a.history || []).slice(0, 10).map(e => `<tr${e.outcome === "REFUSED" ? ` style="color:#fca5a5"` : ""}><td>${autoTime(e.at_utc)}</td><td>${escHtml(e.from_phase)} → ${escHtml(e.to_phase)}</td><td>${escHtml(e.outcome)}</td><td>${escHtml((e.reason || "").slice(0, 120))}${(e.blockers || []).length ? " · blockers: " + escHtml(e.blockers.map(b => b.id).join(", ")) : ""}</td></tr>`)) : ""));
   // reports
   const reps = o.reports || [];
   document.getElementById("apReportList").innerHTML = reps.length ? apTable(["Report", "Period", "Complete", "Generated", ""],

@@ -222,7 +222,7 @@ def api(tmp_path, world, monkeypatch):
 def test_api_write_guards(api):
     from fastapi.testclient import TestClient
     cp, eng, main, local, h = api
-    body = {"operator": OP, "force": True}
+    body = {"force": True}
     remote = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("192.168.1.20", 50000))
     assert remote.post("/api/self-healing/scan", json=body, headers=h).status_code == 403          # not loopback
     assert remote.get("/api/self-healing").status_code == 403
@@ -232,11 +232,11 @@ def test_api_write_guards(api):
     assert local.post("/api/self-healing/scan", json=body, headers={**h, "Sec-Fetch-Site": "cross-site"}).status_code == 403
     assert local.post("/api/self-healing/scan", content=json.dumps(body), headers={**h, "Content-Type": "text/plain"}).status_code == 415
     assert local.post("/api/self-healing/scan", json={**body, "level": "APPROVED_EXECUTION"}, headers=h).status_code == 422
-    assert local.post("/api/self-healing/scan", json={"operator": "\u0455elf-healing", "force": True}, headers=h).status_code == 403
-    assert local.post("/api/self-healing/scan", json={"operator": "Self.Healing", "force": True}, headers=h).status_code == 403
+    assert local.post("/api/self-healing/scan", json={"operator": "\u0455elf-healing", "force": True}, headers=h).status_code == 422
+    assert local.post("/api/self-healing/scan", json={"operator": "Self.Healing", "force": True}, headers=h).status_code == 422
     assert local.get("/api/self-healing/incidents?status=open&limit=100000").status_code == 400
     assert local.get("/api/self-healing?limit=0").status_code == 400
-    assert local.post("/api/self-healing/recoveries/../../x/execute", json={"operator": OP}, headers=h).status_code in (404, 405)
+    assert local.post("/api/self-healing/recoveries/../../x/execute", json={}, headers=h).status_code in (404, 405)
     assert cp.list_requests() == []                                       # none of the refused calls did anything
 
 
@@ -248,7 +248,7 @@ def test_api_never_exposes_secrets(api):
               f"Gemini request failed: HTTP 503 for https://generativelanguage.googleapis.com/v1?key={secret}")
     conn.commit()
     conn.close()
-    assert local.post("/api/self-healing/scan", json={"operator": OP, "force": True}, headers=h).status_code == 200
+    assert local.post("/api/self-healing/scan", json={"force": True}, headers=h).status_code == 200
     blob = json.dumps(local.get("/api/self-healing").json())
     blob += json.dumps(local.get("/api/self-healing/incidents?status=all").json())
     for i in local.get("/api/self-healing/incidents?status=all").json()["incidents"]:
@@ -514,7 +514,7 @@ def test_reads_never_create_tables(tmp_path, world, monkeypatch):
     assert local.get("/api/self-healing/history").json()["recoveries"] == []
     assert local.get("/api/self-healing/incidents/inc_000000000000").status_code == 404
     h = {"X-CrazzyDocs-CSRF": local.get("/api/autonomy/session").json()["csrf_token"]}
-    assert local.post("/api/self-healing/recoveries/rcv_000000000000/execute", json={"operator": OP}, headers=h).status_code == 404
+    assert local.post("/api/self-healing/recoveries/rcv_000000000000/execute", json={}, headers=h).status_code == 404
     assert table_rows(db, "selfheal_") == {}
 
 

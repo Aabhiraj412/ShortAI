@@ -390,13 +390,13 @@ def test_activation_api(tmp_path, monkeypatch):
     assert remote.get("/api/autopilot/activation").status_code == 403
     assert local.get("/api/autopilot/activation").json()["state"]["phase"] == A.OFF
     assert local.get("/api/autopilot/activation/readiness?phase=OBSERVE").json()["ready"] is True
-    body = {"operator": OP, "target": "OBSERVE", "reason": "go", "confirm": True}
+    body = {"target": "OBSERVE", "reason": "go", "confirm": True}
     assert local.post("/api/autopilot/activation/advance", json=body).status_code == 403          # no CSRF
     assert local.post("/api/autopilot/activation/advance", json=body | {"grant": True}, headers=h).status_code == 422
     r = local.post("/api/autopilot/activation/advance", json=body | {"target": "RECOMMEND"}, headers=h)
     assert r.status_code == 403 and "refused" in r.json()["detail"]
     assert local.post("/api/autopilot/activation/advance", json=body, headers=h).json()["phase"] == "OBSERVE"
-    r = local.post("/api/autopilot/activation/retreat", json={"operator": OP, "target": "OFF", "reason": "r"}, headers=h)
+    r = local.post("/api/autopilot/activation/retreat", json={"target": "OFF", "reason": "r"}, headers=h)
     assert r.json()["phase"] == "OFF" and cp.permissions()["global_level"] == "OFF"
 
 
@@ -508,11 +508,11 @@ def test_reports_api(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_reports", lambda: s)
     local = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     h = {"X-CrazzyDocs-CSRF": local.get("/api/autonomy/session").json()["csrf_token"]}
-    assert local.post("/api/autopilot/reports/generate", json={"operator": OP, "kind": "daily"}).status_code == 403
-    assert local.post("/api/autopilot/reports/generate", json={"operator": OP, "kind": "yearly"}, headers=h).status_code == 422
-    r = local.post("/api/autopilot/reports/generate", json={"operator": OP, "kind": "daily"}, headers=h).json()
+    assert local.post("/api/autopilot/reports/generate", json={"kind": "daily"}).status_code == 403
+    assert local.post("/api/autopilot/reports/generate", json={"kind": "yearly"}, headers=h).status_code == 422
+    r = local.post("/api/autopilot/reports/generate", json={"kind": "daily"}, headers=h).json()
     key = r["period"]["key"]
-    assert r["generated_by"] == OP
+    assert r["generated_by"] == "local-dashboard"
     assert local.get(f"/api/autopilot/reports/daily/{key}").json()["id"] == r["id"]
     assert local.get("/api/autopilot/reports/daily/..%2F..").status_code == 404
     assert local.get("/api/autopilot/reports/weekly/2020-W01").status_code == 404

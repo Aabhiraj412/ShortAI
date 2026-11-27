@@ -76,6 +76,12 @@ def tree(tmp_path):
     return tmp_path, db
 
 
+def _live(root, db):
+    """Storage lifecycle: every live run needs confirmation AND a successful dry run from the last hour."""
+    dry = _cleaner(root, db).run(trigger="test")
+    return _cleaner(root, db).run(trigger="test", live=True, confirm=True, authorization=dry["run_id"])
+
+
 def _eligible(rec):
     return {f["path"].replace("\\", "/").split("media/")[1] for f in rec["eligible_files"]}
 
@@ -104,11 +110,13 @@ def test_skip_reasons_are_specific(tree):
     r = rec["skip_reasons"]
     assert r["active job (RUNNING)"] == 1
     assert r["failed job may still be recoverable"] == 1
-    assert r["final deliverable (policy: permanent)"] >= 4
+    assert r["publication not confirmed public (publication_scheduled): protected"] == 3   # mp4, thumbnail, audio
+    assert r["final deliverable without a publication record (unpublished)"] == 1
+    assert r["final deliverable not uploaded (no YouTube video id)"] == 1
     assert r["thumbnail upload not remotely verified"] == 1
     assert r["publishing still pending"] == 1
-    assert r["protected: source / user-provided media"] == 1
-    assert r["unknown file: never touched automatically"] == 1
+    assert r["permanent (user media / branding)"] == 1
+    assert r["never deleted automatically"] == 1
 
 
 def test_variants_eligible_only_after_verified_thumbnail(tree):
@@ -136,7 +144,7 @@ def _finish_live_job(db):
 
 def test_live_refused_while_any_production_job_is_active(tree):
     root, db = tree                                       # fixture has job "live" RUNNING
-    rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+    rec = _live(root, db)
     assert rec["outcome"] == "refused" and rec["deleted"] == 0 and "active" in rec["errors"][0]
     assert (root / "media/productions/done/lemo_film/scene_01.mp4").exists()
     assert _cleaner(root, db).run(trigger="test")["outcome"] == "completed"     # dry run still allowed
@@ -145,14 +153,14 @@ def test_live_refused_while_any_production_job_is_active(tree):
 def test_confirmed_live_run_quarantines_only_eligible_and_is_idempotent(tree):
     root, db = tree
     _finish_live_job(db)
-    rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+    rec = _live(root, db)
     assert rec["deleted"] == 3 and rec["bytes_reclaimed"] == 3000
     assert not (root / "media/productions/done/lemo_film/scene_01.mp4").exists()
     q = list((root / "media/quarantine/junk_cleaner").rglob("scene_01.mp4"))
     assert len(q) == 1                                                   # moved, reversible
     assert (root / "media/productions/done/video/showcase_done.mp4").exists()
     assert (root / "media/productions/live/lemo_film/scene_01.mp4").exists()
-    again = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+    again = _live(root, db)
     assert again["deleted"] == 0                                         # nothing left to remove
     assert rec["categories"]["intermediate_clips"]["bytes_reclaimed"] == 1000
 
@@ -161,9 +169,10 @@ def test_concurrent_run_is_skipped(tree):
     root, db = tree
     from backend.app.core.dashboard_startup import ServerLock
     holder = ServerLock(root / "logs" / "junk_cleaner.lock")
+    dry = _cleaner(root, db).run(trigger="test")
     assert holder.acquire()
     try:
-        rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+        rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True, authorization=dry["run_id"])
     finally:
         holder.release()
     assert rec["outcome"] == "skipped_concurrent_run" and rec["deleted"] == 0
@@ -184,15 +193,18 @@ def test_runs_are_persisted_and_health_needs_a_recent_success(tree):
 
 def test_database_unavailable_evaluates_nothing(tmp_path):
     _file(tmp_path, "productions/done/lemo_film/scene_01.mp4")
-    rec = _cleaner(tmp_path, str(tmp_path / "missing" / "nope.db")).run(trigger="test", live=True, confirm=True)
+    rec = _cleaner(tmp_path, str(tmp_path / "missing" / "nope.db")).run(trigger="test")
     assert rec["outcome"] == "failed" and rec["deleted"] == 0
+    live = _cleaner(tmp_path, str(tmp_path / "missing" / "nope.db")).run(trigger="test", live=True, confirm=True,
+                                                                        authorization=rec["run_id"])
+    assert live["outcome"] == "refused"                       # a failed dry run never authorizes a live run
     assert (tmp_path / "media/productions/done/lemo_film/scene_01.mp4").exists()
 
 
 def test_quarantine_manifest_and_restore_round_trip(tree):
     root, db = tree
     _finish_live_job(db)
-    rec = _cleaner(root, db).run(trigger="test", live=True, confirm=True)
+    rec = _live(root, db)
     assert rec["deleted"] == 3
     qdir = root / "media/quarantine/junk_cleaner" / rec["run_id"]
     lines = [json.loads(x) for x in (qdir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()]

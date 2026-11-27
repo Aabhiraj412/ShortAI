@@ -893,10 +893,10 @@ def test_api_endpoints(tmp_path, world, monkeypatch):
     local = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     h = {"X-CrazzyDocs-CSRF": local.get("/api/autonomy/session").json()["csrf_token"]}
     assert TestClient(main.app).get("/api/self-healing").status_code == 403                      # not local
-    assert local.post("/api/self-healing/scan", json={"operator": OP, "force": True}).status_code == 403      # no CSRF
-    assert local.post("/api/self-healing/scan", json={"operator": ENGINE_ACTOR, "force": True}, headers=h).status_code == 403
-    r = local.post("/api/self-healing/scan", json={"operator": OP, "force": True}, headers=h)
-    assert r.status_code == 200 and r.json()["ran"] and r.json()["triggered_by"] == f"operator:{OP}"
+    assert local.post("/api/self-healing/scan", json={"force": True}).status_code == 403      # no CSRF
+    assert local.post("/api/self-healing/scan", json={"force": True, "operator": OP}, headers=h).status_code == 422
+    r = local.post("/api/self-healing/scan", json={"force": True}, headers=h)
+    assert r.status_code == 200 and r.json()["ran"] and r.json()["triggered_by"] == "operator:local-dashboard"
     ov = local.get("/api/self-healing").json()
     # Outcome-driven reporting: 6 open records, of which 2 are current (job running / seen within 6 h); one job
     # completed and three last occurred ~18 h ago with expired windows, so they are history, not current blockers.
@@ -911,12 +911,12 @@ def test_api_endpoints(tmp_path, world, monkeypatch):
     assert local.get("/api/self-healing/incidents/inc_nope").status_code == 404
     rec = [x for x in d["recoveries"] if x["action_type"] == "selfheal.provider.retry_readonly"][0]
     url = f"/api/self-healing/recoveries/{rec['id']}"
-    assert local.post(url + "/approve", json={"operator": "self-healing-engine", "payload_hash": rec["payload_hash"]}, headers=h).status_code == 403
-    assert local.post(url + "/reject", json={"operator": OP}, headers=h).status_code == 422          # reason required
-    assert local.post(url + "/approve", json={"operator": OP, "payload_hash": rec["payload_hash"]}, headers=h).status_code == 200
-    ex = local.post(url + "/execute", json={"operator": OP}, headers=h).json()
+    assert local.post(url + "/approve", json={"operator": "self-healing-engine", "payload_hash": rec["payload_hash"]}, headers=h).status_code == 422
+    assert local.post(url + "/reject", json={}, headers=h).status_code == 422          # reason required
+    assert local.post(url + "/approve", json={"payload_hash": rec["payload_hash"]}, headers=h).status_code == 200
+    ex = local.post(url + "/execute", json={}, headers=h).json()
     assert ex["executed"] is False and "APPROVED_EXECUTION" in ex["reason"] and world.calls == []
-    assert local.post("/api/self-healing/recoveries/rcv_nope/execute", json={"operator": OP}, headers=h).status_code == 404
+    assert local.post("/api/self-healing/recoveries/rcv_nope/execute", json={}, headers=h).status_code == 404
     hist = local.get("/api/self-healing/history").json()
     assert "learning" in hist and "stats" in hist
 
@@ -935,7 +935,7 @@ def test_api_reports_blocked_engine(tmp_path, world, monkeypatch):
     cp.set_dashboard_kill_switch(True, OP, "emergency stop")
     ov = local.get("/api/self-healing").json()
     assert ov["state"]["mode"] == "BLOCKED" and "dashboard" in ov["state"]["kill_switches"]
-    r = local.post("/api/self-healing/scan", json={"operator": OP, "force": True}, headers=h).json()
+    r = local.post("/api/self-healing/scan", json={"force": True}, headers=h).json()
     assert r["ran"] is False and r["mode"] == "BLOCKED"
 
 

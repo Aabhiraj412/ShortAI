@@ -447,10 +447,10 @@ def test_autopilot_api(tmp_path, monkeypatch):
     assert local.get("/api/autopilot").status_code == 200
     assert local.get("/api/autopilot/policy").status_code == 200
     url = "/api/autopilot/recommendations/rec_" + "a" * 16 + "/propose"
-    assert local.post(url, json={"operator": OP, "action_type": ACTION}).status_code == 403            # no CSRF
-    assert local.post("/api/autopilot/recommendations/..%2Fx/propose", json={"operator": OP, "action_type": ACTION},
+    assert local.post(url, json={"action_type": ACTION}).status_code == 403            # no CSRF
+    assert local.post("/api/autopilot/recommendations/..%2Fx/propose", json={"action_type": ACTION},
                       headers=h).status_code == 404
-    assert local.post(url, json={"operator": OP, "action_type": "production.data.delete"}, headers=h).status_code == 403
-    assert local.post(url, json={"operator": OP, "action_type": ACTION, "execute": True}, headers=h).status_code == 422
-    ok = local.post(url, json={"operator": OP, "action_type": ACTION}, headers=h)
+    assert local.post(url, json={"action_type": "production.data.delete"}, headers=h).status_code == 403
+    assert local.post(url, json={"action_type": ACTION, "execute": True}, headers=h).status_code == 422
+    ok = local.post(url, json={"action_type": ACTION}, headers=h)
     assert ok.status_code == 200 and ok.json()["request"]["status"] == PENDING

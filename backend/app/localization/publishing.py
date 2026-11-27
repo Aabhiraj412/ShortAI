@@ -5,8 +5,15 @@ Separate from the English publishing ledger and the English 24-cycle schedule (n
 * **Queue** (`hindi_publications`): one row per Hindi localization that PASSED Hindi QC (``UNIQUE(localization_id)``).
   English videos cannot enter: rows are created only from ``content_localizations`` rows whose target is the Hindi
   channel, and the video file must lie under ``media/localizations/<hi>/``.
-* **Schedule** (``channel_registry.publishing_config_json`` of the Hindi channel, key ``schedule``): enabled flag
-  (default OFF), daily times in Asia/Kolkata, daily limit, max attempts. Changing it is a dashboard action.
+* **Schedule** (``channel_registry.publishing_config_json`` of the Hindi channel, key ``schedule``): a scheduling
+  ``strategy`` plus its settings, the enabled flag (default OFF), daily limit and max attempts.
+  - ``MANUAL`` (current): ``cycles`` maps each English production cycle id to ``{"same_as_english": bool,
+    "time": "HH:MM"}``. "Same as English" (the default for every cycle, also for cycles added later) follows the
+    English cycle's Target Publish Time as it is in the active schedule. The English schedule itself is never
+    written: Hindi times are stored only here.
+  - Future strategies (e.g. an analytical one) register a planner in ``PLANNERS`` that returns an individual
+    timestamp per video. The queue stores one ``scheduled_at_utc`` per video, never a fixed slot.
+  Each channel has its own strategy; English keeps its existing per-cycle target times.
 * **Uploads** use ONLY the Hindi channel's own token file (``ChannelRegistry.credential_path``), and the authenticated
   identity is checked with ``channels.list?mine=true`` against the verified Hindi channel id before every upload.
   Videos are uploaded private with ``publishAt`` = the scheduled slot (YouTube publishes at that time).
@@ -35,8 +42,13 @@ TARGET = "hi"
 DRAFT, SCHEDULED, UPLOADING, UPLOADED, FAILED, NEEDS_CHECK = (
     "DRAFT", "SCHEDULED", "UPLOADING", "UPLOADED", "FAILED", "NEEDS_CHECK")
 EDITABLE = (DRAFT, SCHEDULED, FAILED)
-DEFAULT_SCHEDULE = {"enabled": False, "timezone": "Asia/Kolkata", "times": ["19:30"], "daily_limit": 1,
-                    "max_attempts": 3}
+DEFAULT_SCHEDULE = {"strategy": "MANUAL", "enabled": False, "timezone": "Asia/Kolkata", "daily_limit": 24,
+                    "max_attempts": 3, "cycles": {}}
+STRATEGIES = ("MANUAL",)                  # reserved for later: "ANALYTICAL" (per-video timestamps)
+LEGACY_KEYS = ("times",)                  # the former single daily-time list; ignored
+CYCLE_RE = re.compile(r"cycle_\d{1,3}")
+JOB_RE = re.compile(r"^(cycle_\d{1,3})_(\d{8})_(\d{4})$")
+PUBLISH_MIN_LEAD = timedelta(minutes=15)  # YouTube needs publishAt in the future; a missed time is re-planned
 UPLOAD_LEAD = timedelta(hours=2)          # upload this long before the slot (YouTube publishes at publishAt)
 MIN_LEAD = timedelta(minutes=20)
 STALE_UPLOAD = timedelta(minutes=45)
@@ -89,28 +101,40 @@ def _parse(ts: Optional[str]) -> Optional[datetime]:
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
+def _hhmm(t: Any) -> Optional[str]:
+    m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(t or ""))
+    return m.group(0) if m else None
+
+
+def validate_cycles(cycles: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(cycles, dict) or len(cycles) > 96:
+        raise PublishingError("cycles must map cycle ids to Hindi time settings", 400)
+    out = {}
+    for cid, v in cycles.items():
+        if not CYCLE_RE.fullmatch(str(cid)) or not isinstance(v, dict) or set(v) - {"same_as_english", "time"}:
+            raise PublishingError(f"invalid Hindi time setting for {cid!r}", 400)
+        same = v.get("same_as_english", True) is not False
+        t = v.get("time")
+        if not same and not _hhmm(t):
+            raise PublishingError(f"{cid}: choose a Hindi time (HH:MM) or use Same as English", 400)
+        out[str(cid)] = {"same_as_english": same, "time": None if same else _hhmm(t)}
+    return out
+
+
 def validate_schedule(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(DEFAULT_SCHEDULE)
+    cfg = {k: v for k, v in cfg.items() if k not in LEGACY_KEYS}
     unknown = set(cfg) - set(DEFAULT_SCHEDULE)
     if unknown:
         raise PublishingError(f"unknown schedule field(s): {', '.join(sorted(unknown))}", 400)
     out.update(cfg)
     if out["timezone"] != "Asia/Kolkata":
         raise PublishingError("the Hindi schedule uses Asia/Kolkata", 400)
-    times = out["times"]
-    if not isinstance(times, list) or not 1 <= len(times) <= 6:
-        raise PublishingError("give 1 to 6 daily times", 400)
-    norm = []
-    for t in times:
-        m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(t))
-        if not m:
-            raise PublishingError(f"invalid time {t!r} (HH:MM, 24 h)", 400)
-        norm.append(m.group(0))
-    if len(set(norm)) != len(norm):
-        raise PublishingError("duplicate daily times", 400)
-    out["times"] = sorted(norm)
-    if not isinstance(out["daily_limit"], int) or not 1 <= out["daily_limit"] <= 6:
-        raise PublishingError("daily_limit must be 1 to 6", 400)
+    if out["strategy"] not in STRATEGIES:
+        raise PublishingError(f"scheduling strategy {out['strategy']!r} is not available (available: MANUAL)", 400)
+    out["cycles"] = validate_cycles(out["cycles"])
+    if not isinstance(out["daily_limit"], int) or not 1 <= out["daily_limit"] <= 24:
+        raise PublishingError("daily_limit must be 1 to 24", 400)
     if not isinstance(out["max_attempts"], int) or not 1 <= out["max_attempts"] <= 5:
         raise PublishingError("max_attempts must be 1 to 5", 400)
     out["enabled"] = out["enabled"] is True
@@ -135,7 +159,8 @@ def validate_metadata(title: str, description: str, tags: List[str]) -> List[str
 class HindiPublisher:
     def __init__(self, db_path: str, *, registry=None, media_dir: Optional[Path] = None,
                  service_factory: Optional[Callable[[], Any]] = None, quota=None,
-                 clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
+                 clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                 english_cycles: Optional[Callable[[], List[Dict[str, Any]]]] = None):
         if registry is None:
             from backend.app.channels.registry import get_registry
             registry = get_registry()
@@ -145,6 +170,7 @@ class HindiPublisher:
         self.db_path, self.reg, self.media_dir, self.clock = db_path, registry, Path(media_dir), clock
         self._service_factory = service_factory
         self._quota = quota
+        self._english_cycles = english_cycles
         with self._connect() as c:
             c.executescript(SCHEMA)
 
@@ -221,6 +247,74 @@ class HindiPublisher:
             conn.close()
         return new
 
+    def set_cycle_times(self, cycles: Dict[str, Any], *, actor: str = "dashboard") -> Dict[str, Any]:
+        """Saves the Hindi time of each production cycle (merged per cycle). The English schedule is not touched."""
+        cur = self.schedule()
+        merged = dict(cur["cycles"])
+        merged.update(validate_cycles(cycles))
+        return self.set_schedule({k: v for k, v in dict(cur, cycles=merged).items()}, actor=actor)
+
+    def english_cycles(self) -> List[Dict[str, Any]]:
+        """The ACTIVE English production schedule's cycles (read only)."""
+        if self._english_cycles:
+            return self._english_cycles()
+        from backend.app.services import schedule_service
+        return [{k: c.get(k) for k in ("cycle_id", "name", "start_time", "target_publish_time", "enabled")}
+                for c in (schedule_service.schedule_view().get("cycles") or [])]
+
+    def cycle_times(self) -> List[Dict[str, Any]]:
+        """Per English cycle: its target time, the Hindi setting and the effective Hindi time (for the UI)."""
+        cfg = self.schedule()["cycles"]
+        out = []
+        for c in self.english_cycles():
+            setting = cfg.get(c["cycle_id"]) or {"same_as_english": True, "time": None}
+            eff = c.get("target_publish_time") if setting["same_as_english"] else setting["time"]
+            out.append({"cycle_id": c["cycle_id"], "name": c.get("name"), "start_time": c.get("start_time"),
+                        "english_target_publish_time": c.get("target_publish_time"),
+                        "same_as_english": setting["same_as_english"], "hindi_time": setting["time"],
+                        "effective_hindi_time": _hhmm(eff)})
+        return out
+
+    # -- planning (strategy) ---------------------------------------------------------------------------------------
+    def _plan_manual(self, source_job_id: str, not_before: datetime) -> Dict[str, Any]:
+        """MANUAL: the cycle's Hindi time (or the English target time, "Same as English"). The first occurrence at or
+        after the English production start that is also at least PUBLISH lead time after ``not_before`` (a late
+        localization or a missed time moves to the next day's occurrence; never "now")."""
+        m = JOB_RE.match(source_job_id or "")
+        if not m:
+            return {"at": None, "reason": f"{source_job_id}: not a production cycle job"}
+        cid, ymd, hm = m.groups()
+        row = next((r for r in self.cycle_times() if r["cycle_id"] == cid), None)
+        if row is None:
+            return {"at": None, "reason": f"{cid} is not in the active production schedule"}
+        t = row["effective_hindi_time"]
+        if not t:
+            return {"at": None, "reason": f"{cid}: no Hindi time (English has no target time; choose one)"}
+        start = datetime(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:]), int(hm[:2]), int(hm[2:]), tzinfo=IST)
+        h, mi = map(int, t.split(":"))
+        occ = start.replace(hour=h, minute=mi)
+        if occ < start:                                       # e.g. 23:00 production, 00:00 target: next day
+            occ += timedelta(days=1)
+        while occ < not_before:
+            occ += timedelta(days=1)
+        return {"at": occ, "reason": f"{cid} Hindi time {t} IST" + (" (same as English)" if row["same_as_english"] else "")}
+
+    def plan(self, row: Dict[str, Any], *, exclude: Optional[int] = None) -> Dict[str, Any]:
+        """Strategy dispatch -> one individual timestamp for this video, within the daily limit."""
+        cfg = self.schedule()
+        planner = PLANNERS[cfg["strategy"]]
+        res = planner(self, row["source_job_id"], self.clock() + MIN_LEAD)
+        if res["at"] is None:
+            return res
+        taken = self._taken(exclude=exclude)
+        at = res["at"]
+        for _ in range(60):
+            day = at.astimezone(IST).date()
+            if sum(1 for t in taken if t and t.astimezone(IST).date() == day) < cfg["daily_limit"]:
+                return dict(res, at=at)
+            at += timedelta(days=1)
+        return {"at": None, "reason": "daily limit reached for the next 60 days"}
+
     def gates(self) -> Dict[str, Any]:
         reasons = []
         ch = self.reg.get(TARGET)
@@ -281,6 +375,14 @@ class HindiPublisher:
                 if cur.rowcount:
                     added += 1
                     self._event(c, cur.lastrowid, "QUEUED", {"localization_id": loc["id"]})
+                    new_id = cur.lastrowid
+                else:
+                    new_id = None
+            if new_id:
+                try:
+                    self.schedule_item(new_id)                    # its cycle's Hindi time (strategy plan)
+                except PublishingError as exc:
+                    self._update(new_id, "NOT_PLANNED", str(exc), last_error=str(exc)[:300])
         return added
 
     def queue(self) -> Dict[str, Any]:
@@ -301,7 +403,13 @@ class HindiPublisher:
                           "last_error": r["last_error"], "localization_status": loc.get("status"),
                           "qc_passed": bool(qc.get("passed")), "thumbnail": json.loads(r["thumbnail_json"] or "{}"),
                           "thumbnail_asset": bool(r["thumbnail_path"] and Path(r["thumbnail_path"]).is_file())})
+        try:
+            cycles = self.cycle_times()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Hindi cycle times unavailable: %s", type(exc).__name__)
+            cycles = []
         return {"items": items, "events": events, "schedule": self.schedule(), "gates": self.gates(),
+                "cycle_times": cycles,
                 "note": "Hindi videos only (QC passed). Uploads use the Hindi channel's own authorization; nothing "
                         "is published unless the channel is active, Hindi publishing is authorized and the "
                         "schedule is enabled."}
@@ -315,16 +423,6 @@ class HindiPublisher:
             raise PublishingError(f"metadata can be edited only in {', '.join(EDITABLE)} (state {self.get(pid)['state']})")
         return self.get(pid)
 
-    def _slots(self, start: datetime, days: int = 30) -> List[datetime]:
-        cfg = self.schedule()
-        out = []
-        d0 = start.astimezone(IST).date()
-        for i in range(days):
-            for t in cfg["times"]:
-                h, m = map(int, t.split(":"))
-                out.append(datetime(d0.year, d0.month, d0.day, h, m, tzinfo=IST) + timedelta(days=i))
-        return [s for s in out if s >= start]
-
     def _taken(self, exclude: Optional[int] = None) -> List[datetime]:
         with self._connect() as c:
             rows = c.execute("SELECT id, scheduled_at_utc FROM hindi_publications WHERE scheduled_at_utc IS NOT NULL "
@@ -332,8 +430,8 @@ class HindiPublisher:
         return [_parse(r[1]) for r in rows if r[0] != exclude]
 
     def schedule_item(self, pid: int, at_utc: Optional[str] = None) -> Dict[str, Any]:
-        """Assigns a slot: the given one (must be a configured daily time) or the next free one. Enforces the daily
-        limit (per IST day), one video per slot and the minimum lead time."""
+        """Schedules one video: at an individual timestamp (``at_utc``, at least 20 min ahead) or at the time the
+        channel's strategy plans for it (MANUAL: its cycle's Hindi time). One time per video; daily limit kept."""
         row = self.get(pid)
         if row["state"] not in (DRAFT, FAILED, SCHEDULED):
             raise PublishingError(f"cannot schedule in state {row['state']}")
@@ -343,34 +441,45 @@ class HindiPublisher:
         loc = next((l for l in self.reg.localizations(TARGET, limit=200) if l["id"] == row["localization_id"]), None)
         if not loc or loc["status"] != "QC_PASSED":
             raise PublishingError("only a localization that passed Hindi QC can be scheduled")
-        cfg = self.schedule()
-        earliest = self.clock() + MIN_LEAD
-        taken = self._taken(exclude=pid)
-        per_day: Dict[Any, int] = {}
-        for t in taken:
-            per_day[t.astimezone(IST).date()] = per_day.get(t.astimezone(IST).date(), 0) + 1
-        slots = self._slots(earliest)
         if at_utc:
             want = _parse(at_utc)
-            if want is None or want < earliest:
+            if want is None or want < self.clock() + MIN_LEAD:
                 raise PublishingError("the time must be at least 20 minutes from now", 400)
-            if not any(abs((s - want).total_seconds()) < 60 for s in slots):
-                raise PublishingError(f"not a configured daily time ({', '.join(cfg['times'])} IST)", 400)
-            slots = [want]
-        for s in slots:
-            if any(t and abs((t - s).total_seconds()) < 60 for t in taken):
-                if at_utc:
-                    raise PublishingError("another Hindi video already has this slot")
-                continue
-            if per_day.get(s.astimezone(IST).date(), 0) >= cfg["daily_limit"]:
-                if at_utc:
-                    raise PublishingError(f"the daily limit ({cfg['daily_limit']}) is reached for that day")
-                continue
-            if not self._update(pid, "SCHEDULED", {"at": _ts(s)}, expect=(DRAFT, FAILED, SCHEDULED),
-                                state=SCHEDULED, scheduled_at_utc=_ts(s), last_error=None):
-                raise PublishingError("the item changed; refresh and try again")
-            return self.get(pid)
-        raise PublishingError("no free slot in the next 30 days")
+            day = want.astimezone(IST).date()
+            if sum(1 for t in self._taken(exclude=pid) if t and t.astimezone(IST).date() == day) >= \
+                    self.schedule()["daily_limit"]:
+                raise PublishingError(f"the daily limit ({self.schedule()['daily_limit']}) is reached for that day")
+            at, why = want, "individual time"
+        else:
+            p = self.plan(row, exclude=pid)
+            if p["at"] is None:
+                raise PublishingError(p["reason"])
+            at, why = p["at"], p["reason"]
+        if not self._update(pid, "SCHEDULED", {"at": _ts(at), "why": why}, expect=(DRAFT, FAILED, SCHEDULED),
+                            state=SCHEDULED, scheduled_at_utc=_ts(at), last_error=None):
+            raise PublishingError("the item changed; refresh and try again")
+        return self.get(pid)
+
+    def replan_missed(self) -> int:
+        """A SCHEDULED video whose time is too close or past (not uploaded: gates closed, late localization) moves to
+        the next valid occurrence of its planned time. Never published immediately."""
+        now = self.clock()
+        with self._connect() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM hindi_publications WHERE state='SCHEDULED' AND "
+                                               "scheduled_at_utc < ?", (_ts(now + PUBLISH_MIN_LEAD),))]
+        n = 0
+        for r in rows:
+            p = self.plan(r, exclude=r["id"])
+            if p["at"] is None:                                   # individual time without a plan: next day
+                at = _parse(r["scheduled_at_utc"])
+                while at < now + MIN_LEAD:
+                    at += timedelta(days=1)
+                p = {"at": at, "reason": "same time on the next day"}
+            if self._update(r["id"], "REPLANNED", {"from": r["scheduled_at_utc"], "to": _ts(p["at"]),
+                                                   "why": p["reason"]}, expect=(SCHEDULED,),
+                            scheduled_at_utc=_ts(p["at"])):
+                n += 1
+        return n
 
     def unschedule(self, pid: int) -> Dict[str, Any]:
         if not self._update(pid, "UNSCHEDULED", None, expect=(SCHEDULED, FAILED), state=DRAFT, scheduled_at_utc=None):
@@ -438,13 +547,15 @@ class HindiPublisher:
         gate = self.quota.check("uploads", 1)
         if not gate["allowed"]:
             return {"uploaded": False, "reason": gate["reason"]}
+        if not row["scheduled_at_utc"] or _parse(row["scheduled_at_utc"]) < self.clock() + PUBLISH_MIN_LEAD:
+            return {"uploaded": False, "reason": "the planned time has passed: it is re-planned, never published now"}
         if not self._update(pid, "UPLOAD_STARTED", None, expect=(SCHEDULED,), state=UPLOADING):
             return {"uploaded": False, "reason": "not claimable (already uploading or changed)"}
         try:
             from googleapiclient.http import MediaFileUpload
             svc = self._service()
             self._check_identity(svc)
-            publish_at = max(_parse(row["scheduled_at_utc"]), self.clock() + timedelta(minutes=15))
+            publish_at = _parse(row["scheduled_at_utc"])
             body = {"snippet": {"title": row["title"], "description": row["description"], "tags": row["tags"],
                                 "categoryId": row["category_id"], "defaultLanguage": "hi",
                                 "defaultAudioLanguage": "hi"},
@@ -497,6 +608,7 @@ class HindiPublisher:
         """Scheduler entry point (coordinator tick, every few minutes). Uploads at most one due video per tick."""
         self.recover()
         self.sync()
+        self.replan_missed()
         gates = self.gates()
         if not gates["can_publish"]:
             return {"ran": False, "reasons": gates["reasons"]}
@@ -506,6 +618,9 @@ class HindiPublisher:
                             "ORDER BY scheduled_at_utc, id LIMIT 1", (_ts(now + UPLOAD_LEAD),)).fetchone()
         res = self.upload(due[0]) if due else {"uploaded": False, "reason": "nothing due"}
         return {"ran": True, "upload": res, "thumbnails": self._thumbnails()}
+
+
+PLANNERS: Dict[str, Callable[..., Dict[str, Any]]] = {"MANUAL": HindiPublisher._plan_manual}
 
 
 def get_publisher() -> HindiPublisher:

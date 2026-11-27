@@ -504,3 +504,21 @@ def test_channels_card_has_no_operator_or_reason_inputs():
     assert "chReason" not in js and "chOperator" not in js and "autoWrite" not in js and "dashWrite" in js
     hist = html[html.index("async function refreshChannels()"):html.index("async function locCreate()")]
     assert '"Actor"' not in hist and "e.actor" not in hist
+
+
+def test_no_operator_field_anywhere_in_the_dashboard_or_api_bodies():
+    """Owner request 2026-11-28: the Operator field is removed from every page and request body."""
+    import re as _re
+    from backend.app import main
+    html = (Path(main.__file__).parent / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ("Operator</label>", 'placeholder="your name"', "Enter your operator name", "crazzydocs.operator",
+                   "operator: op", "Operator Name", 'id="autoOperator"', 'id="apOperator"', 'id="recOperator"',
+                   'id="healOperator"', 'id="intelOperator"', '"Outcome", "Operator"', "e.operator"):
+        assert needle not in html, needle
+    assert not _re.search(r"<input[^>]+id=\"\w*[Oo]perator\w*\"", html)
+    for name, model in vars(main).items():
+        fields = getattr(model, "model_fields", None)
+        if isinstance(fields, dict) and isinstance(model, type) and model.__module__ == main.__name__:
+            assert "operator" not in fields, name
+    from backend.app.autonomy.control_plane import validate_operator
+    assert validate_operator(main.DASHBOARD_ACTOR) == "local-dashboard"     # still a human identity for approvals

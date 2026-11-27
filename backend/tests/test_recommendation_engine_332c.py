@@ -588,22 +588,22 @@ def test_api_endpoints(api):
     cp, e, main, local, h = api
     from fastapi.testclient import TestClient
     assert TestClient(main.app).get("/api/recommendations").status_code == 403
-    assert local.post("/api/recommendations/run", json={"operator": OP, "force": True}).status_code == 403      # no CSRF token
-    assert local.post("/api/recommendations/run", json={"operator": OP}, headers={**h, "Origin": "http://evil.example"}).status_code == 403
-    r = local.post("/api/recommendations/run", json={"operator": OP, "force": True}, headers=h)
-    assert r.status_code == 200 and r.json()["ran"] and r.json()["run"]["triggered_by"] == f"operator:{OP}"
+    assert local.post("/api/recommendations/run", json={"force": True}).status_code == 403      # no CSRF token
+    assert local.post("/api/recommendations/run", json={}, headers={**h, "Origin": "http://evil.example"}).status_code == 403
+    r = local.post("/api/recommendations/run", json={"force": True}, headers=h)
+    assert r.status_code == 200 and r.json()["ran"] and r.json()["run"]["triggered_by"] == "operator:local-dashboard"
     ov = local.get("/api/recommendations").json()
     assert ov["summary"]["active"] == len(ov["recommendations"]) > 0 and ov["state"]["mode"] == "RECOMMEND"
     assert all(x["kind"] == "recommendation" for x in ov["recommendations"]) and "this engine itself executes nothing" in ov["note"]
     rid = ov["recommendations"][0]["id"]
     d = local.get(f"/api/recommendations/{rid}").json()
     assert d["evidence"] and d["scoring"]["confidence"]["components"] and d["history"]
-    assert local.post(f"/api/recommendations/{rid}/reject", json={"operator": OP}, headers=h).status_code == 422          # reason required
-    assert local.post(f"/api/recommendations/{rid}/resolve", json={"operator": OP, "evidence": ""}, headers=h).status_code == 422
-    assert local.post(f"/api/recommendations/{rid}/acknowledge", json={"operator": "autonomy-engine"}, headers=h).status_code == 403
-    assert local.post(f"/api/recommendations/{rid}/acknowledge", json={"operator": OP}, headers=h).json()["recommendation"]["status"] == "ACKNOWLEDGED"
-    assert local.post(f"/api/recommendations/{rid}/resolve", json={"operator": OP, "evidence": "verified"}, headers=h).status_code == 200
-    assert local.post(f"/api/recommendations/{rid}/acknowledge", json={"operator": OP}, headers=h).status_code == 409
+    assert local.post(f"/api/recommendations/{rid}/reject", json={}, headers=h).status_code == 422          # reason required
+    assert local.post(f"/api/recommendations/{rid}/resolve", json={"evidence": ""}, headers=h).status_code == 422
+    assert local.post(f"/api/recommendations/{rid}/acknowledge", json={"operator": "system"}, headers=h).status_code == 422
+    assert local.post(f"/api/recommendations/{rid}/acknowledge", json={}, headers=h).json()["recommendation"]["status"] == "ACKNOWLEDGED"
+    assert local.post(f"/api/recommendations/{rid}/resolve", json={"evidence": "verified"}, headers=h).status_code == 200
+    assert local.post(f"/api/recommendations/{rid}/acknowledge", json={}, headers=h).status_code == 409
     assert local.get("/api/recommendations?status=history").json()["recommendations"][0]["id"] == rid
     assert local.get("/api/recommendations?status=BOGUS").status_code == 400
     assert local.get("/api/recommendations/rec_nope").status_code == 404
@@ -616,7 +616,7 @@ def test_api_endpoints(api):
 def test_api_reports_blocked_engine(api):
     cp, e, main, local, h = api
     cp.sentinel_path.write_text("stop", encoding="utf-8")
-    r = local.post("/api/recommendations/run", json={"operator": OP, "force": True}, headers=h).json()
+    r = local.post("/api/recommendations/run", json={"force": True}, headers=h).json()
     assert r["ran"] is False and r["mode"] == "BLOCKED"
     assert local.get("/api/recommendations").json()["state"]["mode"] == "BLOCKED"
 
@@ -632,8 +632,9 @@ def test_dashboard_recommendation_center():
         assert f'data-tab="{tab}"' in html and f'id="tab-{tab}"' in html, tab
     sec = html[html.index('id="tab-recs"'):html.index("STAGE 3.32B: AUTONOMY CONTROL PLANE")]
     for el in ("recActive", "recCritical", "recHigh", "recNew", "recMode", "recBreakdown", "recTrend", "recList", "recInsufficient",
-               "recFilter", "recCategory", "recOperator"):
+               "recFilter", "recCategory"):
         assert f'id="{el}"' in sec, el
+    assert 'id="recOperator"' not in sec                       # the Operator field was removed (owner request)
     # Remediation follow-up: routine follow-ups now run automatically, so the page states that and points to the one
     # central intervention feed instead of repeating "nothing is executed / approve in Autonomy Control".
     assert "run automatically under the current control state" in sec and "openAttention()" in sec

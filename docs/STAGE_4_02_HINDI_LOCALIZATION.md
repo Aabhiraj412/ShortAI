@@ -261,3 +261,36 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 - Backfill: at most 2 per 5-min reconciliation and 60 per Pacific day, always keeping 3,000 general units free. Portrait-safe thumbnails are never replaced.
 
 **Channels.** Activation and deactivation are one confirmed action. The operator and reason fields were removed from the dashboard, the API (`ChannelChangeRequest` accepts only `confirm`) and the registry. Older records are kept in the database but never displayed. CSRF, origin, local-control and channel-state validation are unchanged.
+
+## 11. Hindi Target Publish Time per production cycle (2026-11-28)
+
+**UI.** The Production Schedule table has a **Hindi Target Publish Time** column beside the English Target Publish Time.
+- Each cycle has a **Same as English** toggle (on by default) and a time picker, enabled when the toggle is off.
+- **Save Hindi Times** saves only this column, immediately. It is separate from Save Draft / Activate, so the English schedule's draft, revision and target times are never changed.
+- The Hindi publishing card now shows the strategy and keeps the enabled switch, daily limit (1–24) and max attempts. The single daily-time field is gone.
+
+**Data model.** The Hindi channel's `publishing_config_json.schedule`:
+```
+{"strategy": "MANUAL", "enabled": false, "timezone": "Asia/Kolkata", "daily_limit": 24, "max_attempts": 3,
+ "cycles": {"cycle_20": {"same_as_english": false, "time": "22:15"}, ...}}
+```
+- A cycle missing from `cycles` follows English, so cycles added later default to Same as English.
+- The legacy `times` key is ignored.
+- API: `GET/POST /api/hindi-publishing/cycle-times`. `POST /api/hindi-publishing/schedule` merges, so it never drops the cycle times.
+
+**Scheduling.**
+- When a Hindi localization passes QC it enters the queue and is planned at once by the channel's strategy. `MANUAL` uses its cycle's Hindi time, or the English target when Same as English is on.
+- The time is the first occurrence at or after the English production start (a 23:00 cycle with a 00:00 target means the next day) that is also at least 20 min from now. A late localization therefore gets the next day's occurrence.
+- Each video stores one individual `scheduled_at_utc`.
+- A scheduled time that passes without an upload (publishing not authorized, schedule off, late) is re-planned to the next occurrence. Nothing is ever published immediately, and an upload never uses a publishAt less than 15 min ahead.
+- Uploads still need Hindi QC, the Hindi schedule enabled and `publishing_authorized`.
+
+**Future analytical scheduling.**
+- `PLANNERS` maps a strategy name to a function returning an individual timestamp per video, and the queue already stores per-video timestamps.
+- `schedule_item(pid, at_utc)` accepts any individual time (at least 20 min ahead), which is what an analytical planner would supply.
+- Each channel has its own `strategy`. English keeps its existing per-cycle targets, and its own strategy field can be added the same way when the analytical engine arrives.
+- `ANALYTICAL` is reserved and rejected for now.
+
+**Limits.**
+- Videos already planned keep their time when English times change later; only new or missed ones use the new times.
+- Up to `daily_limit` Hindi videos per IST day; beyond that, the next day.
