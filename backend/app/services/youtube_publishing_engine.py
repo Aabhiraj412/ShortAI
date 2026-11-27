@@ -1507,8 +1507,12 @@ class YouTubePublishingEngine:
             if (now - up).total_seconds() < min_age_sec:
                 continue
             checked += 1
-            res = tpl.verify_remote(st["video_id"], st["artifact_path"], fetch=fetch)
             portrait = tpl.portrait_of(st.get("artifact_path"))
+            # 16:9 check (perceptual hash). For the portrait-safe Shorts artifact the blurred side panels make the 16:9
+            # hash unreliable after YouTube's re-encode (measured: distance 35-37 for an exact upload), so the
+            # authoritative check there is YouTube's own 9:16 shortsAspectRatio image against the portrait.
+            res = ({"status": "verified", "variant": "shortsAspectRatio"} if portrait else
+                   tpl.verify_remote(st["video_id"], st["artifact_path"], fetch=fetch))
             if res["status"] == "verified" and portrait:
                 # Shorts: YouTube's own metadata must list the 9:16 variant, and it must show the portrait design
                 try:
@@ -1590,8 +1594,8 @@ class YouTubePublishingEngine:
             if not vid or not thumb or not tpl.is_portrait(thumb):
                 continue
             st = states.get(int(lid)) or {}
-            if tpl.portrait_of(st.get("artifact_path")) and st.get("upload_status") == "uploaded" and \
-                    st.get("verify_status") in ("verified", "pending", "unavailable"):
+            if tpl.portrait_of(st.get("artifact_path")) and \
+                    st.get("upload_status") in ("uploaded", "awaiting_processing") and st.get("verify_status") != "failed":
                 continue                           # already the portrait-safe thumbnail: never replaced again
             out.append({"ledger_id": int(lid), "video_id": vid, "thumbnail_path": thumb})
         return sorted(out, key=lambda r: -r["ledger_id"])

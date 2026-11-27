@@ -136,9 +136,12 @@ def test_verification_sweep_verifies_or_marks_not_ready_after_retries(engine, tm
     art = engine.thumbnail_store().get(10)["artifact_path"]
     wrong = _img(tmp_path / "w.png", (1280, 720), (240, 240, 20))
     # YouTube's metadata lists the 9:16 variant; it shows the portrait design for the good video
-    engine.oauth.get_authenticated_service.return_value = _svc(thumbs={"shortsAspectRatio": {"url": "sar/VIDOK"}})
-    fetch = lambda url: (_jpeg_bytes(portrait) if "sar/" in url else _jpeg_bytes(art) if "VIDOK" in url  # noqa: E731
-                         else _jpeg_bytes(wrong))
+    svc = MagicMock()
+    svc.videos.return_value.list.side_effect = lambda part, id: MagicMock(execute=lambda: {"items": [{"snippet": {
+        "thumbnails": {"shortsAspectRatio": {"url": f"sar/{id}"}}}}]})
+    engine.oauth.get_authenticated_service.return_value = svc
+    # the good video's 9:16 image is the portrait design; the bad one still shows another picture
+    fetch = lambda url: _jpeg_bytes(portrait) if "sar/VIDOK" in url else _jpeg_bytes(wrong)   # noqa: E731
     errors = {}
     monkeypatch.setattr(engine.db, "update_queue_metadata_and_schedule", lambda lid, **kw: errors.__setitem__(lid, kw))
     monkeypatch.setattr(engine.db, "get_publication", lambda lid: {"error_details": None})
