@@ -1365,6 +1365,11 @@ def remote_matches_update(remote_item: Dict[str, Any], body: Dict[str, Any], met
             and _same_instant(rst.get("publishAt"), wst.get("publishAt")))
 
 
+UNAVAILABLE_MAX_CHECKS = 48                       # ~4 h of 5-min checks while a scheduled video is still private
+SHORTS_THUMBNAIL_BACKFILL_DAILY_MAX = 60          # thumbnails.set calls per Pacific day for the backfill (50 units each)
+THUMBNAIL_QUOTA_RESERVE = 3000                    # general units always left for English production
+
+
 class YouTubePublishingEngine:
     """Master YouTube Upload & Publishing Engine."""
 
@@ -1392,15 +1397,28 @@ class YouTubePublishingEngine:
         from backend.app.services.thumbnail_pipeline import ThumbnailStateStore
         return ThumbnailStateStore(self.db.db_path)
 
+    def _processing_succeeded(self, service: Any, video_id: str) -> Optional[str]:
+        """YouTube's processingStatus (lower case) or None when it cannot be read (1 unit)."""
+        try:
+            res = self.quota.execute(service.videos().list(part="processingDetails", id=video_id), "videos.list",
+                                     purpose="thumbnail_processing_check", video_id=video_id)
+            item = (res.get("items") or [{}])[0]
+            return ((item.get("processingDetails") or {}).get("processingStatus") or "").lower() or None
+        except Exception:  # noqa: BLE001
+            return None
+
     def _upload_thumbnail(self, service: Any, ledger_id: Optional[int], video_id: str,
-                          thumbnail_path: Optional[str]) -> Dict[str, Any]:
-        """Validated 1280x720 artifact -> thumbnails().set on the EXISTING video id -> persisted state.
-        Remote verification runs later (CDN propagation) in verify_uploaded_thumbnails()."""
+                          thumbnail_path: Optional[str], purpose: str = "thumbnail_upload") -> Dict[str, Any]:
+        """Validated artifact -> thumbnails().set on the EXISTING video id -> persisted state.
+
+        Shorts: the 9:16-safe 1280x720 artifact, and only after YouTube reports processing SUCCEEDED (a thumbnail set
+        earlier never gets the shortsAspectRatio variant); until then the state is ``awaiting_processing`` and the
+        reconciliation job sets it later. Remote verification runs in verify_uploaded_thumbnails()."""
         from backend.app.services import thumbnail_pipeline as tpl
         store = self.thumbnail_store() if ledger_id is not None else None
         prev = store.get(ledger_id) if store else {}
         attempts = int(prev.get("upload_attempts") or 0) + 1
-        artifact = tpl.youtube_artifact_for(thumbnail_path) if thumbnail_path else None
+        artifact = tpl.artifact_for(thumbnail_path, tpl.SHORT) if thumbnail_path else None
         validation = tpl.validate_thumbnail(artifact)
         if (artifact and prev.get("video_id") == video_id and prev.get("artifact_path") == artifact
                 and prev.get("upload_status") == "uploaded" and prev.get("verify_status") != "failed"):
@@ -1414,6 +1432,15 @@ class YouTubePublishingEngine:
                              upload_status="invalid", upload_attempts=attempts, last_error=err)
             logger.warning("Thumbnail not uploaded for %s: %s", video_id, err)
             return {"uploaded": False, "status": "invalid", "error": err, "artifact": artifact}
+        if tpl.portrait_of(artifact):
+            proc = self._processing_succeeded(service, video_id)
+            if proc != "succeeded":
+                if store:
+                    store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
+                                 upload_status="awaiting_processing", upload_attempts=attempts - 1,
+                                 last_error=None)
+                logger.info("Thumbnail for %s waits for processing (%s)", video_id, proc or "unknown")
+                return {"uploaded": False, "status": "awaiting_processing", "error": None, "artifact": artifact}
         gate = self.quota.check("general", 50)
         if not gate["allowed"]:
             err = f"Thumbnail upload deferred: {gate['reason']}"
@@ -1423,8 +1450,8 @@ class YouTubePublishingEngine:
             return {"uploaded": False, "status": "quota_deferred", "error": err, "artifact": artifact}
         try:
             media_thumb = MediaFileUpload(artifact, mimetype=mimetypes.guess_type(artifact)[0] or "image/jpeg")
-            self.quota.execute(service.thumbnails().set(videoId=video_id, media_body=media_thumb), "thumbnails.set",
-                               purpose="thumbnail_upload", video_id=video_id, attempt=attempts)
+            set_resp = self.quota.execute(service.thumbnails().set(videoId=video_id, media_body=media_thumb),
+                                          "thumbnails.set", purpose=purpose, video_id=video_id, attempt=attempts)
         except HttpError as h_err:
             restricted = h_err.resp.status in (401, 403)
             err = f"Thumbnail upload failed (HTTP {h_err.resp.status})."
@@ -1443,10 +1470,11 @@ class YouTubePublishingEngine:
             logger.warning("Thumbnail upload failed for %s; the video upload remains available.", video_id)
             return {"uploaded": False, "status": "failed", "error": err, "artifact": artifact}
         if store:
+            variants = sorted((((set_resp or {}).get("items") or [{}])[0]).keys()) if isinstance(set_resp, dict) else []
             store.update(ledger_id, video_id=video_id, artifact_path=artifact, validation_json=validation,
                          upload_status="uploaded", upload_attempts=attempts,
                          uploaded_at=datetime.utcnow().isoformat() + "Z", verify_status="pending",
-                         verify_attempts=0, last_error=None)
+                         verify_detail_json={"set_response_variants": variants}, verify_attempts=0, last_error=None)
         logger.info("Custom thumbnail uploaded for video: %s (%s)", video_id, os.path.basename(artifact))
         return {"uploaded": True, "status": "uploaded", "error": None, "artifact": artifact}
 
@@ -1458,6 +1486,17 @@ class YouTubePublishingEngine:
         store = self.thumbnail_store()
         now = datetime.utcnow()
         checked, results = 0, []
+        waiting = [(lid, st) for lid, st in store.all().items() if st.get("upload_status") == "awaiting_processing"]
+        if waiting:
+            try:
+                service = self.oauth.get_authenticated_service()
+            except Exception:  # noqa: BLE001
+                service = None
+            for lid, st in waiting[:10] if service else []:
+                rec = self.db.get_publication(lid) or {}
+                if rec.get("thumbnail_path") and st.get("video_id"):
+                    results.append({"ledger_id": lid, "set_after_processing":
+                                    self._upload_thumbnail(service, lid, st["video_id"], rec["thumbnail_path"])["status"]})
         for lid, st in store.all().items():
             if st.get("upload_status") != "uploaded" or st.get("verify_status") not in ("pending", "mismatch", "unavailable"):
                 continue
@@ -1469,6 +1508,20 @@ class YouTubePublishingEngine:
                 continue
             checked += 1
             res = tpl.verify_remote(st["video_id"], st["artifact_path"], fetch=fetch)
+            portrait = tpl.portrait_of(st.get("artifact_path"))
+            if res["status"] == "verified" and portrait:
+                # Shorts: YouTube's own metadata must list the 9:16 variant, and it must show the portrait design
+                try:
+                    service = self.oauth.get_authenticated_service()
+                    meta = self.quota.execute(service.videos().list(part="snippet", id=st["video_id"]), "videos.list",
+                                              purpose="thumbnail_verification", video_id=st["video_id"])
+                    thumbs = ((meta.get("items") or [{}])[0].get("snippet") or {}).get("thumbnails") or {}
+                    sv = tpl.verify_shorts_variant(thumbs, portrait, fetch=fetch)
+                except Exception as exc:  # noqa: BLE001
+                    sv = {"status": "unavailable", "reason": type(exc).__name__}
+                res = dict(res, shorts_variant=sv)
+                if sv["status"] != "verified":
+                    res["status"] = "unavailable" if sv["status"] == "unavailable" else "mismatch"
             n = int(st.get("verify_attempts") or 0) + 1
             fields = {"verify_status": res["status"], "verify_detail_json": res, "verify_attempts": n}
             if res["status"] == "verified":
@@ -1476,6 +1529,8 @@ class YouTubePublishingEngine:
                 rec = self.db.get_publication(lid) or {}
                 if str(rec.get("error_details") or "").lower().startswith("thumbnail"):
                     self.db.update_queue_metadata_and_schedule(lid, error_details=None)
+            elif res["status"] == "unavailable" and n < UNAVAILABLE_MAX_CHECKS:
+                pass                       # not public yet (scheduled): keep checking, never "failed" for that
             elif n >= max_attempts:
                 msg = (f"Thumbnail verification failed: YouTube still shows a different image after {n} checks "
                        f"({res['status']}). Use Retry thumbnail; the video itself is unchanged.")
@@ -1484,6 +1539,91 @@ class YouTubePublishingEngine:
             store.update(lid, **fields)
             results.append({"ledger_id": lid, **res})
         return {"checked": checked, "results": results}
+
+    def thumbnail_overview(self) -> Dict[str, Any]:
+        """Dashboard: Shorts portrait-thumbnail state and today's thumbnail quota use."""
+        from backend.app.services import thumbnail_pipeline as tpl
+        counts: Dict[str, int] = {}
+        failures = []
+        for lid, st in self.thumbnail_store().all().items():
+            det = {}
+            try:
+                det = json.loads(st.get("verify_detail_json") or "{}")
+            except ValueError:
+                pass
+            portrait = bool(tpl.portrait_of(st.get("artifact_path")))
+            sv = (det.get("shorts_variant") or {}).get("status")
+            key = ("portrait_verified" if portrait and st.get("verify_status") == "verified" else
+                   "portrait_pending" if portrait else
+                   "landscape_only (pre-fix)")
+            if st.get("upload_status") in ("awaiting_processing",):
+                key = "awaiting_processing"
+            if st.get("upload_status") in ("failed", "invalid", "restricted") or st.get("verify_status") in ("failed", "mismatch"):
+                key = "failed"
+                failures.append({"ledger_id": lid, "video_id": st.get("video_id"), "upload": st.get("upload_status"),
+                                 "verify": st.get("verify_status"), "shorts_variant": sv,
+                                 "error": (st.get("last_error") or "")[:200]})
+            counts[key] = counts.get(key, 0) + 1
+        q = self.quota
+        return {"counts": counts, "failures": failures[:20], "backfill": self.backfill_status(),
+                "quota": q.usage() if hasattr(q, "usage") else None,
+                "note": "Shorts thumbnails are 1280x720 images whose centre 9:16 column is the portrait design, set "
+                        "after YouTube finished processing; YouTube then lists a shortsAspectRatio thumbnail. The "
+                        "Shorts-feed frame (oar2) is chosen by YouTube and cannot be set through the API."}
+
+    def _backfill_used_today(self) -> int:
+        from backend.app.services.youtube_quota import pacific_day
+        try:
+            with sqlite3.connect(self.db.db_path, timeout=10) as c:
+                return int(c.execute("SELECT COUNT(*) FROM youtube_api_requests WHERE pt_day=? AND method='thumbnails.set' "
+                                     "AND purpose='shorts_thumbnail_backfill'", (pacific_day(),)).fetchone()[0])
+        except sqlite3.Error:
+            return 0
+
+    def backfill_candidates(self) -> List[Dict[str, Any]]:
+        """Public Shorts whose thumbnail is not the verified portrait-safe one, newest first."""
+        from backend.app.services import thumbnail_pipeline as tpl
+        states = self.thumbnail_store().all()
+        out = []
+        for rec in self.db.list_publications(statuses=["uploaded_public"], limit=1000):
+            lid, vid, thumb = rec.get("id"), rec.get("youtube_video_id"), rec.get("thumbnail_path")
+            if not vid or not thumb or not tpl.is_portrait(thumb):
+                continue
+            st = states.get(int(lid)) or {}
+            if tpl.portrait_of(st.get("artifact_path")) and st.get("upload_status") == "uploaded" and \
+                    st.get("verify_status") in ("verified", "pending", "unavailable"):
+                continue                           # already the portrait-safe thumbnail: never replaced again
+            out.append({"ledger_id": int(lid), "video_id": vid, "thumbnail_path": thumb})
+        return sorted(out, key=lambda r: -r["ledger_id"])
+
+    def backfill_status(self) -> Dict[str, Any]:
+        return {"remaining": len(self.backfill_candidates()), "used_today": self._backfill_used_today(),
+                "daily_max": SHORTS_THUMBNAIL_BACKFILL_DAILY_MAX, "quota_reserve_units": THUMBNAIL_QUOTA_RESERVE}
+
+    def backfill_shorts_thumbnails(self, batch: int = 3) -> Dict[str, Any]:
+        """Quota-aware: at most `batch` per run and SHORTS_THUMBNAIL_BACKFILL_DAILY_MAX per Pacific day, and only
+        while THUMBNAIL_QUOTA_RESERVE general units stay free for English production. Existing portrait-safe
+        thumbnails are never replaced. The video itself is never changed."""
+        used = self._backfill_used_today()
+        if used >= SHORTS_THUMBNAIL_BACKFILL_DAILY_MAX:
+            return {"ran": False, "reason": f"daily backfill limit reached ({used})"}
+        todo = self.backfill_candidates()[:max(0, min(batch, SHORTS_THUMBNAIL_BACKFILL_DAILY_MAX - used))]
+        if not todo:
+            return {"ran": False, "reason": "nothing to backfill"}
+        service = self.oauth.get_authenticated_service()
+        if not service:
+            return {"ran": False, "reason": "YouTube account is not authenticated"}
+        done = []
+        for r in todo:
+            gate = self.quota.check("general", 52 + THUMBNAIL_QUOTA_RESERVE)
+            if not gate["allowed"]:
+                done.append({**r, "status": "quota_deferred"})
+                break
+            res = self._upload_thumbnail(service, r["ledger_id"], r["video_id"], r["thumbnail_path"],
+                                         purpose="shorts_thumbnail_backfill")
+            done.append({"ledger_id": r["ledger_id"], "video_id": r["video_id"], "status": res["status"],
+                         "error": res.get("error")})
+        return {"ran": True, "items": done}
 
     def check_remote_channel_duplicate(
         self,
@@ -1866,7 +2006,8 @@ class YouTubePublishingEngine:
                 t_art = (locals().get("t_res") or {}).get("artifact")
                 self.thumbnail_store().update(
                     ledger_id, video_id=video_id, artifact_path=t_art,
-                    upload_status="uploaded" if thumb_uploaded else ("invalid" if thumb_status == "invalid" else "failed"),
+                    upload_status="uploaded" if thumb_uploaded else (
+                        thumb_status if thumb_status in ("invalid", "awaiting_processing") else "failed"),
                     upload_attempts=1, uploaded_at=datetime.utcnow().isoformat() + "Z" if thumb_uploaded else None,
                     verify_status="pending" if thumb_uploaded else None, last_error=thumb_error)
         else:

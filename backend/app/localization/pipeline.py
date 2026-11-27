@@ -41,6 +41,18 @@ class InfrastructureWait(RuntimeError):
     """Retry later (provider/voice unavailable, render error): completed steps are kept."""
 
 
+class ProviderWait(InfrastructureWait):
+    """The translation provider is unavailable until ``retry_at`` (free-tier quota / rate limit / overload). Waiting
+    does not use up the localization's or the coordinator job's attempts; no model is called before ``retry_at``."""
+
+    def __init__(self, message: str, retry_at: Optional[datetime]):
+        super().__init__(message)
+        self.retry_at = retry_at
+
+
+MAX_PROVIDER_WAIT_HOURS = 48     # a localization still waiting for the provider after this long fails (retryable)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -149,6 +161,9 @@ class HindiLocalizer:
             self._update(loc_id, status="QC_REJECTED", error_kind="CREATIVE_REJECTION", error=str(exc)[:500],
                          artifacts=arts)
             return {"status": "QC_REJECTED", "error": str(exc)}
+        except ProviderWait as exc:
+            self._update(loc_id, status="WAITING", error_kind="PROVIDER_WAIT", error=str(exc)[:500], artifacts=arts)
+            raise
         except InfrastructureWait as exc:
             self._update(loc_id, status="WAITING", error_kind=type(exc).__name__, error=str(exc)[:500],
                          attempts=int(loc["attempts"]) + 1, artifacts=arts)
@@ -226,7 +241,7 @@ class HindiLocalizer:
             hindi, attempts = translator.translate(req, client=client, models=models, validate=script_qc.validate,
                                                    initial_feedback=feedback)
         except translator.ProviderUnavailable as exc:
-            raise InfrastructureWait(str(exc)) from exc
+            raise ProviderWait(str(exc), getattr(exc, "retry_at", None)) from exc
         except translator.TranslationRejected as exc:
             raise CreativeRejection("translation: " + "; ".join(exc.problems[:5])) from exc
         doc = {"source_job_id": loc["source_job_id"], "language": "hi", "model": hindi.pop("_model", None),
@@ -330,6 +345,15 @@ def executor(ctx) -> Dict[str, Any]:
     loc = HindiLocalizer()
     try:
         res = loc.run_step(loc_id, ctx.step["name"])
+    except ProviderWait as exc:
+        from backend.app.scheduler.production_coordinator import StepDeferred
+        row = loc.get(loc_id)
+        created = _parse_utc(row.get("created_at_utc"))
+        if created and datetime.now(timezone.utc) - created > timedelta(hours=MAX_PROVIDER_WAIT_HOURS):
+            loc.mark_failed(loc_id, f"translation provider unavailable for more than {MAX_PROVIDER_WAIT_HOURS} h")
+            raise
+        until = exc.retry_at or datetime.now(timezone.utc) + timedelta(minutes=15)
+        raise StepDeferred(str(exc), until) from exc
     except InfrastructureWait:
         if int(ctx.job.get("attempts") or 0) + 1 >= int(ctx.job.get("max_attempts") or 3):
             loc.mark_failed(loc_id, "infrastructure failures exhausted the coordinator attempts")
@@ -435,6 +459,16 @@ def auto_enqueue_next(*, coordinator=None, localizer: Optional[HindiLocalizer] =
         res = enqueue(job_id, operator=AUTO_ACTOR, coordinator=coord, localizer=loc)
         return dict(res, source_job_id=job_id)
     return {"queued": False, "reason": "no completed English Short without a localization"}
+
+
+def _parse_utc(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
 def _ist_date(ts: Optional[str]) -> Optional[str]:

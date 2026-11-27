@@ -52,6 +52,9 @@ REVIEWED_CALL_SITES = {
     },
     r"videos\(\)\.insert\(": {
         "services/youtube_publishing_engine.py": 1,  # inside upload_short
+        # Hindi channel only: Hindi token, identity check, private + publishAt, gated by channel ACTIVE,
+        # publishing_authorized and the Hindi schedule (all off by default)
+        "localization/publishing.py": 1,
     },
     r"execute_upload=True\s*\)": {},  # no caller asks the background queue to upload
 }

@@ -163,6 +163,19 @@ CREATE TABLE IF NOT EXISTS production_queue_events (
 """
 
 
+class StepDeferred(Exception):
+    """Raised by an executor whose step must wait for an external resource (e.g. a provider's free-tier quota reset).
+    The job stays QUEUED with ``not_before_utc = until`` (bounded to MAX_DEFER_HOURS) and its attempts are NOT used up:
+    waiting is not a failure. Nothing else about admission, the render slot or Shorts priority changes."""
+
+    def __init__(self, message: str, until: datetime):
+        super().__init__(message)
+        self.until = until
+
+
+MAX_DEFER_HOURS = 26
+
+
 class CoordinatorError(Exception):
     def __init__(self, message: str, code: int = 409):
         super().__init__(message)
@@ -823,7 +836,12 @@ class ProductionCoordinator:
         now = self.clock()
         cur = self.get_job(job["id"]) or {}
         steps = job["steps"]
-        if error is not None:
+        if isinstance(error, StepDeferred):
+            until = error.until if error.until.tzinfo else error.until.replace(tzinfo=timezone.utc)
+            until = min(max(until, now + timedelta(minutes=1)), now + timedelta(hours=MAX_DEFER_HOURS))
+            values = dict(state=QUEUED, attempts=job["attempts"], error=f"waiting: {str(error)[:300]}",
+                          not_before_utc=_ts(until), next_step=job["next_step"], event="STEP_DEFERRED")
+        elif error is not None:
             attempts = int(job["attempts"]) + 1
             state = FAILED if attempts >= int(job["max_attempts"]) else QUEUED
             values = dict(state=state, attempts=attempts, error=f"{type(error).__name__}: {str(error)[:300]}",

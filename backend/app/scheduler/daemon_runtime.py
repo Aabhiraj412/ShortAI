@@ -72,6 +72,40 @@ async def production_coordinator_tick() -> None:
     _coordinator_task[0] = asyncio.get_running_loop().create_task(_run_coordinator_tick(), name="coordinator-tick")
 
 
+HINDI_PUBLISHING_TICK_SECONDS = 300.0
+_last_hindi_tick: list = [None]
+_hindi_task: list = [None]
+
+
+def _run_hindi_publishing() -> None:
+    try:
+        from backend.app.localization.publishing import get_publisher
+        res = get_publisher().tick()
+        if (res.get("upload") or {}).get("uploaded"):
+            logger.info("[HINDI] video uploaded %s", res["upload"].get("video_id"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[HINDI] publishing tick skipped: %s", type(exc).__name__)
+
+
+async def hindi_publishing_tick() -> None:
+    """The Hindi channel's own publishing schedule (localization.publishing), every HINDI_PUBLISHING_TICK_SECONDS in
+    a worker thread, at most one in flight, never awaited by the recovery loop. It uploads only when the Hindi
+    channel is active, Hindi publishing is authorized and the Hindi schedule is enabled (all off by default). The
+    English scheduler and its 24-cycle schedule never call it."""
+    now = time.monotonic()
+    if _last_hindi_tick[0] is None:
+        _last_hindi_tick[0] = now - HINDI_PUBLISHING_TICK_SECONDS + COORDINATOR_FIRST_DELAY_SECONDS * 2
+        return
+    if now - _last_hindi_tick[0] < HINDI_PUBLISHING_TICK_SECONDS:
+        return
+    running = _hindi_task[0]
+    if running is not None and not running.done():
+        return
+    _last_hindi_tick[0] = now
+    _hindi_task[0] = asyncio.get_running_loop().create_task(asyncio.to_thread(_run_hindi_publishing),
+                                                             name="hindi-publishing-tick")
+
+
 class ControlledRestart(Exception):
     """Raised at a safe point to exit so the startup monitor relaunches current code."""
 
@@ -122,6 +156,7 @@ async def periodic_recovery_and_sleep_loop(interval_sec: float = 45, tick_second
             await dispatch_eligible_recoveries()
             await autopilot_controller_tick()
             await production_coordinator_tick()
+            await hindi_publishing_tick()
         except asyncio.CancelledError:
             break
         except ControlledRestart:

@@ -11,6 +11,16 @@ Findings (2026-11-19, read-only checks of 27 published videos on i.ytimg.com):
 * the Shorts feed uses the `oar2` (original aspect ratio) image, which is a video frame chosen by
   YouTube; the Data API cannot set it (documented limitation, not something an upload can fix).
 
+Shorts follow-up (2026-11-27, measured on a live Short with the Data API):
+* ``thumbnails.set`` accepts a 9:16 image, but YouTube stores it into the 16:9 sizes (pillarboxed) and leaves the
+  Shorts-feed ``oar2`` frame unchanged, so uploading the raw portrait only degrades the 16:9 surfaces;
+* when the thumbnail is set AFTER processing SUCCEEDED, YouTube adds a ``shortsAspectRatio`` variant
+  (``sardefault.jpg``, 405x720) that is the centre 9:16 crop of the uploaded 16:9 image. Thumbnails set right after
+  ``videos.insert`` (the old flow) never got it;
+* so a Short's upload artifact is a 1280x720 image whose centre 405x720 column is exactly the 1080x1920 portrait
+  design (blurred fill beside it), set only after processing SUCCEEDED and verified through ``shortsAspectRatio``.
+  Long-form keeps the 16:9 composition. The ``oar2`` frame itself cannot be set through the API.
+
 This module makes the upload artifact a real 1280x720 composition (subject image filling the frame,
 short headline large on a readable panel), validates it before upload, verifies the remote image
 after upload by comparing it with what was sent, and persists the state per ledger row.
@@ -36,6 +46,9 @@ MAX_BYTES = 2 * 1024 * 1024
 YOUTUBE_SUFFIX = "_youtube_1280x720.jpg"
 FONT_CANDIDATES = ("impact.ttf", "seguibl.ttf", "arialbd.ttf")
 YELLOW, WHITE = (255, 216, 107), (255, 255, 255)
+SHORTS_SUFFIX = "_shorts_1280x720.jpg"
+SHORT, LONG = "SHORT", "LONG"
+SAR_W = 405                                       # shortsAspectRatio: the centre 405x720 of the 16:9 image
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
@@ -185,6 +198,59 @@ def youtube_artifact_for(thumbnail_path: Optional[str], *, headline: str = "") -
                                      source_image=meta.get("source_image"), portrait_thumbnail=str(p))
 
 
+def is_portrait(path: Optional[str]) -> bool:
+    try:
+        with Image.open(path) as im:
+            return abs(im.width / im.height - 9 / 16) < 0.01
+    except (OSError, TypeError, ZeroDivisionError):
+        return False
+
+
+def shorts_artifact_for(portrait_path: Optional[str]) -> Optional[str]:
+    """1280x720 upload artifact for a Short: the whole 9:16 portrait design at full height in the centre column
+    (exactly what YouTube crops for ``shortsAspectRatio``), a blurred fill of it beside."""
+    if not portrait_path or not os.path.isfile(portrait_path) or not is_portrait(portrait_path):
+        return None
+    p = Path(portrait_path)
+    target = p.with_name(p.stem + SHORTS_SUFFIX)
+    if target.is_file() and validate_thumbnail(str(target))["ok"] and target.stat().st_mtime >= p.stat().st_mtime:
+        return str(target)
+    return compose_youtube_thumbnail(str(target), portrait_thumbnail=str(p))
+
+
+def artifact_for(thumbnail_path: Optional[str], kind: str = SHORT) -> Optional[str]:
+    """Shorts with a 9:16 portrait -> the Shorts-safe artifact; long-form (or no portrait) -> the 16:9 one."""
+    if kind == SHORT and is_portrait(thumbnail_path):
+        return shorts_artifact_for(thumbnail_path)
+    return youtube_artifact_for(thumbnail_path)
+
+
+def portrait_of(artifact: Optional[str]) -> Optional[str]:
+    if artifact and artifact.endswith(SHORTS_SUFFIX):
+        p = artifact[: -len(SHORTS_SUFFIX)] + ".png"
+        return p if os.path.isfile(p) else None
+    return None
+
+
+def verify_shorts_variant(api_thumbnails: Dict[str, Any], portrait_path: Optional[str],
+                          fetch: Optional[Callable[[str], bytes]] = None, threshold: int = 22) -> Dict[str, Any]:
+    """Uses YouTube's own metadata: the ``shortsAspectRatio`` thumbnail must exist and show the portrait design."""
+    sar = (api_thumbnails or {}).get("shortsAspectRatio")
+    if not sar:
+        return {"status": "no_shorts_variant", "reason": "YouTube lists no shortsAspectRatio thumbnail"}
+    if not portrait_path:
+        return {"status": "unavailable", "reason": "no local portrait to compare"}
+    try:
+        remote = Image.open(io.BytesIO((fetch or _fetch)(sar["url"]))).convert("RGB")
+        local = Image.open(portrait_path).convert("RGB")
+    except Exception as exc:  # noqa: BLE001 - private videos are not served by the CDN
+        return {"status": "unavailable", "reason": f"shorts thumbnail not fetchable ({type(exc).__name__})",
+                "size": [sar.get("width"), sar.get("height")]}
+    dist = sum(a != b for a, b in zip(_dhash(local), _dhash(remote)))
+    return {"status": "verified" if dist <= threshold else "mismatch", "distance": dist,
+            "size": list(remote.size)}
+
+
 def write_sidecar(portrait_path: str, *, headline: str, source_image: Optional[str]) -> None:
     Path(portrait_path).with_suffix(".json").write_text(
         json.dumps({"headline": headline, "source_image": source_image}, indent=2), encoding="utf-8")
@@ -285,3 +351,62 @@ def ready_label(state: Dict[str, Any]) -> str:
     if up == "uploaded":
         return "uploaded, verification " + (ver or "pending")
     return up or "pending"
+
+
+# ------------------------------------------------------------------ channel-independent set + verify
+def processing_status(service: Any, quota: Any, video_id: str, purpose: str) -> Dict[str, Any]:
+    res = quota.execute(service.videos().list(part="processingDetails,status,snippet", id=video_id), "videos.list",
+                        purpose=purpose, video_id=video_id)
+    item = (res.get("items") or [{}])[0]
+    return {"processing": ((item.get("processingDetails") or {}).get("processingStatus") or "").lower() or None,
+            "privacy": (item.get("status") or {}).get("privacyStatus"),
+            "thumbnails": (item.get("snippet") or {}).get("thumbnails") or {}}
+
+
+def set_and_verify(service: Any, quota: Any, video_id: str, thumbnail_path: Optional[str], *, kind: str = SHORT,
+                   previous: Optional[Dict[str, Any]] = None, purpose: str = "thumbnail",
+                   fetch: Optional[Callable[[str], bytes]] = None) -> Dict[str, Any]:
+    """One step of the thumbnail state machine (used by the Hindi publisher; the English engine has the same rules):
+    awaiting_processing -> attempted -> set (YouTube accepted) -> verified (YouTube shows our image), or rejected /
+    invalid / quota_deferred. A thumbnail already set with the same artifact is never uploaded again."""
+    prev = dict(previous or {})
+    checks = int(prev.get("checks") or 0) + 1
+    artifact = artifact_for(thumbnail_path, kind)
+    val = validate_thumbnail(artifact)
+    if not artifact or not val["ok"]:
+        return {"state": "invalid", "error": "; ".join(val["problems"] or ["no thumbnail"]), "checks": checks}
+    try:
+        st = processing_status(service, quota, video_id, purpose)
+    except Exception as exc:  # noqa: BLE001
+        return {**prev, "state": prev.get("state") or "awaiting_processing", "checks": checks,
+                "error": f"processing status unavailable ({type(exc).__name__})"}
+    if st["processing"] != "succeeded":
+        return {"state": "awaiting_processing", "processing": st["processing"], "checks": checks, "error": None}
+    already = prev.get("state") in ("set", "verified") and prev.get("artifact") == artifact
+    if not already:
+        gate = quota.check("general", 50)
+        if not gate["allowed"]:
+            return {**prev, "state": "quota_deferred", "error": gate["reason"], "checks": checks}
+        try:
+            from googleapiclient.http import MediaFileUpload
+            resp = quota.execute(service.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(
+                artifact, mimetype="image/jpeg")), "thumbnails.set", purpose=purpose, video_id=video_id)
+        except Exception as exc:  # noqa: BLE001 - YouTube's rejection is reported, never hidden
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            return {"state": "rejected", "artifact": artifact, "http_status": status, "checks": checks,
+                    "error": f"YouTube rejected the thumbnail (HTTP {status}): {str(exc)[:200]}"}
+        variants = sorted(((resp.get("items") or [{}])[0]).keys())
+        prev = {"state": "set", "artifact": artifact, "variants": variants, "set_at_utc":
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        try:
+            st = processing_status(service, quota, video_id, purpose)
+        except Exception:  # noqa: BLE001
+            return {**prev, "checks": checks, "error": None}
+    if kind == SHORT and is_portrait(thumbnail_path):
+        v = verify_shorts_variant(st["thumbnails"], thumbnail_path, fetch=fetch)
+    else:
+        v = verify_remote(video_id, artifact, fetch=fetch)
+    state = "verified" if v["status"] == "verified" else "set"
+    return {**prev, "state": state, "verify": v, "privacy": st["privacy"], "checks": checks,
+            "error": None if state == "verified" or v["status"] in ("unavailable",) else
+            f"thumbnail set but not verified: {v['status']}"}

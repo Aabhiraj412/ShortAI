@@ -807,7 +807,7 @@
     <!-- STAGE 4.01: channels (English master, Hindi localized) -->
     <div class="card" id="chCard"><div class="card-head"><div><h2 class="card-title">Channels</h2>
       <p class="card-desc">Each channel's identity is verified with YouTube <code>channels.list?mine=true</code>, never from its name. English is the master channel and owns the existing production. Hindi localizes completed English Shorts with its own authorization (never the English one) and stays pending until its own channel is verified.</p></div>
-      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><label for="chOperator" style="font-size:12px;color:var(--muted);">Operator</label><input id="chOperator" maxlength="64" placeholder="your name" style="width:120px;" /><input id="chReason" maxlength="500" placeholder="reason (activate/deactivate)" style="width:200px;" /><button class="btn sm" onclick="refreshChannels()">Refresh</button></div></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><button class="btn sm" onclick="refreshChannels()">Refresh</button></div></div>
       <div id="chList" style="font-size:12px;overflow-x:auto;">--</div>
       <h3 style="font-size:13px;margin:10px 0 4px;">Channel history</h3><div id="chEvents" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
@@ -817,10 +817,30 @@
       <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><input id="locSource" maxlength="80" placeholder="English job id, e.g. cycle_9_20261127_0800" style="width:280px;" /><button class="btn sm" onclick="locCreate()">Localize</button><button class="btn sm" onclick="refreshLocalizations()">Refresh</button></div></div>
       <div id="locList" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
+    <!-- Hindi publishing queue + the Hindi channel's own schedule (separate from the English queue) -->
+    <div class="card" id="hpCard"><div class="card-head"><div><h2 class="card-title">Hindi publishing queue</h2>
+      <p class="card-desc">Only Hindi videos that passed Hindi QC. Uploads use the Hindi channel's own authorization (never the English one) and happen only when the Hindi channel is active, Hindi publishing is authorized and this schedule is enabled. Times are Asia/Kolkata.</p></div>
+      <div class="btn-row"><button class="btn sm" onclick="refreshHindiPublishing()">Refresh</button></div></div>
+      <div id="hpGates" style="font-size:12px;margin-bottom:6px;">--</div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;font-size:12px;">
+        <label><input type="checkbox" id="hpEnabled" /> Schedule enabled</label>
+        <label>Daily times <input id="hpTimes" maxlength="40" placeholder="19:30, 21:00" style="width:120px;" /></label>
+        <label>Daily limit <input id="hpLimit" type="number" min="1" max="6" style="width:52px;" /></label>
+        <label>Max attempts <input id="hpAttempts" type="number" min="1" max="5" style="width:52px;" /></label>
+        <button class="btn sm" onclick="hpSaveSchedule()">Save schedule</button></div>
+      <div id="hpList" style="font-size:12px;overflow-x:auto;margin-top:8px;">--</div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Hindi publication history</h3><div id="hpEvents" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
+    <!-- Shorts thumbnails (portrait-safe) -->
+    <div class="card" id="thCard"><div class="card-head"><div><h2 class="card-title">Shorts thumbnails</h2>
+      <p class="card-desc">Shorts get a 1280x720 thumbnail whose centre 9:16 column is the portrait design, set after YouTube finished processing; YouTube then lists a 9:16 (shortsAspectRatio) thumbnail, which is verified against the portrait. The Shorts-feed frame itself is chosen by YouTube and cannot be set through the API.</p></div>
+      <div class="btn-row"><button class="btn sm" onclick="refreshThumbnails()">Refresh</button></div></div>
+      <div id="thSummary" style="font-size:12px;">--</div>
+    </div>
     <div class="card">
       <div class="card-head">
         <div>
-          <h2 class="card-title">YouTube Publishing Queue</h2>
+          <h2 class="card-title">English publishing queue (YouTube)</h2>
           <p class="card-desc">User-controlled scheduled publishing. QC-approved videos wait here until you edit metadata, thumbnail, and set an Asia/Kolkata publication date &amp; time.</p>
         </div>
         <div class="btn-row">
@@ -1469,7 +1489,7 @@ function switchTab(tabId, btn) {
   document.getElementById("tab-" + tabId).classList.add("active");
   if (btn) btn.classList.add("active");
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
-  if (tabId === "queue") { refreshPublishing(); refreshChannels(); refreshLocalizations(); }
+  if (tabId === "queue") { refreshPublishing(); refreshChannels(); refreshLocalizations(); refreshHindiPublishing(); refreshThumbnails(); }
   if (tabId === "ops") { refreshOps(); }
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
@@ -3354,6 +3374,21 @@ function autoOperator() {
   return v;
 }
 
+// Confirmed dashboard writes that take no operator name (channels, localizations): same CSRF/origin protection.
+async function dashWrite(url, body) {
+  if (!autoState.csrf) {
+    const s = await apiJson("/api/autonomy/session");
+    autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
+  }
+  try {
+    return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
+                                body: JSON.stringify(body || {}) });
+  } catch (err) {
+    if (/CSRF/i.test(err.message || "")) autoState.csrf = null;
+    throw err;
+  }
+}
+
 async function autoWrite(url, method, body) {
   const op = autoOperator();
   if (!op) throw new Error("Enter your operator name first.");
@@ -4210,12 +4245,8 @@ async function channelAct(key, action) {
       if (!(await askConfirm("Connect this channel?", "Google's consent page opens in this computer's browser. Sign in with the Hindi channel's Google account, NOT the English one. The result is saved only to this channel's own token file; the English authorization is never read, changed or revoked."))) return;
       await apiJson(`/api/channels/${encodeURIComponent(key)}/connect`, { method: "POST", body: JSON.stringify({ confirm: true }) });
     } else {
-      const reason = ((document.getElementById("chReason") || {}).value || "").trim();
-      if (!reason) { showToast("Enter a reason first.", true); return; }
-      if (!(await askConfirm(action === "activate" ? "Activate this channel?" : "Deactivate this channel?", "The change is recorded in the channel history."))) return;
-      const op = ((document.getElementById("chOperator") || {}).value || "").trim();
-      const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
-      await autoWrite(`/api/channels/${encodeURIComponent(key)}/${action}`, "POST", { reason, confirm: true });
+      if (!(await askConfirm(action === "activate" ? "Activate this channel?" : "Deactivate this channel?", "Only a channel whose identity is verified can be activated. Publishing stays governed by its own authorization."))) return;
+      await dashWrite(`/api/channels/${encodeURIComponent(key)}/${action}`, { confirm: true });
     }
     showToast(`Channel ${key}: ${action} done`);
   } catch (err) { showToast(err.message || String(err), true); }
@@ -4258,8 +4289,8 @@ async function refreshChannels() {
     el.innerHTML = apTable(["Channel", "Status", "Identity", "OAuth / credential", "Publishing", "Analytics", "Active processes", "What to do", ""],
       (d.channels || []).map(channelRow));
     const ev = d.events || [];
-    document.getElementById("chEvents").innerHTML = ev.length ? apTable(["When", "Channel", "Event", "Status", "Actor"], ev.map(e =>
-      `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.channel_key)}</td><td>${escHtml(e.event)}</td><td>${escHtml((e.previous_status || "") + " → " + (e.new_status || ""))}</td><td>${escHtml(e.actor)}</td></tr>`))
+    document.getElementById("chEvents").innerHTML = ev.length ? apTable(["When", "Channel", "Event", "Status"], ev.map(e =>
+      `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.channel_key)}</td><td>${escHtml(e.event)}</td><td>${escHtml((e.previous_status || "") + " → " + (e.new_status || ""))}</td></tr>`))
       : `<div style="color:var(--muted)">No channel events yet.</div>`;
   } catch (err) { el.innerHTML = `<span class="auto-kill">channels unavailable: ${escHtml(err.message || String(err))}</span>`; }
 }
@@ -4270,9 +4301,7 @@ async function locCreate() {
   const src = ((document.getElementById("locSource") || {}).value || "").trim();
   if (!src) { showToast("Enter a completed English job id.", true); return; }
   try {
-    const op = ((document.getElementById("chOperator") || {}).value || "").trim();
-    const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
-    const r = await autoWrite("/api/localizations", "POST", { source_job_id: src, confirm: true });
+    const r = await dashWrite("/api/localizations", { source_job_id: src, confirm: true });
     showToast(r.queued ? "Hindi localization queued" : `Not queued: ${r.reason || "already queued"}`);
   } catch (err) { showToast(err.message || String(err), true); }
   refreshLocalizations();
@@ -4280,9 +4309,7 @@ async function locCreate() {
 async function locRetry(id, fromStep) {
   if (fromStep && !(await askConfirm("Redo the Hindi adaptation?", "The rejected attempt's files are archived (not deleted) and the adaptation, voice, render and QC run again."))) return;
   try {
-    const op = ((document.getElementById("chOperator") || {}).value || "").trim();
-    const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
-    await autoWrite(`/api/localizations/${encodeURIComponent(id)}/retry`, "POST", { from_step: fromStep || null, confirm: true });
+    await dashWrite(`/api/localizations/${encodeURIComponent(id)}/retry`, { from_step: fromStep || null, confirm: true });
     showToast("Retry queued");
   } catch (err) { showToast(err.message || String(err), true); }
   refreshLocalizations();
@@ -4301,6 +4328,94 @@ function locRow(l) {
     + `<td style="max-width:240px;overflow-wrap:anywhere;">${pub.eligible ? "eligible" : (pub.reasons || []).map(r => escHtml(r)).join("<br>")}</td>`
     + `<td style="max-width:260px;overflow-wrap:anywhere;">${why || "--"}</td><td>${act}</td></tr>`;
 }
+const HP_STATE_COLOR = { UPLOADED: "#86efac", SCHEDULED: "#93c5fd", FAILED: "#fca5a5", NEEDS_CHECK: "#fcd34d", UPLOADING: "#93c5fd" };
+let hpItems = {};
+
+function hpRow(i) {
+  const th = i.thumbnail || {};
+  const id = escHtml(String(i.id));
+  let btns = "";
+  if (["DRAFT", "SCHEDULED", "FAILED"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpEdit(this.dataset.i)">Edit</button> `;
+  if (["DRAFT", "FAILED"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'schedule')">Schedule</button> `;
+  if (["SCHEDULED", "FAILED"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'unschedule')">Unschedule</button> `;
+  if (["FAILED", "NEEDS_CHECK"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'retry')">Retry</button>`;
+  return `<tr><td>${escHtml(i.source_job_id)}</td><td>${escHtml(i.localization_status || "?")} · QC ${i.qc_passed ? "passed" : "no"}</td>`
+    + `<td style="max-width:260px;overflow-wrap:anywhere;"><strong>${escHtml(i.title)}</strong><div style="color:var(--muted)">${escHtml((i.tags || []).slice(0, 6).join(", "))}</div></td>`
+    + `<td>${i.thumbnail_asset ? "asset ready" : "<span style='color:#fcd34d'>no asset</span>"}${th.state ? `<div style="color:var(--muted)">${escHtml(th.state)}${th.error ? " · " + escHtml(th.error) : ""}</div>` : ""}</td>`
+    + `<td>${i.scheduled_at_utc ? autoTime(i.scheduled_at_utc) : "--"}</td>`
+    + `<td style="color:${HP_STATE_COLOR[i.state] || "inherit"}">${escHtml(i.state)}${i.youtube_video_id ? `<div>${escHtml(i.youtube_video_id)}</div>` : ""}${i.last_error ? `<div style="color:var(--muted);max-width:220px;overflow-wrap:anywhere;">${escHtml(i.last_error)}</div>` : ""}</td>`
+    + `<td>${btns || "--"}</td></tr>`;
+}
+
+async function refreshHindiPublishing() {
+  const el = document.getElementById("hpList");
+  if (!el) return;
+  try {
+    const d = await apiJson("/api/hindi-publishing");
+    const g = d.gates || {}, sc = d.schedule || {};
+    document.getElementById("hpGates").innerHTML = g.can_publish
+      ? `<span class="auto-on">Hindi publishing can run</span>`
+      : `<span style="color:#fcd34d">Hindi publishing is off:</span> ${escHtml((g.reasons || []).join("; "))}`;
+    document.getElementById("hpEnabled").checked = !!sc.enabled;
+    document.getElementById("hpTimes").value = (sc.times || []).join(", ");
+    document.getElementById("hpLimit").value = sc.daily_limit || 1;
+    document.getElementById("hpAttempts").value = sc.max_attempts || 3;
+    hpItems = {}; (d.items || []).forEach(i => { hpItems[i.id] = i; });
+    el.innerHTML = (d.items || []).length ? apTable(["English source", "Localization / QC", "Metadata", "Thumbnail", "Scheduled", "YouTube", ""], d.items.map(hpRow))
+      : `<div style="color:var(--muted)">No Hindi video has passed Hindi QC yet.</div>`;
+    const ev = d.events || [];
+    document.getElementById("hpEvents").innerHTML = ev.length ? apTable(["When", "Item", "Event"], ev.map(e =>
+      `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(String(e.publication_id))}</td><td>${escHtml(e.event)}</td></tr>`))
+      : `<div style="color:var(--muted)">No Hindi publication events yet.</div>`;
+  } catch (err) { el.innerHTML = `<span class="auto-kill">Hindi queue unavailable: ${escHtml(err.message || String(err))}</span>`; }
+}
+
+async function hpSaveSchedule() {
+  const times = (document.getElementById("hpTimes").value || "").split(",").map(t => t.trim()).filter(Boolean);
+  const body = { enabled: document.getElementById("hpEnabled").checked, times,
+                 daily_limit: parseInt(document.getElementById("hpLimit").value || "1", 10),
+                 max_attempts: parseInt(document.getElementById("hpAttempts").value || "3", 10), confirm: true };
+  if (!(await askConfirm("Save the Hindi publishing schedule?", "Enabling the schedule does not authorize Hindi publishing; uploads still need the Hindi channel to be active and Hindi publishing authorized."))) return;
+  try { await dashWrite("/api/hindi-publishing/schedule", body); showToast("Hindi schedule saved"); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshHindiPublishing();
+}
+
+async function hpEdit(id) {
+  const i = hpItems[id]; if (!i) return;
+  const title = prompt("Hindi video title (max 100 characters):", i.title); if (title === null) return;
+  const description = prompt("Description:", i.description || ""); if (description === null) return;
+  const tags = prompt("Tags (comma separated):", (i.tags || []).join(", ")); if (tags === null) return;
+  try {
+    await dashWrite(`/api/hindi-publishing/${encodeURIComponent(id)}/metadata`, { title, description,
+      tags: tags.split(",").map(t => t.trim()).filter(Boolean), confirm: true });
+    showToast("Metadata saved");
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshHindiPublishing();
+}
+
+async function hpAct(id, action) {
+  try { await dashWrite(`/api/hindi-publishing/${encodeURIComponent(id)}/${action}`, { confirm: true }); showToast(`Hindi item ${id}: ${action} done`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshHindiPublishing();
+}
+
+async function refreshThumbnails() {
+  const el = document.getElementById("thSummary");
+  if (!el) return;
+  try {
+    const d = await apiJson("/api/thumbnails/overview");
+    const c = d.counts || {}, b = d.backfill || {}, g = ((d.quota || {}).general) || {};
+    const fails = d.failures || [];
+    el.innerHTML = apTable(["Portrait verified", "Portrait pending", "Awaiting processing", "Landscape only (pre-fix)", "Failed"],
+        [`<tr><td>${c.portrait_verified || 0}</td><td>${c.portrait_pending || 0}</td><td>${c.awaiting_processing || 0}</td><td>${c["landscape_only (pre-fix)"] || 0}</td><td>${c.failed || 0}</td></tr>`])
+      + `<div style="margin-top:6px;">Backfill: ${b.remaining ?? "?"} remaining · ${b.used_today ?? 0}/${b.daily_max ?? "?"} thumbnail uploads today (50 units each) · ${b.quota_reserve_units ?? "?"} units always kept for English production</div>`
+      + `<div>YouTube quota today: ${g.used_estimate ?? "?"} of ${g.daily_limit ?? "?"} units used, ${g.remaining_estimate ?? "?"} left</div>`
+      + (fails.length ? `<h3 style="font-size:13px;margin:8px 0 4px;">Verification failures</h3>` + apTable(["Ledger", "Video", "Upload", "Verify", "9:16 variant", "Error"],
+          fails.map(f => `<tr><td>${f.ledger_id}</td><td>${escHtml(f.video_id || "")}</td><td>${escHtml(f.upload || "")}</td><td>${escHtml(f.verify || "")}</td><td>${escHtml(f.shorts_variant || "")}</td><td style="max-width:260px;overflow-wrap:anywhere;">${escHtml(f.error || "")}</td></tr>`)) : "");
+  } catch (err) { el.innerHTML = `<span class="auto-kill">thumbnails unavailable: ${escHtml(err.message || String(err))}</span>`; }
+}
+
 async function refreshLocalizations() {
   const el = document.getElementById("locList");
   if (!el) return;

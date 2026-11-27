@@ -17,6 +17,12 @@ models English production uses, because free-tier limits are per model. Order: `
 * A transient provider error (429 / 5xx / timeout) on every model -> ``ProviderUnavailable`` (an infrastructure
   wait; the localization retries later and keeps any completed work).
 * A malformed or rule-breaking answer -> one retry with the problems as feedback, then ``TranslationRejected``.
+
+Quota resilience: a model that answers 429 is put in a cooldown taken from the provider's own answer: until the
+daily reset (midnight Pacific) for a per-day free-tier quota, else its ``retryDelay`` (default 15 min). A model that
+is overloaded (5xx / timeout) cools down for ``OVERLOAD_COOLDOWN_SEC``. Models in cooldown are not called at all, so an
+exhausted quota costs no further requests; ``ProviderUnavailable.retry_at`` says when the earliest model is usable
+again, and the localization waits until then without using up its attempts.
 """
 from __future__ import annotations
 
@@ -24,7 +30,9 @@ import json
 import logging
 import os
 import re
+import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -33,10 +41,68 @@ DEFAULT_HINDI_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash", "gemma-4-31b-it"
 HINDI_WORDS_PER_SEC = 2.0          # measured 2026-11-27: edge-tts Swara speaks ~2.07 words/s at +8 %, 2.26 at +18 %
 MAX_HINDI_WORDS_PER_SEC = 2.2      # per-scene ceiling given to the model (just under the +18 % pace)
 TRANSIENT = {408, 429, 500, 502, 503, 504}
+QUOTA_DEFAULT_COOLDOWN_SEC = 900
+OVERLOAD_COOLDOWN_SEC = 600
+MIN_COOLDOWN_SEC = 30
+
+_cooldown: Dict[str, Tuple[float, str]] = {}      # model -> (epoch seconds usable again, why); this process only
+_cooldown_lock = threading.Lock()
 
 
 class ProviderUnavailable(RuntimeError):
-    """Every model answered with a transient error: an infrastructure condition (retry later)."""
+    """Every model answered with a transient error or is cooling down: an infrastructure wait (retry at retry_at)."""
+
+    def __init__(self, message: str, retry_at: Optional[datetime] = None, quota: bool = False):
+        super().__init__(message)
+        self.retry_at = retry_at
+        self.quota = quota
+
+
+def _next_pacific_midnight(now: datetime) -> datetime:
+    try:
+        from zoneinfo import ZoneInfo
+        pt = now.astimezone(ZoneInfo("America/Los_Angeles"))
+        nxt = (pt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return nxt.astimezone(timezone.utc)
+    except Exception:                                   # no tz database: PST midnight (08:00 UTC)
+        nxt = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        return nxt if nxt > now else nxt + timedelta(days=1)
+
+
+def cooldown_for(exc: BaseException, status: Optional[int], now: Optional[datetime] = None) -> Tuple[float, str]:
+    """(seconds, why) to leave a model alone after a provider error, from the provider's own answer."""
+    now = now or datetime.now(timezone.utc)
+    text = str(exc) + " " + str(getattr(exc, "details", "") or "")
+    if status == 429 or "RESOURCE_EXHAUSTED" in text:
+        if re.search(r"PerDay", text):
+            until = _next_pacific_midnight(now) + timedelta(minutes=5)
+            return max(MIN_COOLDOWN_SEC, (until - now).total_seconds()), "daily free-tier quota exhausted"
+        m = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s", text)
+        if m:
+            return max(MIN_COOLDOWN_SEC, float(m.group(1))), "rate limit (provider retryDelay)"
+        return QUOTA_DEFAULT_COOLDOWN_SEC, "rate limit"
+    return OVERLOAD_COOLDOWN_SEC, f"unavailable (HTTP {status or type(exc).__name__})"
+
+
+def _cooling(model: str, now_epoch: float) -> Optional[Tuple[float, str]]:
+    with _cooldown_lock:
+        cd = _cooldown.get(model)
+        if cd and cd[0] > now_epoch:
+            return cd
+        _cooldown.pop(model, None)
+        return None
+
+
+def _cool(model: str, seconds: float, why: str, now_epoch: float) -> None:
+    with _cooldown_lock:
+        _cooldown[model] = (now_epoch + seconds, why)
+
+
+def cooldowns() -> Dict[str, Dict[str, Any]]:
+    now = time.time()
+    with _cooldown_lock:
+        return {m: {"until_utc": datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "why": w}
+                for m, (t, w) in _cooldown.items() if t > now}
 
 
 class TranslationRejected(RuntimeError):
@@ -139,7 +205,14 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
     from google.genai import types
     attempts: List[Dict[str, Any]] = []
     rule_problems: List[str] = []
+    waits: List[Tuple[float, bool]] = []                 # (epoch usable again, quota?) per unavailable model
     for model in models:
+        cd = _cooling(model, time.time())
+        if cd:                                           # exhausted or overloaded: no request at all
+            attempts.append({"model": model, "attempt": 0, "ok": False, "skipped": "cooldown", "why": cd[1],
+                             "until_utc": datetime.fromtimestamp(cd[0], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+            waits.append((cd[0], "quota" in cd[1] or "rate limit" in cd[1]))
+            continue
         feedback: List[str] = list(initial_feedback)
         for attempt in (1, 2):
             t0 = time.perf_counter()
@@ -147,9 +220,14 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
                    if not model.startswith("gemma") else types.GenerateContentConfig(temperature=0.6))
             try:
                 resp = client.models.generate_content(model=model, contents=build_prompt(req, feedback), config=cfg)
-            except Exception as exc:             # provider-level: try the next model
-                attempts.append({"model": model, "attempt": attempt, "ok": False, "http_status": _status_of(exc),
-                                 "error_type": type(exc).__name__, "latency_ms": round((time.perf_counter() - t0) * 1000)})
+            except Exception as exc:             # provider-level: cool this model down, try the next one
+                status = _status_of(exc)
+                secs, why = cooldown_for(exc, status)
+                _cool(model, secs, why, time.time())
+                waits.append((time.time() + secs, status == 429 or "quota" in why))
+                attempts.append({"model": model, "attempt": attempt, "ok": False, "http_status": status,
+                                 "error_type": type(exc).__name__, "cooldown_sec": round(secs), "why": why,
+                                 "latency_ms": round((time.perf_counter() - t0) * 1000)})
                 break
             try:
                 hindi = _parse(getattr(resp, "text", "") or "")
@@ -167,4 +245,9 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
             break                                # the model answered but broke the rules: another model is not the fix
     if rule_problems:
         raise TranslationRejected("the Hindi adaptation broke the localization rules after a feedback retry", rule_problems)
-    raise ProviderUnavailable("every Hindi model was unavailable (rate limit / overload / not served); retry later")
+    retry_at = datetime.fromtimestamp(min(w[0] for w in waits), timezone.utc) if waits else None
+    quota = any(q for _, q in waits)
+    raise ProviderUnavailable("every Hindi model was unavailable (" + ("free-tier quota / " if quota else "")
+                              + "rate limit / overload); retry "
+                              + (f"after {retry_at.strftime('%Y-%m-%d %H:%M UTC')}" if retry_at else "later"),
+                              retry_at=retry_at, quota=quota)

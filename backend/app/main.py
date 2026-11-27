@@ -2584,8 +2584,11 @@ async def api_autopilot_controller_stop(req: AutopilotControllerRequest, _: None
 
 
 # -- Stage 4.01: channel registry (English master, Hindi localized) -------------------------------------------
-class ChannelChangeRequest(_AutonomyBody):
-    reason: str = Field(min_length=1, max_length=500)
+class ChannelChangeRequest(BaseModel):
+    """Activating / deactivating a channel is a single confirmed action: no operator name or reason is asked for.
+    Security stays: local control, same origin, JSON only, the dashboard CSRF token, and (in the registry) channel
+    state validation (only a VERIFIED channel with a YouTube identity can be activated)."""
+    model_config = {"extra": "forbid"}
     confirm: bool = False
 
 
@@ -2638,7 +2641,7 @@ async def api_channel_activate(key: str, req: ChannelChangeRequest, _: None = De
     from backend.app.channels.registry import get_registry
     _require_confirm(req.confirm)
     k = _channel_key(key)
-    return await _channel_call(lambda: get_registry().activate(k, req.operator, req.reason))
+    return await _channel_call(lambda: get_registry().activate(k, actor="dashboard"))
 
 
 @app.post("/api/channels/{key}/deactivate")
@@ -2647,16 +2650,18 @@ async def api_channel_deactivate(key: str, req: ChannelChangeRequest, _: None = 
     from backend.app.channels.registry import get_registry
     _require_confirm(req.confirm)
     k = _channel_key(key)
-    return await _channel_call(lambda: get_registry().deactivate(k, req.operator, req.reason))
+    return await _channel_call(lambda: get_registry().deactivate(k, actor="dashboard"))
 
 
 # -- Stage 4.02: Hindi localization of completed English Shorts (never publishes) ------------------------------
-class LocalizationRequest(_AutonomyBody):
+class LocalizationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     source_job_id: str = Field(min_length=3, max_length=80)
     confirm: bool = False
 
 
-class LocalizationRetryRequest(_AutonomyBody):
+class LocalizationRetryRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     from_step: Optional[str] = Field(default=None, max_length=20)
     confirm: bool = False
 
@@ -2690,7 +2695,7 @@ async def api_localization_create(req: LocalizationRequest, _: None = Depends(re
     _require_confirm(req.confirm)
     if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", req.source_job_id):
         raise HTTPException(status_code=400, detail="invalid source job id")
-    return await _localization_call(lambda: enqueue(req.source_job_id, operator=req.operator))
+    return await _localization_call(lambda: enqueue(req.source_job_id, operator="dashboard"))
 
 
 @app.post("/api/localizations/{loc_id}/retry")
@@ -2701,9 +2706,91 @@ async def api_localization_retry(loc_id: int, req: LocalizationRetryRequest, _: 
 
     def go():
         loc = HindiLocalizer()
-        row = loc.reopen(loc_id, actor=req.operator, from_step=req.from_step)
-        return enqueue(row["source_job_id"], operator=req.operator, localizer=loc)
+        row = loc.reopen(loc_id, actor="dashboard", from_step=req.from_step)
+        return enqueue(row["source_job_id"], operator="dashboard", localizer=loc)
     return await _localization_call(go)
+
+
+# -- Hindi publishing queue and schedule (separate from the English ledger; Hindi credentials only) ---------------
+class HindiScheduleRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    enabled: bool = False
+    times: List[str] = Field(default_factory=lambda: ["19:30"], max_length=6)
+    daily_limit: int = 1
+    max_attempts: int = 3
+    confirm: bool = False
+
+
+class HindiMetadataRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=5000)
+    tags: List[str] = Field(default_factory=list, max_length=40)
+    confirm: bool = False
+
+
+class HindiSlotRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    at_utc: Optional[str] = Field(default=None, max_length=40)
+    confirm: bool = False
+
+
+async def _hindi_call(fn):
+    from backend.app.localization.publishing import PublishingError
+    try:
+        return await asyncio.to_thread(fn)
+    except PublishingError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc)[:300])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Hindi publishing request failed")
+        raise HTTPException(status_code=503, detail="Hindi publishing unavailable; English publishing is unaffected.")
+
+
+@app.get("/api/hindi-publishing")
+async def api_hindi_publishing(_: None = Depends(require_local_control)):
+    from backend.app.localization.publishing import get_publisher
+    return await _hindi_call(lambda: get_publisher().queue())
+
+
+@app.post("/api/hindi-publishing/schedule")
+async def api_hindi_schedule(req: HindiScheduleRequest, _: None = Depends(require_local_control),
+                             __: None = Depends(require_autonomy_write)):
+    """The Hindi channel's own schedule. Enabling it never authorizes publishing (a separate operator flag)."""
+    from backend.app.localization.publishing import get_publisher
+    _require_confirm(req.confirm)
+    cfg = req.model_dump(exclude={"confirm"})
+    cfg["timezone"] = "Asia/Kolkata"
+    return await _hindi_call(lambda: get_publisher().set_schedule(cfg))
+
+
+@app.post("/api/hindi-publishing/{pid}/metadata")
+async def api_hindi_metadata(pid: int, req: HindiMetadataRequest, _: None = Depends(require_local_control),
+                             __: None = Depends(require_autonomy_write)):
+    from backend.app.localization.publishing import get_publisher
+    _require_confirm(req.confirm)
+    return await _hindi_call(lambda: get_publisher().update_metadata(pid, title=req.title, description=req.description,
+                                                                     tags=req.tags))
+
+
+@app.post("/api/hindi-publishing/{pid}/{action}")
+async def api_hindi_item(pid: int, action: str, req: HindiSlotRequest, _: None = Depends(require_local_control),
+                         __: None = Depends(require_autonomy_write)):
+    from backend.app.localization.publishing import get_publisher
+    _require_confirm(req.confirm)
+    pub = get_publisher()
+    fns = {"schedule": lambda: pub.schedule_item(pid, req.at_utc), "unschedule": lambda: pub.unschedule(pid),
+           "retry": lambda: pub.retry(pid)}
+    if action not in fns:
+        raise HTTPException(status_code=404, detail="unknown action")
+    return await _hindi_call(fns[action])
+
+
+@app.get("/api/thumbnails/overview")
+def api_thumbnails_overview(_: None = Depends(require_local_control)):
+    """Shorts portrait-thumbnail state, verification failures, backfill progress and today's YouTube quota."""
+    from backend.app.services.youtube_publishing_engine import youtube_publishing_engine
+    return youtube_publishing_engine.thumbnail_overview()
 
 
 @app.get("/api/localizations/{loc_id}/video")

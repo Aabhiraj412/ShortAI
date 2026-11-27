@@ -82,14 +82,27 @@ def engine(tmp_path, monkeypatch):
     return eng
 
 
-def test_upload_sends_the_1280x720_artifact_on_the_existing_video_and_persists_state(engine, tmp_path):
+def _svc(processing="succeeded", thumbs=None):
+    svc = MagicMock()
+    svc.videos.return_value.list.return_value.execute.return_value = {"items": [{
+        "processingDetails": {"processingStatus": processing.upper()}, "snippet": {"thumbnails": thumbs or {}}}]}
+    svc.thumbnails.return_value.set.return_value.execute.return_value = {"items": [{"default": {}, "shortsAspectRatio": {}}]}
+    return svc
+
+
+def test_upload_sends_the_shorts_safe_artifact_after_processing_and_persists_state(engine, tmp_path):
     portrait = _img(tmp_path / "thumb_j.png")
     tp.write_sidecar(portrait, headline="COMBINING BATTERY ADDITIVES", source_image=None)
-    svc = MagicMock()
+    waiting = _svc(processing="processing")
+    res = engine._upload_thumbnail(waiting, 7, "VID123", portrait)
+    assert res["status"] == "awaiting_processing" and res["error"] is None
+    waiting.thumbnails.return_value.set.assert_not_called()       # never before YouTube finished processing
+    assert engine.thumbnail_store().get(7)["upload_status"] == "awaiting_processing"
+    svc = _svc()
     res = engine._upload_thumbnail(svc, 7, "VID123", portrait)
-    assert res["uploaded"] and res["artifact"].endswith(tp.YOUTUBE_SUFFIX)
+    assert res["uploaded"] and res["artifact"].endswith(tp.SHORTS_SUFFIX)
     kwargs = svc.thumbnails.return_value.set.call_args.kwargs
-    assert kwargs["videoId"] == "VID123" and kwargs["media_body"].endswith(tp.YOUTUBE_SUFFIX)
+    assert kwargs["videoId"] == "VID123" and kwargs["media_body"].endswith(tp.SHORTS_SUFFIX)
     svc.videos.return_value.insert.assert_not_called()           # the video is never uploaded again
     st = engine.thumbnail_store().get(7)
     assert st["upload_status"] == "uploaded" and st["verify_status"] == "pending"
@@ -108,7 +121,7 @@ def test_invalid_thumbnail_is_not_uploaded_and_marks_not_ready(engine, tmp_path)
 def test_failed_upload_is_recorded_with_its_error(engine, tmp_path):
     from googleapiclient.errors import HttpError
     portrait = _img(tmp_path / "t.png")
-    svc = MagicMock()
+    svc = _svc()
     resp = MagicMock(); resp.status = 403
     svc.thumbnails.return_value.set.return_value.execute.side_effect = HttpError(resp, b"forbidden")
     res = engine._upload_thumbnail(svc, 9, "VID", portrait)
@@ -118,11 +131,14 @@ def test_failed_upload_is_recorded_with_its_error(engine, tmp_path):
 
 def test_verification_sweep_verifies_or_marks_not_ready_after_retries(engine, tmp_path, monkeypatch):
     portrait = _img(tmp_path / "t.png")
-    engine._upload_thumbnail(MagicMock(), 10, "VIDOK", portrait)
-    engine._upload_thumbnail(MagicMock(), 11, "VIDBAD", portrait)
+    engine._upload_thumbnail(_svc(), 10, "VIDOK", portrait)
+    engine._upload_thumbnail(_svc(), 11, "VIDBAD", portrait)
     art = engine.thumbnail_store().get(10)["artifact_path"]
     wrong = _img(tmp_path / "w.png", (1280, 720), (240, 240, 20))
-    fetch = lambda url: _jpeg_bytes(art) if "VIDOK" in url else _jpeg_bytes(wrong)   # noqa: E731
+    # YouTube's metadata lists the 9:16 variant; it shows the portrait design for the good video
+    engine.oauth.get_authenticated_service.return_value = _svc(thumbs={"shortsAspectRatio": {"url": "sar/VIDOK"}})
+    fetch = lambda url: (_jpeg_bytes(portrait) if "sar/" in url else _jpeg_bytes(art) if "VIDOK" in url  # noqa: E731
+                         else _jpeg_bytes(wrong))
     errors = {}
     monkeypatch.setattr(engine.db, "update_queue_metadata_and_schedule", lambda lid, **kw: errors.__setitem__(lid, kw))
     monkeypatch.setattr(engine.db, "get_publication", lambda lid: {"error_details": None})

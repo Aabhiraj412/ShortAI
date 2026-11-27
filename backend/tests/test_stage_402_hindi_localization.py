@@ -604,8 +604,14 @@ def test_source_must_have_its_english_artifacts(world, tmp_path):
 
 
 def test_localization_package_has_no_publishing_or_credential_path():
+    """The localization steps never publish; the only upload path is the gated Hindi publisher (publishing.py),
+    which uses the Hindi channel's own token through the channel registry, never the English engine or token."""
     pkg = Path(__file__).resolve().parents[1] / "app" / "localization"
-    text = "\n".join(p.read_text(encoding="utf-8") for p in pkg.glob("*.py"))
+    pub = (pkg / "publishing.py").read_text(encoding="utf-8")
+    for forbidden in ("youtube_publishing_engine", "token.json", "YouTubeOAuthManager"):
+        assert forbidden not in pub, forbidden
+    assert "publishing_authorized" in pub and "self._check_identity(svc)" in pub
+    text = "\n".join(p.read_text(encoding="utf-8") for p in pkg.glob("*.py") if p.name != "publishing.py")
     for forbidden in ("youtube_publishing_engine", "videos().insert", "publishing_ledger", "token.json", "oauth_manager",
                       "YouTubeOAuthManager", "upload"):
         assert forbidden not in text, forbidden
@@ -689,7 +695,7 @@ def test_api_routes(monkeypatch, world):
     monkeypatch.setattr(pl, "overview", lambda: {"localizations": []})
     local = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     assert local.get("/api/localizations").json() == {"localizations": []}
-    assert local.post("/api/localizations", json={"operator": "op", "source_job_id": JOB, "confirm": True}).status_code == 403
+    assert local.post("/api/localizations", json={"source_job_id": JOB, "confirm": True}).status_code == 403
     remote = TestClient(main.app, base_url="http://example.com", client=("10.1.2.3", 5000))
     assert remote.get("/api/localizations").status_code in (400, 403)
     lid = world.loc.plan(JOB)["localization"]["id"]
@@ -771,3 +777,78 @@ def test_coordinator_tick_only_auto_localizes_with_the_production_executors(tmp_
     finally:
         pl.auto_enqueue_next = orig
     assert pc.DEFAULT_CONFIG["localization_auto_daily_max"] == 6
+
+
+# -- Gemini quota resilience (2026-11-27) -----------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _clear_cooldowns():
+    translator._cooldown.clear()
+    yield
+    translator._cooldown.clear()
+
+
+class QuotaError(Exception):
+    def __init__(self, text, code=429):
+        super().__init__(text)
+        self.code = code
+
+
+DAILY = ("429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'details': [{'@type': 'type.googleapis.com/google.rpc."
+         "QuotaFailure', 'violations': [{'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'}]}, "
+         "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '41s'}]}}")
+MINUTE = ("429 RESOURCE_EXHAUSTED. {'error': {'details': [{'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel'}, "
+          "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '41s'}]}}")
+
+
+def test_cooldown_follows_the_provider_answer():
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 27, 16, 0, tzinfo=timezone.utc)          # 21:30 IST
+    secs, why = translator.cooldown_for(QuotaError(DAILY), 429, now)
+    assert "daily" in why and 15 * 3600 < secs < 17 * 3600              # until midnight Pacific (08:00 UTC) + 5 min
+    secs, why = translator.cooldown_for(QuotaError(MINUTE), 429, now)
+    assert secs == 41 and "retryDelay" in why
+    assert translator.cooldown_for(ApiError(503), 503, now)[0] == translator.OVERLOAD_COOLDOWN_SEC
+
+
+def test_exhausted_models_are_not_called_again_until_their_reset():
+    c = FakeClient({"m1": [QuotaError(DAILY)], "m2": [ApiError(503)]})
+    with pytest.raises(translator.ProviderUnavailable) as e:
+        translator.translate(request(), client=c, models=["m1", "m2"], validate=script_qc.validate)
+    assert e.value.quota and e.value.retry_at is not None
+    assert len(c.prompts) == 2
+    with pytest.raises(translator.ProviderUnavailable) as e2:        # second run: no request at all
+        translator.translate(request(), client=c, models=["m1", "m2"], validate=script_qc.validate)
+    assert len(c.prompts) == 2 and e2.value.retry_at is not None
+    assert set(translator.cooldowns()) == {"m1", "m2"}
+
+
+def test_a_usable_fallback_model_still_answers_while_others_cool_down():
+    c = FakeClient({"m1": [QuotaError(DAILY)], "m2": [fixture_hindi()]})
+    hindi, attempts = translator.translate(request(), client=c, models=["m1", "m2"], validate=script_qc.validate)
+    assert hindi["_model"] == "m2" and attempts[-1]["ok"]              # only a validated answer is accepted
+    c2 = FakeClient({"m1": [], "m2": [fixture_hindi()]})
+    translator.translate(request(), client=c2, models=["m1", "m2"], validate=script_qc.validate)
+    assert [m for m, _ in c2.prompts] == ["m2"]                        # m1 skipped while exhausted
+
+
+def test_provider_wait_keeps_attempts_and_defers_the_job(world, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from backend.app.scheduler import production_coordinator as pc
+    import backend.app.localization.pipeline as pl
+    retry_at = datetime.now(timezone.utc) + timedelta(hours=2)
+
+    def wait_translate(loc, wd, arts):
+        raise pl.ProviderWait("every Hindi model was unavailable (free-tier quota)", retry_at)
+    world.loc.translate_fn = wait_translate
+    lid = world.loc.plan(JOB)["localization"]["id"]
+    with pytest.raises(pl.ProviderWait):
+        world.loc.run_step(lid, "translate")
+    row = world.loc.get(lid)
+    assert row["status"] == "WAITING" and row["error_kind"] == "PROVIDER_WAIT" and int(row["attempts"]) == 0
+    monkeypatch.setattr(pl, "HindiLocalizer", lambda *a, **k: world.loc)
+    ctx = SimpleNamespace(job={"checkpoint": {"localization_id": lid}, "attempts": 2, "max_attempts": 3},
+                          checkpoint={}, step={"name": "translate"})
+    with pytest.raises(pc.StepDeferred) as e:
+        pl.executor(ctx)
+    assert e.value.until == retry_at and world.loc.get(lid)["status"] == "WAITING"   # never FAILED for waiting

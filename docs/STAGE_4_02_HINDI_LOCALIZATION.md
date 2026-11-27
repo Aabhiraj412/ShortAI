@@ -226,3 +226,38 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 **Full suite** (Hinglish policy): **2007 passed, 4 failed (the same known baseline), 174 skipped**; 39 focused 4.02 tests. Earlier, at `75c68c4` with the operator-dependency reduction: **2005 passed, 4 failed (the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two `test_youtube_branding`), 174 skipped.** The baseline before 4.02 was 1948 / 4 / 174. Earlier run at `1a11ab7`: 1981 / 4 / 174.
 
 **Commits:** `1a11ab7` (stage), `33b392c` (queue display), `2afb167`, `8544aa6` and `75c68c4` (acceptance-run fixes). Deployment status is in the handover §3.
+
+## 10. Follow-up (2026-11-27 evening): quota resilience, Hindi publishing queue, Shorts thumbnails, channels
+
+**Gemini quota.** Live evidence: the automatic localizations of `cycle_22` and `cycle_21` failed after 3 attempts. Gemini 3.7/3.5 Flash answered 429 (free-tier quota). The Gemma fallbacks in the same free chain answered 503/504 (overloaded). Each failed run still consumed one attempt.
+- Fix (`localization/translator.py`, `pipeline.py`; coordinator `StepDeferred`):
+  - A model that answers 429 is not called again until the provider's own reset: midnight Pacific (13:35 IST) for a per-day quota, otherwise its `retryDelay`.
+  - An overloaded model cools down for 10 min.
+  - The localization waits as `WAITING`/`PROVIDER_WAIT`. The coordinator job stays QUEUED with `not_before_utc` and keeps its attempts. Waiting is bounded to 26 h per deferral and 48 h overall.
+- Gemma answers are accepted only when they pass Hindi script QC. No paid or offline translator exists.
+
+**Hindi publishing queue** (`localization/publishing.py`, table `hindi_publications`, history `hindi_publication_events`, dashboard card "Hindi publishing queue", API `/api/hindi-publishing`):
+- Holds only QC_PASSED Hindi localizations whose MP4 is under `media/localizations/hi/`, one row per localization.
+- Metadata is derived from the English metadata and is editable.
+- Slots come from the Hindi schedule: daily limit, one video per slot, at least 20 min ahead.
+- Uploads use only the Hindi token, after a `channels.list?mine=true` identity check against the verified Hindi id. Videos are uploaded private with `publishAt`.
+- An interrupted upload becomes NEEDS_CHECK. Its retry adopts the existing video instead of uploading again.
+
+**Hindi schedule.** Stored in `channel_registry.publishing_config_json` (Hindi row, key `schedule`): `enabled` (default **false**), `times` (Asia/Kolkata), `daily_limit`, `max_attempts`.
+- It runs every 5 min from the daemon's recovery loop (`daemon_runtime.hindi_publishing_tick`), in a worker thread that is never awaited. The coordinator and the English scheduler never call it.
+- It uploads only when the Hindi channel is ACTIVE and verified, `publishing_authorized` is true (operator authorization, never set by code) and the schedule is enabled.
+- The English 24-cycle schedule is untouched.
+
+**Shorts thumbnails.** Measured on a live Short (`eJKaDDIEAoc`):
+- `thumbnails.set` with a 9:16 image is accepted, but only the 16:9 sizes change (pillarboxed). The Shorts-feed `oar2` frame does not change, so a raw portrait upload only degrades the 16:9 surfaces.
+- When a thumbnail is set after processing SUCCEEDED, YouTube adds a `shortsAspectRatio` thumbnail (`sardefault.jpg`, 405×720): the centre 9:16 crop of the uploaded image. Thumbnails set right after `videos.insert` (the previous flow) never got it.
+- Of 161 recorded Shorts thumbnails, 155 were marked "verification failed" only because the check ran while the video was still private (CDN 404). They verify once public.
+- Fix (`services/thumbnail_pipeline.py`, `youtube_publishing_engine.py`):
+  - The Shorts artifact is 1280×720 with the full portrait design in the centre 405×720 column.
+  - It is set only after processing SUCCEEDED (`awaiting_processing` until then).
+  - Verification requires YouTube's `shortsAspectRatio` to match the portrait.
+  - A private or scheduled video is never counted as failed.
+- Long-form keeps the 16:9 composition.
+- Backfill: at most 2 per 5-min reconciliation and 60 per Pacific day, always keeping 3,000 general units free. Portrait-safe thumbnails are never replaced.
+
+**Channels.** Activation and deactivation are one confirmed action. The operator and reason fields were removed from the dashboard, the API (`ChannelChangeRequest` accepts only `confirm`) and the registry. Older records are kept in the database but never displayed. CSRF, origin, local-control and channel-state validation are unchanged.

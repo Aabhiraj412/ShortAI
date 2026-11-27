@@ -140,7 +140,7 @@ def test_hindi_verified_with_its_own_distinct_identity(env):
     assert hi["status"] == VERIFIED and hi["youtube_channel_id"] == HI_ID
     mgr = FakeOAuth.created[-1]
     assert mgr.is_master is False and Path(mgr.token_path) == hi_token.resolve()
-    assert reg.activate("hi", "op", "publishing ready")["status"] == ACTIVE
+    assert reg.activate("hi")["status"] == ACTIVE
 
 
 def test_hindi_authorized_as_the_english_channel_is_blocked(env):
@@ -156,7 +156,7 @@ def test_hindi_authorized_as_the_english_channel_is_blocked(env):
     assert hi["status"] == BLOCKED and "IDENTITY_CONFLICT" in hi["status_reason"] and hi["youtube_channel_id"] is None
     assert _sha(backend / "token.json") == en_hash                     # English authorization untouched
     with pytest.raises(ChannelError):
-        reg.activate("hi", "op", "try")
+        reg.activate("hi")
 
 
 def test_hindi_is_not_verified_before_english(env):
@@ -229,11 +229,9 @@ def test_english_default_token_path_is_unchanged():
 def test_master_cannot_be_deactivated_and_unverified_cannot_activate(env):
     reg, backend, db = env
     with pytest.raises(ChannelError, match="master"):
-        reg.deactivate("en", "op", "no")
+        reg.deactivate("en")
     with pytest.raises(ChannelError, match="verified"):
-        reg.activate("hi", "op", "no")
-    with pytest.raises(ChannelError):
-        reg.activate("hi", "", "")
+        reg.activate("hi")
 
 
 def test_deactivate_verified_hindi(env):
@@ -245,8 +243,8 @@ def test_deactivate_verified_hindi(env):
     t.write_text("{}", encoding="utf-8")
     _answer("channel_tokens/hi/token.json", HI_ID)
     reg.verify("hi", force=True)
-    reg.activate("hi", "op", "go")
-    assert reg.deactivate("hi", "op", "pause")["status"] == INACTIVE
+    reg.activate("hi")
+    assert reg.deactivate("hi")["status"] == INACTIVE
     assert [e["event"] for e in reg.events("hi")][:2] == ["DEACTIVATED", "ACTIVATED"]
 
 
@@ -260,7 +258,7 @@ def _active_hindi(reg, backend):
     t.write_text("{}", encoding="utf-8")
     _answer("channel_tokens/hi/token.json", HI_ID)
     reg.verify("hi", force=True)
-    reg.activate("hi", "op", "go")
+    reg.activate("hi")
 
 
 def _job(db, jid, status="COMPLETED", title="Halley's Comet"):
@@ -435,3 +433,74 @@ def test_status_auto_verifies_the_master_from_the_cached_status(env):
     en = [c for c in st["channels"] if c["channel_key"] == "en"][0]
     assert en["identity"]["youtube_channel_id"] == EN_ID
     assert all(m.calls == ["cached"] for m in FakeOAuth.created if m.is_master)
+
+
+# -- activation without operator name or reason (owner request 2026-11-27) -------------------------------------------
+
+def _verified_hindi(reg, backend):
+    _answer("token.json", EN_ID)
+    reg.verify("en")
+    hi_token = backend / "channel_tokens" / "hi" / "token.json"
+    hi_token.parent.mkdir(parents=True)
+    hi_token.write_text("{}", encoding="utf-8")
+    _answer("channel_tokens/hi/token.json", HI_ID)
+    assert reg.verify("hi", force=True)["status"] == VERIFIED
+
+
+def test_activation_path_has_no_operator_or_reason(env, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app import main
+    import backend.app.channels.registry as reg_mod
+    import backend.app.channels.status as st_mod
+    reg, backend, db = env
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: reg)
+    monkeypatch.setattr(st_mod, "get_registry", lambda: reg)
+    monkeypatch.setattr(st_mod.channels_status, "__kwdefaults__", {"english_oauth": lambda: {"status": "CONNECTED"},
+                                                                    "english_analytics": lambda: {"state": "CONNECTED"},
+                                                                    "auto_verify_master": False})
+    local = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
+    hdr = {"Origin": "http://127.0.0.1:8000", main.AUTONOMY_CSRF_HEADER: main._AUTONOMY_CSRF_TOKEN}
+    # unverified: state validation still refuses
+    r = local.post("/api/channels/hi/activate", json={"confirm": True}, headers=hdr)
+    assert r.status_code == 409 and "verified" in r.json()["detail"]
+    _verified_hindi(reg, backend)
+    # security kept: no CSRF token -> refused; no confirmation -> refused
+    assert local.post("/api/channels/hi/activate", json={"confirm": True},
+                      headers={"Origin": "http://127.0.0.1:8000"}).status_code == 403
+    assert local.post("/api/channels/hi/activate", json={}, headers=hdr).status_code == 400
+    # the fields no longer exist (not optional): sending them is rejected
+    assert local.post("/api/channels/hi/activate", json={"confirm": True, "operator": "x", "reason": "y"},
+                      headers=hdr).status_code == 422
+    r = local.post("/api/channels/hi/activate", json={"confirm": True}, headers=hdr)
+    assert r.status_code == 200 and r.json()["status"] == ACTIVE
+    assert r.json()["status_reason"].startswith("activated (identity verified")
+    ev = local.get("/api/channels").json()["events"]
+    assert ev and all(set(e) == set(st_mod.EVENT_FIELDS) for e in ev)          # no actor, no detail
+    assert local.post("/api/channels/hi/deactivate", json={"confirm": True}, headers=hdr).json()["status"] == INACTIVE
+
+
+def test_old_activation_text_is_not_displayed_but_kept(env, monkeypatch):
+    import backend.app.channels.status as st_mod
+    reg, backend, db = env
+    _verified_hindi(reg, backend)
+    reg.activate("hi")
+    c = sqlite3.connect(db)
+    c.execute("UPDATE channel_registry SET status_reason='activated by Some Name: some reason' WHERE channel_key='hi'")
+    c.commit()
+    c.close()
+    out = st_mod.channels_status(reg, english_oauth=lambda: {"status": "CONNECTED"},
+                                 english_analytics=lambda: {"state": "CONNECTED"}, auto_verify_master=False)
+    hi = next(ch for ch in out["channels"] if ch["channel_key"] == "hi")
+    assert hi["status_reason"] == "activated" and "Some Name" not in json.dumps(out) and "some reason" not in json.dumps(out)
+    assert reg.get("hi")["status_reason"] == "activated by Some Name: some reason"     # the record is unchanged
+
+
+def test_channels_card_has_no_operator_or_reason_inputs():
+    from backend.app import main
+    html = (Path(main.__file__).parent / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    card = html[html.index('id="chCard"'):html.index('id="locCard"')]
+    assert "Operator" not in card and "operator" not in card and "reason" not in card.lower()
+    js = html[html.index("async function channelAct("):html.index("function channelRow(")]
+    assert "chReason" not in js and "chOperator" not in js and "autoWrite" not in js and "dashWrite" in js
+    hist = html[html.index("async function refreshChannels()"):html.index("async function locCreate()")]
+    assert '"Actor"' not in hist and "e.actor" not in hist

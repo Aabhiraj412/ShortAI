@@ -6,6 +6,7 @@ reported as such and never hides the others.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -97,6 +98,17 @@ def _safe(name: str, fn: Callable[[], Any], unavailable: List[str]) -> Any:
         return None
 
 
+_ACTOR_REASON = re.compile(r"^(activated|deactivated) by .*", re.S)
+EVENT_FIELDS = ("id", "ts_utc", "channel_key", "event", "previous_status", "new_status")
+
+
+def display_reason(text: Optional[str]) -> str:
+    """The dashboard never shows who activated a channel or why (older records stored "activated by <name>: <reason>";
+    the record itself is kept unchanged in the database)."""
+    m = _ACTOR_REASON.match(text or "")
+    return m.group(1) if m else (text or "")
+
+
 def channels_status(registry: Optional[ChannelRegistry] = None, *,
                     english_oauth: Callable[[], Dict[str, Any]] = _english_oauth,
                     english_analytics: Callable[[], Dict[str, Any]] = _english_analytics,
@@ -111,6 +123,7 @@ def channels_status(registry: Optional[ChannelRegistry] = None, *,
             pass
     out = []
     for ch in reg.list():
+        ch = dict(ch, status_reason=display_reason(ch.get("status_reason")))
         unavailable: List[str] = []
         token = reg.credential_path(ch)
         token_present = token.exists()
@@ -141,7 +154,7 @@ def channels_status(registry: Optional[ChannelRegistry] = None, *,
             "actions": _actions(ch, token_present), "unavailable": unavailable,
             "production_ready": ch["status"] == ACTIVE and bool(ch.get("youtube_channel_id")),
         })
-    return {"channels": out, "events": reg.events(limit=20),
+    return {"channels": out, "events": [{k: e.get(k) for k in EVENT_FIELDS} for e in reg.events(limit=20)],
             "localizations": reg.localizations(limit=20),
             "note": "Identity comes from channels.list?mine=true only. Hindi uses its own token file and never the "
                     "English authorization; it localizes completed English Shorts and never discovers topics."}

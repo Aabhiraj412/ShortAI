@@ -358,20 +358,17 @@ class ChannelRegistry:
         return self.verify(key, actor=actor, force=True)
 
     # -- activation ----------------------------------------------------------------------------------------------
-    def activate(self, key: str, operator: str, reason: str) -> Dict[str, Any]:
-        if not operator or not reason:
-            raise ChannelError("operator and reason are required", 400)
+    def activate(self, key: str, *, actor: str = "dashboard") -> Dict[str, Any]:
+        """Activates an already VERIFIED channel (one confirmed action; no operator name or reason)."""
         ch = self.get(key)
         if ch["status"] == ACTIVE:
             return ch
         if ch["status"] != VERIFIED or not ch.get("youtube_channel_id"):
             raise ChannelError(f"only a verified channel can be activated (status {ch['status']}: {ch['status_reason']})")
-        return self._set(key, operator, "ACTIVATED", {"reason": reason}, status=ACTIVE,
-                         status_reason=f"activated by {operator}: {reason}")
+        return self._set(key, actor, "ACTIVATED", None, status=ACTIVE,
+                         status_reason="activated (identity verified with channels.list?mine=true)")
 
-    def deactivate(self, key: str, operator: str, reason: str) -> Dict[str, Any]:
-        if not operator or not reason:
-            raise ChannelError("operator and reason are required", 400)
+    def deactivate(self, key: str, *, actor: str = "dashboard") -> Dict[str, Any]:
         ch = self.get(key)
         if ch["role"] == MASTER:
             raise ChannelError("the English master channel cannot be deactivated here; English production is governed "
@@ -379,8 +376,8 @@ class ChannelRegistry:
         if ch["status"] == INACTIVE:
             return ch
         verified = bool(ch.get("youtube_channel_id"))
-        return self._set(key, operator, "DEACTIVATED", {"reason": reason}, status=INACTIVE if verified else ch["status"],
-                         status_reason=f"deactivated by {operator}: {reason}" if verified else ch["status_reason"])
+        return self._set(key, actor, "DEACTIVATED", None, status=INACTIVE if verified else ch["status"],
+                         status_reason="deactivated" if verified else ch["status_reason"])
 
     def is_active(self, key: str) -> bool:
         try:

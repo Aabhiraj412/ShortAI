@@ -722,3 +722,35 @@ def test_process_database_falls_back_to_the_restored_profile_once(monkeypatch, t
     pc._default_shorts_view(T0, db)
     v = pc._default_shorts_view(T0, db)
     assert calls == [1] and v["known"] is True                # restored once per process
+
+
+# -- deferral (Gemini quota resilience, 2026-11-27) -------------------------------------------------------------------
+
+def test_deferred_step_waits_without_using_attempts(tmp_path):
+    calls = []
+
+    def ex(ctx):
+        calls.append(ctx.step["name"])
+        raise pc.StepDeferred("quota", pc._parse(pc._ts(T0 + timedelta(hours=3))))
+    c, w, clock = make(tmp_path, executors={"lf": ex})
+    enable(c)
+    jid = c.enqueue(kind="lf", title="doc", steps=STEPS, requested_by="op")["job"]["id"]
+    for _ in range(4):                    # retried only after the provider's time, never failed
+        run(c.tick())
+        wait_threads(c)
+        job = c.get_job(jid)
+        assert job["state"] == pc.QUEUED and int(job["attempts"]) == 0 and job["error"].startswith("waiting:")
+        clock.advance(hours=1)
+    assert len(calls) == 2                # T0 and T0+3h only (not at T0+1h / +2h)
+
+
+def test_deferral_is_bounded(tmp_path):
+    def ex(ctx):
+        raise pc.StepDeferred("quota", T0 + timedelta(days=30))
+    c, w, clock = make(tmp_path, executors={"lf": ex})
+    enable(c)
+    jid = c.enqueue(kind="lf", title="doc", steps=STEPS, requested_by="op")["job"]["id"]
+    run(c.tick())
+    wait_threads(c)
+    nb = pc._parse(c.get_job(jid)["not_before_utc"])
+    assert nb <= T0 + timedelta(hours=pc.MAX_DEFER_HOURS, minutes=1)

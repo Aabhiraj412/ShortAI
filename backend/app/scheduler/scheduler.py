@@ -1010,6 +1010,10 @@ def reconcile_youtube_publications() -> Dict:
             result["thumbnails"] = youtube_publishing_engine.verify_uploaded_thumbnails()
         except Exception as t_exc:
             logger.debug("[SCHEDULER] Thumbnail verification skipped: %s", t_exc)
+        try:   # Shorts portrait-safe thumbnail backfill (quota-aware: small batches, daily cap, reserve kept)
+            result["thumbnail_backfill"] = youtube_publishing_engine.backfill_shorts_thumbnails(batch=2)
+        except Exception as b_exc:
+            logger.debug("[SCHEDULER] Thumbnail backfill skipped: %s", b_exc)
         return result
     except Exception as exc:
         logger.debug("[SCHEDULER] YouTube status reconciliation skipped: %s", exc)
