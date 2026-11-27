@@ -311,7 +311,7 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 
 The Publishing Queue tab now holds a single card:
 - **Filters:** All, English and Hindi; the default is All.
-- **Rows:** one per video, sorted by scheduled publication time (unscheduled last).
+- **Rows:** one per video, ordered by scheduled publication time: upcoming first (soonest first), then past publications (most recent first), then unscheduled.
 - **Columns:** Video, Channel (ENGLISH or HINDI badge), QC Status, Thumbnail, Scheduled Time, YouTube Status, Actions.
 
 **Data source.** `GET /api/publishing/unified?channel=all|en|hi` (`services/unified_publishing_queue.py`) only merges the two existing queues; it uploads, schedules and authorizes nothing.

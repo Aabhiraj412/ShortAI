@@ -108,9 +108,11 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def merge(english_items: Iterable[Dict[str, Any]], hindi_items: Iterable[Dict[str, Any]],
-          channel: str = "all") -> List[Dict[str, Any]]:
-    """English + Hindi rows, one per video (deduplicated by channel and id), sorted by scheduled time (unscheduled
-    last, newest first among them). ``channel``: all | en | hi."""
+          channel: str = "all", now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """English + Hindi rows, one per video (deduplicated by channel and id), ordered by scheduled publication time:
+    upcoming first (soonest first), then past publication times (most recent first), then unscheduled (newest
+    first). ``channel``: all | en | hi."""
+    now_s = _utc(now or datetime.now(timezone.utc))
     rows: Dict[str, Dict[str, Any]] = {}
     if channel in ("all", "en"):
         for it in english_items:
@@ -120,7 +122,10 @@ def merge(english_items: Iterable[Dict[str, Any]], hindi_items: Iterable[Dict[st
         for it in hindi_items:
             r = hindi_row(it)
             rows.setdefault(r["key"], r)
-    scheduled = sorted((r for r in rows.values() if r["scheduled_at_utc"]), key=lambda r: (r["scheduled_at_utc"], r["key"]))
+    upcoming = sorted((r for r in rows.values() if r["scheduled_at_utc"] and r["scheduled_at_utc"] >= now_s),
+                      key=lambda r: (r["scheduled_at_utc"], r["key"]))
+    past = sorted((r for r in rows.values() if r["scheduled_at_utc"] and r["scheduled_at_utc"] < now_s),
+                  key=lambda r: (r["scheduled_at_utc"], r["key"]), reverse=True)
     rest = sorted((r for r in rows.values() if not r["scheduled_at_utc"]),
                   key=lambda r: (-(int(r["id"]) if str(r["id"]).isdigit() else 0), r["channel"]))
-    return scheduled + rest
+    return upcoming + past + rest

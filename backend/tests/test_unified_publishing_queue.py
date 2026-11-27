@@ -28,9 +28,13 @@ def hi(i, at=None, state="SCHEDULED", qc=True, vid=None):
 
 
 def test_both_channels_appear_together_sorted_by_scheduled_time():
-    rows = uq.merge([en(1, "2026-11-28T09:30:00Z", "Scheduled"), en(2)],
-                    [hi(5, "2026-11-28T08:00:00Z"), hi(6, "2026-11-28T10:00:00+00:00")])
-    assert [r["key"] for r in rows] == ["hi:5", "en:1", "hi:6", "en:2"]          # unscheduled last
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 28, 7, 0, tzinfo=timezone.utc)
+    rows = uq.merge([en(1, "2026-11-28T09:30:00Z", "Scheduled"), en(2), en(3, "2026-11-27T05:00:00Z", "Published"),
+                     en(4, "2026-11-28T04:00:00Z", "Published")],
+                    [hi(5, "2026-11-28T08:00:00Z"), hi(6, "2026-11-28T10:00:00+00:00")], now=now)
+    # upcoming soonest first, then past most recent first, then unscheduled
+    assert [r["key"] for r in rows] == ["hi:5", "en:1", "hi:6", "en:4", "en:3", "en:2"]
     assert rows[0]["channel_label"] == "Hindi" and rows[1]["channel_label"] == "English"
     assert rows[0]["scheduled_ist"] == "2026-11-28 13:30 IST"
     for r in rows:
