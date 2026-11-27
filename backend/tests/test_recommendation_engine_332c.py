@@ -496,7 +496,7 @@ def test_each_kill_switch_pauses_the_engine(tmp_path, switch):
     elif switch == "sentinel":
         cp.sentinel_path.write_text("stop", encoding="utf-8")
     out = e.run(OP, force=True)
-    assert out["ran"] is False and out["mode"] == "BLOCKED" and "kill switch" in out["reason"] and intel.calls == 0
+    assert out["ran"] is False and out["mode"] == "BLOCKED" and "emergency stop" in out["reason"] and intel.calls == 0
     assert any(x["event_type"] == "RECOMMENDATION_RUN_BLOCKED" for x in cp.audit_events())
 
 
@@ -594,7 +594,7 @@ def test_api_endpoints(api):
     assert r.status_code == 200 and r.json()["ran"] and r.json()["run"]["triggered_by"] == f"operator:{OP}"
     ov = local.get("/api/recommendations").json()
     assert ov["summary"]["active"] == len(ov["recommendations"]) > 0 and ov["state"]["mode"] == "RECOMMEND"
-    assert all(x["kind"] == "recommendation" for x in ov["recommendations"]) and "nothing is executed" in ov["note"]
+    assert all(x["kind"] == "recommendation" for x in ov["recommendations"]) and "this engine itself executes nothing" in ov["note"]
     rid = ov["recommendations"][0]["id"]
     d = local.get(f"/api/recommendations/{rid}").json()
     assert d["evidence"] and d["scoring"]["confidence"]["components"] and d["history"]

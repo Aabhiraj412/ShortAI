@@ -137,8 +137,8 @@ class SelfHealingEngine:
             permitted = False
         if not permitted:
             mode, reason = "BLOCKED", "self-healing action types are not permitted registry entries"
-        elif ks.get("emergency_stop", ks["any_active"]):
-            mode, reason = "BLOCKED", f"emergency stop: kill switch active: {', '.join(ks['active'])}"
+        elif ks["emergency_stop"]:
+            mode, reason = "BLOCKED", f"emergency stop: {', '.join(ks['active'])}"
         elif level == Level.OFF:
             mode, reason = "OFF", "the self_healing autonomy level is OFF"
         elif level == Level.OBSERVE:
@@ -696,7 +696,22 @@ class SelfHealingEngine:
     def list_incidents(self, status: str = "open", limit: int = 100) -> List[Dict[str, Any]]:
         if not self.store.tables_exist():
             return []
-        return self.store.list_incidents(status=status, limit=limit)
+        return self._annotate(self.store.list_incidents(status=status, limit=limit))
+
+    def _annotate(self, incidents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Outcome-driven reporting: what actually happened to each incident (diagnosed / recovery executed / resolved /
+        output completed, with evidence) and whether it is still current. Read-only."""
+        from backend.app.autonomy.self_healing import outcomes
+        job_status = outcomes.job_status_reader(self.cp.db_path)
+        now = self._now()
+        for inc in incidents:
+            try:
+                inc["outcome"] = outcomes.assess(inc, self.store.recoveries_for(inc["id"]), job_status(inc.get("job_id")), now)
+            except Exception as exc:  # noqa: BLE001 - reporting never breaks the overview
+                inc["outcome"] = {"stage": "UNKNOWN", "current": True, "evidence": [f"outcome unavailable: {safe_error(exc)}"],
+                                  "diagnostic_succeeded": False, "recovery_executed": False, "issue_resolved": False,
+                                  "output_completed": False, "resolved_by": None, "history_reason": None}
+        return incidents
 
     def history(self, limit: int = 100) -> Dict[str, Any]:
         if not self.store.tables_exist():
@@ -707,15 +722,26 @@ class SelfHealingEngine:
 
     def overview(self, limit: int = 50) -> Dict[str, Any]:
         out: Dict[str, Any] = {"state": self.state(), "database_available": True,
-                               "note": "Self-healing diagnoses failures and runs only allow-listed, approved, verified "
-                                       "actions. Job retries, re-renders, restarts and configuration stay with the "
-                                       "existing scheduler and the operator."}
+                               "note": "Self-healing diagnoses failures and runs only allow-listed, verified actions. "
+                                       "Each incident reports four separate facts: diagnostic succeeded, recovery "
+                                       "executed, issue resolved (verified, no recurrence) and production output "
+                                       "completed. A diagnostic is never counted as a recovery. Job retries stay with "
+                                       "the scheduler's retry policy; re-renders, restarts and configuration are never "
+                                       "self-healing actions. Incidents with no recent occurrence are history, not "
+                                       "current blockers."}
         if not self.store.tables_exist():                  # never run here: report empty, create nothing
             out.update(stats={}, incidents=[], awaiting=[], history=[], learning=[], last_scan=None, initialized=False)
             return out
         try:
             self.sync()
-            out.update(stats=self.store.stats(), incidents=self.store.list_incidents("open", limit),
+            stats = self.store.stats()
+            incidents = self.store.list_incidents("open", limit)
+            from backend.app.autonomy.self_healing import outcomes
+            summary = outcomes.summarize([i["outcome"] for i in self._annotate(incidents)])
+            stats.update(open_incidents_all=stats.get("open_incidents"), open_incidents=summary["current"],
+                         current_incidents=summary["current"], historical_incidents=summary["historical"],
+                         outcomes=summary)
+            out.update(stats=stats, incidents=incidents,
                        awaiting=self.store.list_recoveries("open", 100), history=self.store.list_recoveries("history", 50),
                        learning=self.store.learning(50), last_scan=self.store.last_scan())
         except Exception as exc:

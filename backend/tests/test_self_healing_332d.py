@@ -465,7 +465,7 @@ def test_kill_switch_enforcement(tmp_path, world, switch):
         else:
             cp.sentinel_path.write_text("stop", encoding="utf-8")
         res = eng.execute(rec["id"], OP)
-        assert res["executed"] is False and "kill switch" in (res["reason"] or "") and world.calls == []
+        assert res["executed"] is False and "emergency stop" in (res["reason"] or "") and world.calls == []
         assert eng.overview()["incidents"]                                            # still readable
     before = len(eng.store.list_recoveries("all", 500)) if switch != "startup" else None
     out = eng.scan(force=True)
@@ -485,7 +485,7 @@ def test_missing_startup_config_is_restricted_not_blocked(tmp_path, world):
     rec = recs(eng, J_PROV, "selfheal.provider.retry_readonly")[0]
     approve(eng, rec)
     res = eng.execute(rec["id"], OP)                     # explicit approval: still needs the startup configuration
-    assert res["executed"] is False and "startup_config" in (res["reason"] or "") and world.calls == []
+    assert res["executed"] is False and "not an emergency stop" in (res["reason"] or "") and world.calls == []
 
 
 def test_approval_enforcement(tmp_path, world):
@@ -898,7 +898,11 @@ def test_api_endpoints(tmp_path, world, monkeypatch):
     r = local.post("/api/self-healing/scan", json={"operator": OP, "force": True}, headers=h)
     assert r.status_code == 200 and r.json()["ran"] and r.json()["triggered_by"] == f"operator:{OP}"
     ov = local.get("/api/self-healing").json()
-    assert ov["state"]["mode"] == "RECOMMEND" and ov["stats"]["open_incidents"] == 6 and ov["awaiting"]
+    # Outcome-driven reporting: 6 open records, of which 2 are current (job running / seen within 6 h); one job
+    # completed and three last occurred ~18 h ago with expired windows, so they are history, not current blockers.
+    st = ov["stats"]
+    assert ov["state"]["mode"] == "RECOMMEND" and st["open_incidents_all"] == 6 and ov["awaiting"]
+    assert st["open_incidents"] == st["current_incidents"] == 2 and st["historical_incidents"] == 4
     assert local.get("/api/self-healing/incidents?status=BOGUS").status_code == 400
     inc = local.get("/api/self-healing/incidents?status=open").json()["incidents"]
     iid = [i for i in inc if i["job_id"] == J_PROV][0]["id"]

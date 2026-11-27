@@ -329,7 +329,28 @@ def summarize_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             return None
         return round(lat[min(len(lat) - 1, int(round(p * (len(lat) - 1))))], 1)
 
+    # Observation window and every outage interval (consecutive failed liveness probes), so a percentage never hides
+    # when the dashboard was down; the window is stated with the number.
+    ordered = sorted(probes, key=lambda e: str(e.get("at_utc", "")))
+    outages: List[Dict[str, Any]] = []
+    cur: Optional[Dict[str, Any]] = None
+    for e in ordered:
+        if not e.get("live_ok"):
+            if cur is None:
+                cur = {"start_utc": e.get("at_utc"), "end_utc": e.get("at_utc"), "failed_probes": 0,
+                       "reason": e.get("live_reason")}
+            cur["end_utc"] = e.get("at_utc")
+            cur["failed_probes"] += 1
+        elif cur is not None:
+            cur["recovered_at_utc"] = e.get("at_utc")
+            outages.append(cur)
+            cur = None
+    if cur is not None:
+        cur["recovered_at_utc"] = None
+        outages.append(cur)
+    window = {"start_utc": ordered[0].get("at_utc"), "end_utc": ordered[-1].get("at_utc")}
     return {"available": True, "probes": len(probes), "states": states, "failure_reasons": reasons,
+            "window": window, "outages": outages[-20:], "outage_count": len(outages),
             "liveness_latency_ms": {"p50": pct(0.5), "p95": pct(0.95), "max": round(lat[-1], 1) if lat else None},
             "availability_pct": round(100.0 * sum(1 for e in probes if e.get("live_ok")) / len(probes), 2),
             "restarts": len(restarts),

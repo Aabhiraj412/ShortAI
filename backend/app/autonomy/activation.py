@@ -305,7 +305,7 @@ class ActivationManager:
         except Exception as exc:
             self._check(checks, "render_geometry_fix", False, f"geometry self-check failed ({safe_error(exc)})")
         ks = self.cp.kill_switches()
-        operator_switches = [s for s in ks["active"] if s != "startup_config"]
+        operator_switches = list(ks["active"])            # emergency kill switches only (never the startup config)
         if target in (OBSERVE, RECOMMEND):
             self._check(checks, "kill_switches", not operator_switches,
                         "no operator kill switch active (the startup switch does not affect "
@@ -334,12 +334,12 @@ class ActivationManager:
             self._availability_check(checks, started)
             self._false_positive_check(checks, st.get("phase_started_at_utc"))
         if target in (RESTRICTED_EXECUTION, EXPANSION):
-            sk = ks["switches"]["startup_config"]
-            self._check(checks, "startup_execution_enabled", not sk["active"],
-                        "autonomy_startup.json enables execution (operator-created)" if not sk["active"]
-                        else "the startup kill switch is active: the operator must create autonomy_startup.json and "
-                             "restart the dashboard (activation never creates it)", sk.get("detail"))
-            others = [s for s in ks["active"] if s != "startup_config"]
+            sk = ks["startup_config"]
+            self._check(checks, "startup_execution_enabled", sk["enabled"],
+                        "autonomy_startup.json enables execution (operator-created)" if sk["enabled"]
+                        else "unrestricted execution needs the operator-created autonomy_startup.json and a dashboard "
+                             "restart (activation never creates it); this is not an emergency stop", sk.get("detail"))
+            others = list(ks["active"])
             self._check(checks, "kill_switches", not others, "no operator kill switch active" if not others
                         else f"kill switch active: {others}")
         if target == EXPANSION:

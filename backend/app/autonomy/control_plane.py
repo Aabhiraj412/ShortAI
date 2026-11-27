@@ -88,6 +88,10 @@ POLICY_AUTOMATIC: Dict[str, Dict[str, str]] = {
         "operator.notify": "OBSERVE",
         "selfheal.diagnostic.run": "OBSERVE",
         "selfheal.provider.retry_readonly": "OBSERVE",
+        # Controlled (category B) local recovery: bounded (12/day, 25 MB, 60 s, allow-listed HTTPS hosts, URL must be in
+        # the incident evidence, job idle), verified (signature, decode, SHA-256) and reversible (quarantined staging
+        # folder only, never placed into a job; compensation deletes that folder).
+        "selfheal.asset.reacquire_staged": "OBSERVE",
     },
     NORMAL: {
         "report.operational.generate": "OBSERVE",
@@ -96,11 +100,21 @@ POLICY_AUTOMATIC: Dict[str, Dict[str, str]] = {
         "operator.notify": "OBSERVE",
         "selfheal.diagnostic.run": "OBSERVE",
         "selfheal.provider.retry_readonly": "OBSERVE",
-        "selfheal.asset.reacquire_staged": "RECOMMEND",
+        "selfheal.asset.reacquire_staged": "OBSERVE",
     },
     EMERGENCY_STOP: {},
 }
 TS_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def gate_text_for(emergency: bool, active: List[str], startup: Dict[str, Any]) -> Optional[str]:
+    """One plain sentence for why execution beyond the built-in policy cannot run (None when it can)."""
+    if emergency:
+        return "emergency stop: " + ", ".join(active)
+    if not startup.get("enabled"):
+        return ("execution beyond the built-in automatic policy is not enabled (control state RESTRICTED, not an "
+                f"emergency stop): {startup.get('detail')}")
+    return None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS autonomy_config (
@@ -537,12 +551,29 @@ class ControlPlane:
                                                       else "sentinel file absent")}
         except Exception as exc:
             sentinel = {"active": True, "detail": f"sentinel check failed ({type(exc).__name__}): fail closed"}
-        switches = {"dashboard": dashboard, "sentinel_file": sentinel, "startup_config": dict(self.startup_kill_switch)}
+        # Operator-dependency reduction: three separate concepts, never conflated in the API or the dashboard.
+        # * kill switches (emergency stop): the dashboard switch, the sentinel file, CRAZZYDOCS_AUTONOMY=off at start;
+        # * the optional operator startup configuration (autonomy_startup.json): absent/invalid means RESTRICTED,
+        #   NOT an emergency stop; it only decides whether execution beyond the built-in policy is possible;
+        # * the execution gate: closed on an emergency stop OR without the startup configuration. Internal gates for
+        #   anything outside the built-in automatic policy use ``execution_gate_closed`` (unchanged behaviour).
+        su = dict(self.startup_kill_switch)
+        startup_emergency = bool(su.get("emergency"))
+        switches = {"dashboard": dashboard, "sentinel_file": sentinel}
+        if startup_emergency:
+            switches["startup_environment"] = {"active": True, "detail": su.get("detail")}
         active = [name for name, s in switches.items() if s["active"]]
-        emergency = bool(dashboard["active"] or sentinel["active"] or switches["startup_config"].get("emergency"))
-        state = EMERGENCY_STOP if emergency else (RESTRICTED if switches["startup_config"]["active"] else NORMAL)
-        return {"any_active": bool(active), "active": active, "switches": switches,
-                "emergency_stop": emergency, "control_state": state,
+        emergency = bool(active)
+        detail = str(su.get("detail") or "")
+        startup = {"enabled": not su.get("active"), "emergency": startup_emergency, "detail": detail,
+                   "state": ("ENABLED" if not su.get("active") else "EMERGENCY_ENV" if startup_emergency else
+                             "ABSENT" if "absent" in detail else "INVALID" if "unreadable" in detail else "NOT_ENABLED"),
+                   "path": str(self.startup_config_path)}
+        state = EMERGENCY_STOP if emergency else (RESTRICTED if su.get("active") else NORMAL)
+        gate_closed = emergency or bool(su.get("active"))
+        return {"any_active": emergency, "active": active, "switches": switches,
+                "emergency_stop": emergency, "control_state": state, "startup_config": startup,
+                "execution_gate_closed": gate_closed, "execution_gate": gate_text_for(emergency, active, startup),
                 "sentinel_path": str(self.sentinel_path), "startup_config_path": str(self.startup_config_path)}
 
     def control_state(self, cfg: Optional[Dict[str, Any]] = None, cfg_error: Optional[str] = None) -> Dict[str, Any]:
@@ -551,10 +582,11 @@ class ControlPlane:
             cfg, cfg_error = self._safe_config()
         ks = self.kill_switches(cfg, cfg_error)
         state = ks["control_state"]
-        stops = [n for n in ks["active"] if n != "startup_config" or ks["switches"]["startup_config"].get("emergency")]
-        reason = {EMERGENCY_STOP: "emergency stop: " + ", ".join(stops),
-                  RESTRICTED: "restricted autonomy: " + ks["switches"]["startup_config"]["detail"],
-                  NORMAL: "normal autonomy: " + ks["switches"]["startup_config"]["detail"]}[state]
+        reason = {EMERGENCY_STOP: "emergency stop: " + ", ".join(ks["active"]),
+                  RESTRICTED: "restricted autonomy (not an emergency stop): " + ks["startup_config"]["detail"]
+                              + "; the built-in automatic policy runs, anything else needs the operator startup "
+                                "configuration and its approval",
+                  NORMAL: "normal autonomy: " + ks["startup_config"]["detail"]}[state]
         automatic = {}
         for action, need in self.automatic_policy.get(state, {}).items():
             ok, why = self.policy_allows(action, cfg, state)
@@ -681,7 +713,7 @@ class ControlPlane:
             actions.append({"action_type": spec.action_type, "category": spec.category, "risk": spec.risk,
                             "effective_level": lvl.name, "can_observe": lvl >= Level.OBSERVE,
                             "can_propose": lvl >= Level.RECOMMEND,
-                            "can_execute": lvl >= Level.APPROVED_EXECUTION and not ks["any_active"],
+                            "can_execute": lvl >= Level.APPROVED_EXECUTION and not ks["execution_gate_closed"],
                             "required_approval": spec.approval,
                             "standing_approval": (dict(grant, active=grant.get("expires_at_utc", "") > now_s)
                                                   if grant else None)})
@@ -689,7 +721,9 @@ class ControlPlane:
                 "effective_levels": {c: self._effective(cfg, c).name for c in CATEGORIES},
                 "levels": list(Level.__members__), "categories": CATEGORIES,
                 "standing_approvals": cfg["standing_approvals"], "actions": actions,
-                "configuration_error": err, "kill_switches_active": ks["active"]}
+                "configuration_error": err, "kill_switches_active": ks["active"],
+                "control_state": ks["control_state"], "startup_config": ks["startup_config"],
+                "execution_gate": ks["execution_gate"]}
 
     def _require_permitted_audited(self, action_type: Any, actor: str, stage: str) -> registry.ActionSpec:
         try:
@@ -1040,15 +1074,14 @@ class ControlPlane:
         ks = self.kill_switches(cfg, None)
         state = ks["control_state"]
         if state == EMERGENCY_STOP:
-            return f"emergency stop: kill switch active: {', '.join(ks['active'])}", {}
+            return f"emergency stop: {', '.join(ks['active'])}", {}
         if row.get("approval_mode") == "POLICY":
             ok, why = self.policy_allows(row["action_type"], cfg, state)
             if not ok:
                 return f"policy approval no longer covers this action: {why}", {}
         else:
-            if ks["any_active"]:
-                return (f"kill switch active: {', '.join(ks['active'])} (restricted autonomy: without the operator "
-                        "startup configuration only the built-in automatic actions run)"), {}
+            if ks["execution_gate_closed"]:
+                return ks["execution_gate"], {}
             level = self._effective(cfg, spec.category)
             if level < Level.APPROVED_EXECUTION:
                 return f"{spec.category} autonomy level is {level.name}; execution needs APPROVED_EXECUTION", {}
@@ -1150,11 +1183,11 @@ class ControlPlane:
             ks = self.kill_switches()
             # Remediation WS2: an emergency stop always stops; a policy-approved request continues in RESTRICTED as
             # long as the policy still covers it, every other request stops on any active switch (unchanged).
-            stop = ks["emergency_stop"] or (ks["any_active"] and not (
+            stop = ks["emergency_stop"] or (ks["execution_gate_closed"] and not (
                 row.get("approval_mode") == "POLICY"
                 and self.policy_allows(row["action_type"], self._safe_config()[0], ks["control_state"])[0]))
             if stop:
-                error = f"kill switch activated during execution ({', '.join(ks['active'])}); remaining attempts cancelled"
+                error = f"{ks['execution_gate']} (during execution); remaining attempts cancelled"
                 if attempt == 1:
                     return self._release_claim(row, token, actor, error)
                 break
@@ -1337,8 +1370,11 @@ class ControlPlane:
         global_level = cfg["global_level"]
         any_level = any(self._effective(cfg, c) > Level.OFF for c in CATEGORIES)
         return {
-            "autonomy_enabled": any_level and not ks["any_active"],
-            "execution_permitted": (not ks["any_active"]) and any(self._effective(cfg, c) >= Level.APPROVED_EXECUTION
+            # autonomy_enabled: some category observes or more and no emergency stop (RESTRICTED still runs the
+            # built-in automatic policy). execution_permitted: approval-based execution is possible.
+            "autonomy_enabled": any_level and not ks["emergency_stop"],
+            "control_state": ks["control_state"], "execution_gate": ks["execution_gate"],
+            "execution_permitted": (not ks["execution_gate_closed"]) and any(self._effective(cfg, c) >= Level.APPROVED_EXECUTION
                                                                    for c in CATEGORIES),
             "global_level": global_level, "category_levels": cfg["category_levels"],
             "effective_levels": {c: self._effective(cfg, c).name for c in CATEGORIES},

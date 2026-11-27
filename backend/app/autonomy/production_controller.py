@@ -34,6 +34,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -69,6 +70,7 @@ SAFE_JOB_STATES = ("COMPLETED", "PUBLISHED", "FAILED", "BLOCKED_QC", "RECOVERY_W
                    "RETRY_SCHEDULED", "HANDOFF_PENDING", "WAITING_FOR_INTERNET", "INTERRUPTED")
 SAFE_RESULT_STATES = ("SKIPPED", "DEFERRED", "RECOVERY_WINDOW_EXPIRED", "WAITING_FOR_INTERNET")
 CONTROLLER_STALE = timedelta(minutes=3)
+OFF_HEARTBEAT_SECONDS = 60.0        # liveness evidence while Autopilot is OFF (one small UPDATE a minute)
 DECISION_REPEAT = timedelta(minutes=30)
 DECISION_MIN_GAP = timedelta(minutes=5)
 ESCALATION_REPEAT = timedelta(hours=6)
@@ -198,6 +200,7 @@ class ProductionController:
         self._replay = replay or _default_replay
         self._job_state = job_state or _default_job_state
         self._schema_ready = False
+        self._off_heartbeat_at = float("-inf")
         self._schema_lock = threading.Lock()
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.owner_token: Optional[str] = None
@@ -332,12 +335,12 @@ class ProductionController:
                         breakers[a] = b
         except Exception as exc:
             why.append(f"circuit-breaker state unreadable: {safe_error(exc)}")
-        if mode >= Level.APPROVED_EXECUTION and not ks["any_active"] and not missing and not breakers and not err:
+        if mode >= Level.APPROVED_EXECUTION and not ks["execution_gate_closed"] and not missing and not breakers and not err:
             role = EXECUTOR
         else:
             if mode >= Level.APPROVED_EXECUTION:
-                if ks["any_active"]:
-                    why.append("kill switch active: " + ", ".join(ks["active"]))
+                if ks["execution_gate_closed"]:
+                    why.append(ks["execution_gate"])
                 if missing:
                     why.append("no active standing approval for " + ", ".join(missing))
                 if breakers:
@@ -432,6 +435,13 @@ class ProductionController:
             row = await asyncio.to_thread(self.load)
             state = row["state"]
             if state == OFF:
+                # Operator-dependency reduction: the heartbeat is the controller's liveness evidence. It used to stop
+                # whenever Autopilot was OFF, so the dashboard claimed "scheduler daemon down" for a healthy daemon.
+                # When OFF it is written at most once a minute (one small UPDATE); it never claims ownership.
+                now_m = time.monotonic()
+                if now_m - self._off_heartbeat_at >= OFF_HEARTBEAT_SECONDS:
+                    await asyncio.to_thread(self._heartbeat)
+                    self._off_heartbeat_at = now_m
                 await self._release_if_idle("Autopilot is OFF")
                 self.last_tick = {"state": OFF}
                 return self.last_tick
@@ -845,10 +855,13 @@ class ProductionController:
             "category_levels": perms.get("category_levels"), "effective_levels": perms.get("effective_levels"),
             "role_if_on": mr["role"], "not_executor_because": mr["not_executor_because"],
             "kill_switches": {"any_active": mr["kill_switches"]["any_active"], "active": mr["kill_switches"]["active"]},
+            "control_state": mr["kill_switches"].get("control_state"),
+            "startup_config": mr["kill_switches"].get("startup_config"),
             "missing_standing_approvals": mr["missing_standing_approvals"], "open_breakers": mr["open_breakers"],
             "controller": {"pid": row.get("controller_pid"), "heartbeat_at_utc": row.get("heartbeat_at_utc"),
                            "responding": responding,
-                           "note": ("controller heartbeat fresh" if responding else
+                           "note": (("controller idle and responding (Autopilot OFF; the scheduler owns production)"
+                                     if st == OFF else "controller heartbeat fresh") if responding else
                                     ("no controller tick yet" if hb is None else
                                      "controller has not ticked for more than 3 minutes (scheduler daemon down or "
                                      "running older code)"))},

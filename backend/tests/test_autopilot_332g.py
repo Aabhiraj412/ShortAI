@@ -111,8 +111,10 @@ def test_startup_default_blocks_everything(tmp_path):
     out = cp.execute(req["id"], f"operator:{OP}")
     assert out["executed"] is False and "startup" in out["reason"]
     ov = AP.Autopilot(cp, recommendations=FakeRecs([]), self_healing=Fake(), community=Fake(), publishing=Fake()).overview()
-    assert ov["mode"] == "APPROVED_EXECUTION" and ov["execution_possible"] is False and ov["kill_switches"]["any_active"]
-    assert "startup_config" in ov["mode_note"]
+    # Execution stays blocked without the startup configuration, but that is RESTRICTED, never an emergency stop.
+    assert ov["mode"] == "APPROVED_EXECUTION" and ov["execution_possible"] is False
+    assert ov["kill_switches"]["any_active"] is False and ov["kill_switches"]["execution_gate_closed"] is True
+    assert "not an emergency stop" in ov["mode_note"] and "startup config" in ov["mode_note"]
 
 
 # == permission policy ==============================================================================================
@@ -301,7 +303,7 @@ def test_kill_switch_blocks_execution(tmp_path):
     req = approved(cp)
     cp.sentinel_path.write_text("stop", encoding="utf-8")
     out = cp.execute(req["id"], f"operator:{OP}")
-    assert out["executed"] is False and "kill switch" in out["reason"] and h.calls == 0 and leases(cp) == []
+    assert out["executed"] is False and "emergency stop" in out["reason"] and h.calls == 0 and leases(cp) == []
     cp.sentinel_path.unlink()
     cp.set_dashboard_kill_switch(True, OP, "drill")
     assert cp.execute(req["id"], f"operator:{OP}")["executed"] is False

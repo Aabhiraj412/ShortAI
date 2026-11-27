@@ -230,8 +230,8 @@ class Autopilot:
         for cat in registry.CATEGORIES:
             eff = self.cp._effective(cfg, cat)
             blocked = []
-            if ks["any_active"]:
-                blocked.append("kill switch active: " + ", ".join(ks["active"]))
+            if ks["execution_gate_closed"]:
+                blocked.append(ks["execution_gate"])
             if eff < Level.APPROVED_EXECUTION:
                 blocked.append(f"effective level {eff.name} (execution needs APPROVED_EXECUTION)")
             automatic = [a for a, s in registry.REGISTRY.items() if not s.prohibited and s.category == cat and state
@@ -239,7 +239,7 @@ class Autopilot:
             categories[cat] = {"level": Level.parse(cfg.get("category_levels", {}).get(cat, "OFF")).name,
                                "effective": eff.name, "can_observe": eff >= Level.OBSERVE,
                                "can_recommend": eff >= Level.RECOMMEND,
-                               "can_execute": eff >= Level.APPROVED_EXECUTION and not ks["any_active"],
+                               "can_execute": eff >= Level.APPROVED_EXECUTION and not ks["execution_gate_closed"],
                                "automatic_actions": automatic,      # run under the built-in policy despite `blocked`
                                "blocked_reasons": blocked}
         pending = self.cp.list_requests("PENDING", 50)
@@ -252,7 +252,7 @@ class Autopilot:
         # whenever any switch is active (the startup switch always is until autonomy_startup.json exists) hid an
         # active OBSERVE/RECOMMEND phase, so the mode is the global level and execution is reported separately.
         mode = global_level
-        mode_note = (f"execution blocked by kill switch: {', '.join(ks['active'])}" if ks["any_active"] and global_level != "OFF"
+        mode_note = (ks["execution_gate"] if ks["execution_gate_closed"] and global_level != "OFF"
                      else ("autonomy is off" if global_level == "OFF" else ""))
         try:
             control = self.cp.control_state(cfg, cfg_err)

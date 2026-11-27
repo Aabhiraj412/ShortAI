@@ -248,13 +248,18 @@ def test_kill_switch_combinations(tmp_path, dash, sentinel, startup):
     if sentinel:
         c.sentinel_path.write_text("stop", encoding="utf-8")
     ks = c.kill_switches()
-    assert ks["any_active"] == any((dash, sentinel, startup))
-    assert sorted(ks["active"]) == sorted(n for n, on in (("dashboard", dash), ("sentinel_file", sentinel),
-                                                          ("startup_config", startup)) if on)
+    # Operator-dependency reduction: the kill switches are the emergency stop only; the missing optional startup
+    # configuration is reported separately (control state RESTRICTED) and still closes the execution gate.
+    assert ks["any_active"] == ks["emergency_stop"] == any((dash, sentinel))
+    assert sorted(ks["active"]) == sorted(n for n, on in (("dashboard", dash), ("sentinel_file", sentinel)) if on)
+    assert ks["startup_config"]["enabled"] is (not startup)
+    assert ks["execution_gate_closed"] == any((dash, sentinel, startup))
+    assert ks["control_state"] == ("EMERGENCY_STOP" if (dash or sentinel) else "RESTRICTED" if startup else "NORMAL")
     res = c.execute(req["id"], "operator:abhi")
-    assert res["executed"] is (not any((dash, sentinel, startup)))
+    assert res["executed"] is (not any((dash, sentinel, startup)))      # blocking behaviour unchanged
     if any((dash, sentinel, startup)):
-        assert res["status"] == "BLOCKED" and "kill switch" in res["reason"]
+        expected = "emergency stop" if (dash or sentinel) else "not an emergency stop"
+        assert res["status"] == "BLOCKED" and expected in res["reason"]
         assert c.get_request(req["id"])["status"] == APPROVED              # blocked, not lost
         assert c.status()["execution_permitted"] is False
         assert proposal(c, payload={"diagnostic": "audit_chain_verify"})["status"] == PENDING   # queueing still allowed
@@ -306,7 +311,7 @@ def test_kill_switch_during_execution_stops_retries(cp, monkeypatch):
     cp.handlers["diagnostic.readonly.run"] = Flaky()
     req = approved(cp)
     res = cp.execute(req["id"], "operator:abhi")
-    assert res["status"] == FAILED and "kill switch" in res["error"] and len(calls) == 1
+    assert res["status"] == FAILED and "emergency stop" in res["error"] and len(calls) == 1
 
 
 # 5. Approval and rejection --------------------------------------------------------------------------------

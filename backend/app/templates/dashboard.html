@@ -1019,7 +1019,7 @@
       <div class="meta" style="font-size:12px;" id="healMeta">Open this tab to load.</div>
     </div>
     <div class="overview-grid">
-      <div class="kpi-card"><div class="kpi-label">Open incidents</div><div class="kpi-val" id="healOpen">--</div><div class="kpi-sub" id="healOpenSub">--</div></div>
+      <div class="kpi-card"><div class="kpi-label">Current incidents</div><div class="kpi-val" id="healOpen">--</div><div class="kpi-sub" id="healOpenSub">--</div></div>
       <div class="kpi-card"><div class="kpi-label">Deterministic (open)</div><div class="kpi-val" id="healDet" style="color:#fca5a5;">--</div><div class="kpi-sub">retrying unchanged will not help</div></div>
       <div class="kpi-card"><div class="kpi-label">Awaiting approval</div><div class="kpi-val" id="healAwait" style="color:#fcd34d;">--</div><div class="kpi-sub">in the approval queue</div></div>
       <div class="kpi-card"><div class="kpi-label">Recovery success</div><div class="kpi-val" id="healRate">--</div><div class="kpi-sub" id="healRateSub">verified recoveries / finished</div></div>
@@ -1160,7 +1160,7 @@
     </div>
     <!-- REMEDIATION: one operator-attention feed (needs you / done automatically / blocked) -->
     <div class="card" id="attnCard"><div class="card-head"><div><h2 class="card-title">Needs your attention</h2>
-      <p class="card-desc">The one place that asks for you: missing credentials, approvals outside the automatic policy, decisions that need human judgement, and recoveries that failed after their permitted attempts. Routine recoverable work runs automatically and is listed below with its outcome or the exact reason it was blocked.</p></div>
+      <p class="card-desc">The one place that asks for you, and only when the system cannot safely proceed without you: external authorizations it cannot obtain itself, approvals outside the automatic policy, creative and other human decisions, and recoveries that failed after their permitted attempts. Items are reconciled with the live configuration (a decision already taken is not asked again; history is not a current blocker). Routine local work runs automatically and is listed below with its outcome or the exact reason it was blocked.</p></div>
       <div class="kpi-card" style="min-width:180px;"><div class="kpi-label">Control state</div><div class="kpi-val" id="attnState" style="font-size:15px;">--</div><div class="kpi-sub" id="attnStateSub">--</div></div></div>
       <div id="attnNeeds" style="font-size:12px;">--</div>
       <div class="grid-2">
@@ -3235,7 +3235,9 @@ function healCard(inc) {
     + `<span style="color:${colour};font-weight:600;">${escHtml((inc.severity || "").toUpperCase())}</span> ${healTag(inc.failure_class)} ${healTag(inc.certainty.toLowerCase() + " evidence")} ${healTag(inc.status)}`
     + `<div style="margin-top:4px;"><strong>${escHtml(inc.template)}</strong></div>`
     + `<div style="color:var(--muted);font-size:12px;">job ${escHtml(inc.job_id || "n/a")} · stage ${escHtml(inc.stage || "n/a")} · ${escHtml(inc.occurrences)} occurrence(s) · first ${autoTime(inc.first_seen_utc)} · last ${autoTime(inc.last_seen_utc)} · ${escHtml(inc.id)}</div>`
-    + `<div style="font-size:12px;">${escHtml(((inc.plan || {}).summary) || "")}</div></div>`
+    + `<div style="font-size:12px;">${escHtml(((inc.plan || {}).summary) || "")}</div>`
+    + (inc.outcome ? `<div style="font-size:12px;margin-top:2px;"><strong>Outcome:</strong> ${escHtml(inc.outcome.stage.replace(/_/g, " ").toLowerCase())}${inc.outcome.resolved_by ? " (by " + escHtml(inc.outcome.resolved_by) + ")" : ""} · ${inc.outcome.current ? `<span style="color:#fcd34d">current</span>` : `<span style="color:var(--muted)">history: ${escHtml(inc.outcome.history_reason || "")}</span>`}<div style="color:var(--muted);">${escHtml((inc.outcome.evidence || []).join(" · "))}</div></div>` : "")
+    + `</div>`
     + `<div class="btn-row"><button class="btn sm" data-id="${escHtml(inc.id)}" onclick="healToggle(this.dataset.id)">${open ? "Hide" : "Diagnostics"}</button></div></div>`
     + (open ? healDetail(healState.detail[inc.id]) : "") + `</div>`;
 }
@@ -3265,8 +3267,11 @@ async function refreshSelfHealing(force = false) {
     healState.awaiting = ov.awaiting || [];
     for (const id of healState.open) { try { healState.detail[id] = await apiJson(`/api/self-healing/incidents/${encodeURIComponent(id)}`); } catch (_) {} }
     const cls = sm.open_by_class || {};
-    document.getElementById("healOpen").textContent = sm.open_incidents ?? "--";
-    document.getElementById("healOpenSub").textContent = Object.entries(sm.incidents_by_status || {}).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(" · ") || "--";
+    document.getElementById("healOpen").textContent = sm.current_incidents ?? sm.open_incidents ?? "--";
+    const oc = sm.outcomes || {};
+    document.getElementById("healOpenSub").textContent = sm.outcomes
+      ? `${sm.historical_incidents || 0} historical (not blocking) · ${oc.diagnostics_succeeded || 0} diagnosed · ${oc.recoveries_executed || 0} recovery executed · ${oc.issues_resolved || 0} resolved · ${oc.outputs_completed || 0} output completed`
+      : (Object.entries(sm.incidents_by_status || {}).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(" · ") || "--");
     document.getElementById("healDet").textContent = cls.DETERMINISTIC ?? 0;
     document.getElementById("healAwait").textContent = sm.awaiting_approval ?? 0;
     document.getElementById("healRate").textContent = sm.recovery_success_rate == null ? "n/a" : `${sm.recovery_success_rate}%`;
@@ -3281,7 +3286,9 @@ async function refreshSelfHealing(force = false) {
       ? opsKV(Object.entries(cls).map(([k, v]) => [k, escHtml(v)])) : `<div style="color:var(--muted)">No open incidents.</div>`;
     const ba = sm.by_action || [];
     document.getElementById("healStats").innerHTML = ba.length
-      ? opsKV(ba.map(a => [a.action_type, escHtml(`${a.total} total · ${a.succeeded || 0} verified · ${a.failed || 0} failed`)]).concat([["Verification results", escHtml(JSON.stringify(sm.verification || {}))]]))
+      ? opsKV(ba.map(a => [a.action_type, escHtml(a.action_type === "selfheal.diagnostic.run"
+          ? `${a.total} total · ${a.succeeded || 0} diagnostics completed (a diagnostic is not a recovery) · ${a.failed || 0} failed`
+          : `${a.total} total · ${a.succeeded || 0} executed and verified · ${a.failed || 0} failed`)]).concat([["Verification results", escHtml(JSON.stringify(sm.verification || {}))]]))
       : `<div style="color:var(--muted)">No recoveries yet.</div>`;
     document.getElementById("healAwaitList").innerHTML = healState.awaiting.map(r => healRecoveryRow(r, true)).join("") || `<div style="color:var(--muted)">Nothing awaiting approval.</div>`;
     healRenderList();
@@ -3375,8 +3382,10 @@ async function refreshAutonomyPill() {
   try {
     const s = await apiJson("/api/autonomy/status");
     const ks = (s.kill_switches && s.kill_switches.active) || [];
-    pill.textContent = ks.length ? `Autonomy: BLOCKED (${ks.length} kill switch${ks.length > 1 ? "es" : ""})`
-      : (s.autonomy_enabled ? `Autonomy: ${s.global_level}` : "Autonomy: OFF");
+    // Only a real kill switch is an emergency stop; RESTRICTED (no optional startup configuration) is not.
+    pill.textContent = ks.length ? `Autonomy: EMERGENCY STOP (${ks.join(", ")})`
+      : (s.autonomy_enabled ? `Autonomy: ${s.global_level}${s.control_state === "RESTRICTED" ? " · restricted" : ""}` : "Autonomy: OFF");
+    pill.title = s.execution_gate || "";
     if (s.pending_approvals) pill.textContent += ` · ${s.pending_approvals} pending`;
   } catch (_) { pill.textContent = "Autonomy: unavailable"; }
 }
@@ -3407,8 +3416,8 @@ async function refreshAutonomy(force = false) {
     document.getElementById("autoEnabled").innerHTML = s.autonomy_enabled ? `<span class="auto-on">ENABLED</span>` : `<span class="auto-off">DISABLED</span>`;
     document.getElementById("autoEnabledSub").textContent = s.execution_permitted ? "approved execution permitted" : "no autonomous execution";
     document.getElementById("autoGlobal").textContent = s.global_level || "--";
-    document.getElementById("autoKill").innerHTML = ks.active.length ? `<span class="auto-kill">${ks.active.length} ACTIVE</span>` : `<span class="auto-on">none</span>`;
-    document.getElementById("autoKillSub").textContent = ks.active.join(", ") || "execution not blocked by a switch";
+    document.getElementById("autoKill").innerHTML = ks.active.length ? `<span class="auto-kill">EMERGENCY STOP</span>` : `<span class="auto-on">none</span>`;
+    document.getElementById("autoKillSub").textContent = ks.active.join(", ") || (s.control_state === "RESTRICTED" ? "no emergency stop · restricted policy (no startup configuration)" : "no emergency stop");
     document.getElementById("autoPending").textContent = s.pending_approvals ?? "--";
     document.getElementById("autoPendingSub").textContent = `${s.approved_waiting || 0} approved, ${s.executing || 0} executing`;
     document.getElementById("autoAuditCount").textContent = s.audit_events_total ?? "--";
@@ -3416,10 +3425,14 @@ async function refreshAutonomy(force = false) {
     document.getElementById("autoAuditSub").innerHTML = chain.ok === false ? `<span class="auto-kill">chain broken at #${escHtml(chain.first_bad_seq)}</span>` : "append-only, hash chain verified";
     document.getElementById("autoChainDesc").textContent = `Most recent 50 of ${s.audit_events_total ?? "?"} events. Hash chain: ${chain.ok === false ? "BROKEN" : "verified"}.`;
 
-    const names = { dashboard: "A. Dashboard switch", sentinel_file: "B. Sentinel file", startup_config: "C. Startup configuration" };
-    document.getElementById("autoKillBody").innerHTML = Object.entries(ks.switches || {}).map(([k, v]) =>
+    const names = { dashboard: "A. Dashboard switch", sentinel_file: "B. Sentinel file", startup_environment: "C. CRAZZYDOCS_AUTONOMY=off at start" };
+    const sc = ks.startup_config || {};
+    document.getElementById("autoKillBody").innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:4px;">Emergency stop (any one stops all autonomous execution):</div>`
+      + Object.entries(ks.switches || {}).map(([k, v]) =>
       `<div class="control-row" style="padding:4px 0;"><div><strong>${escHtml(names[k] || k)}</strong><div style="color:var(--muted);font-size:12px;">${escHtml(v.detail || "")}</div></div>`
       + `<div class="${v.active ? "auto-kill" : "auto-on"}">${v.active ? "ACTIVE" : "inactive"}</div></div>`).join("")
+      + `<div class="control-row" style="padding:6px 0 4px;border-top:1px solid var(--border);margin-top:6px;"><div><strong>Startup configuration (optional, not a kill switch)</strong><div style="color:var(--muted);font-size:12px;">${escHtml(sc.detail || "")}. Without it the control state is RESTRICTED: the built-in automatic policy still runs; approval-based execution beyond it is not possible.</div></div>`
+      + `<div class="${sc.enabled ? "auto-on" : ""}" style="${sc.enabled ? "" : "color:#fcd34d"}">${escHtml(sc.state || "--")}</div></div>`
       + `<div style="color:var(--muted);font-size:11px;margin-top:6px;">Sentinel: ${escHtml(ks.sentinel_path || "")}<br>Startup config: ${escHtml(ks.startup_config_path || "")} (read at process start)</div>`;
 
     const levels = p.levels || ["OFF", "OBSERVE", "RECOMMEND", "APPROVED_EXECUTION"];
@@ -4136,8 +4149,8 @@ async function refreshAutopilot(force = false) {
     document.getElementById("apModeSub").textContent = `${a.mode_note || "global level " + a.global_level}${a.configuration_error ? " · configuration error: " + a.configuration_error : ""}`;
     document.getElementById("apExec").innerHTML = a.execution_possible ? `<span class="auto-on">POSSIBLE</span>` : `<span class="auto-off">BLOCKED</span>`;
     document.getElementById("apExecSub").textContent = a.execution_possible ? "some category may execute approved actions" : "no category can execute";
-    document.getElementById("apKill").innerHTML = ks.any_active ? `<span class="auto-kill">ACTIVE</span>` : `<span class="auto-on">none</span>`;
-    document.getElementById("apKillSub").textContent = (ks.active || []).join(", ") || "--";
+    document.getElementById("apKill").innerHTML = ks.any_active ? `<span class="auto-kill">EMERGENCY STOP</span>` : `<span class="auto-on">none</span>`;
+    document.getElementById("apKillSub").textContent = (ks.active || []).join(", ") || (ks.startup_config && !ks.startup_config.enabled ? "no emergency stop · restricted (no startup configuration)" : "no emergency stop");
     document.getElementById("apPending").textContent = (a.pending_approvals || []).length;
     document.getElementById("apPendingSub").textContent = `${(a.approved_awaiting_execution || []).length} approved, awaiting execution`;
     document.getElementById("apExecCount").textContent = (a.executions || []).length;
@@ -4322,6 +4335,8 @@ setInterval(refreshAttentionBadge, 120000);
 // -- Remediation: the single operator-attention feed. --
 const ATTN_STATE_COLOR = { NORMAL: "#86efac", RESTRICTED: "#93c5fd", EMERGENCY_STOP: "#fca5a5" };
 const ATTN_SEV_COLOR = { high: "#fca5a5", medium: "#fcd34d", low: "var(--muted)" };
+const ATTN_KIND = { emergency_stop: "Emergency stop", credential: "External authorization", approval: "Approval", decision: "Decision",
+  creative_decision: "Creative decision (human judgement)", failed_recovery: "Recovery failed" };
 async function refreshOperatorAttention(force = false) {
   const panel = document.getElementById("tab-autopilot");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
@@ -4331,9 +4346,11 @@ async function refreshOperatorAttention(force = false) {
     document.getElementById("attnState").innerHTML = `<span style="color:${ATTN_STATE_COLOR[cs.state] || "inherit"}">${escHtml(cs.state || "--")}</span>`;
     document.getElementById("attnStateSub").textContent = cs.reason || "";
     const n = a.needs_you || [];
-    document.getElementById("attnNeeds").innerHTML = n.length ? apTable(["", "What", "Why", "What to do"], n.map(x =>
-      `<tr><td style="color:${ATTN_SEV_COLOR[x.severity] || "inherit"}">${escHtml(x.severity)}</td><td>${escHtml(x.title)}</td><td style="max-width:380px;overflow-wrap:anywhere;">${escHtml(x.why || "")}</td><td style="max-width:320px;overflow-wrap:anywhere;">${escHtml(x.action || "")}</td></tr>`))
+    document.getElementById("attnNeeds").innerHTML = n.length ? apTable(["", "Type", "What", "Why", "What to do"], n.map(x =>
+      `<tr><td style="color:${ATTN_SEV_COLOR[x.severity] || "inherit"}">${escHtml(x.severity)}</td><td>${escHtml(ATTN_KIND[x.kind] || x.kind || "")}</td><td>${escHtml(x.title)}</td><td style="max-width:380px;overflow-wrap:anywhere;">${escHtml(x.why || "")}</td><td style="max-width:320px;overflow-wrap:anywhere;">${escHtml(x.action || "")}</td></tr>`))
       : `<div class="auto-on">Nothing needs you right now.</div>`;
+    const opt = a.optional_improvements || [];
+    if (opt.length) document.getElementById("attnNeeds").innerHTML += `<div style="color:var(--muted);margin-top:6px;">Optional (nothing is blocked; a fallback is working): ${opt.map(x => escHtml(`${x.title}: ${x.action}`)).join("; ")}</div>`;
     if ((a.unavailable || []).length) document.getElementById("attnNeeds").innerHTML += `<div style="color:var(--muted);margin-top:4px;">Not checked: ${escHtml(a.unavailable.join("; "))}</div>`;
     const au = a.done_automatically || [];
     document.getElementById("attnAuto").innerHTML = au.length ? apTable(["When", "Action", "Outcome", "Approval"], au.map(x =>
@@ -4422,7 +4439,8 @@ async function refreshAutopilotController(force = false) {
     document.getElementById("apCtlInfo").innerHTML = opsKV([
       ["Controller", escHtml(`${ctl.responding ? "responding" : "not responding"} · process ${ctl.pid ?? "--"} · ${ctl.note || ""}`)],
       ["Why not executing", escHtml((c.not_executor_because || []).join("; ") || "nothing blocks execution")],
-      ["Kill switches", escHtml((c.kill_switches || {}).any_active ? (c.kill_switches.active || []).join(", ") : "none")],
+      ["Emergency stop", escHtml((c.kill_switches || {}).any_active ? (c.kill_switches.active || []).join(", ") : "none")],
+      ["Control state", escHtml(`${c.control_state || "--"}${c.startup_config && !c.startup_config.enabled ? " (optional startup configuration " + (c.startup_config.state || "absent").toLowerCase() + "; not an emergency stop)" : ""}`)],
       ["Standing approvals missing", escHtml((c.missing_standing_approvals || []).join(", ") || "none")],
       ["Per-category levels", escHtml(Object.entries(c.effective_levels || {}).map(([k, v]) => `${k} ${v}`).join(" · "))],
       ["Current dispatch", escHtml(Object.keys(c.current_dispatch || {}).length ? `${c.current_dispatch.job_id} (${c.current_dispatch.kind || ""})` : "none")],
@@ -4559,7 +4577,8 @@ async function refreshAutopilotOps(force = false) {
     hEl.innerHTML = opsKV([
       ["State", `<strong style="color:${AP_STATE_COLOR[last.state] || "inherit"}">${escHtml(last.state)}</strong> · ${escHtml(last.reason || "")}`],
       ["Last probe", `${autoTime(last.at_utc)} · liveness ${apNum(last.live_latency_ms, " ms")} (${escHtml(last.live_reason || "")}) · readiness ${last.ready_ok === null || last.ready_ok === undefined ? "--" : (last.ready_ok ? "ready" : "NOT READY")} ${last.ready_latency_ms != null ? escHtml(last.ready_latency_ms + " ms") : ""}`],
-      ["Last 24 h", d.available ? `${escHtml(d.probes)} probes · availability ${apNum(d.availability_pct, "%")} · latency p50 ${apNum(lat.p50, " ms")}, p95 ${apNum(lat.p95, " ms")}, max ${apNum(lat.max, " ms")}` : `<span style="color:var(--muted)">${escHtml(d.reason || "no data")}</span>`],
+      ["Last 24 h", d.available ? `${escHtml(d.probes)} probes${d.window ? ` (${autoTime(d.window.start_utc)} to ${autoTime(d.window.end_utc)})` : ""} · availability ${apNum(d.availability_pct, "%")} · latency p50 ${apNum(lat.p50, " ms")}, p95 ${apNum(lat.p95, " ms")}, max ${apNum(lat.max, " ms")}` : `<span style="color:var(--muted)">${escHtml(d.reason || "no data")}</span>`],
+      ["Outages (24 h)", d.available ? ((d.outages || []).length ? d.outages.map(x => `${autoTime(x.start_utc)}–${x.recovered_at_utc ? autoTime(x.recovered_at_utc) : "ongoing"} · ${escHtml(x.failed_probes)} failed probe(s) · ${escHtml(x.reason || "")}`).join("<br>") : "none") : "--"],
       ["States (24 h)", escHtml(Object.entries(d.states || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "--")],
       ["Failure reasons", escHtml(Object.entries(d.failure_reasons || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "none")],
       ["Restarts (24 h)", (h.recent_restarts || []).length ? (h.recent_restarts || []).map(r => `${autoTime(r.at_utc)} ${escHtml(r.outcome)}: ${escHtml((r.reason || "").slice(0, 100))}`).join("<br>") : "none"],
@@ -4620,7 +4639,7 @@ function apRenderReport(rep) {
     + `<div style="margin-top:6px;"><strong>Observed facts</strong></div>` + opsKV([
       ["Production", escHtml(`${prod.total_cycles ?? "?"} cycles · ${prod.completed ?? "?"} completed · ${prod.failed ?? "?"} failed · ${prod.recovery_window_expired ?? "?"} recovery-window expired`)],
       ["Rendering failures", escHtml(`FFmpeg ${(f.rendering_failure_trend || {}).ffmpeg_failures ?? "?"} · file locks ${(f.rendering_failure_trend || {}).file_lock_failures ?? "?"}`)],
-      ["Dashboard health", hm.available ? escHtml(`${hm.probes} probes · availability ${hm.availability_pct}% · ${hm.restarts} restart(s)`) : `<span style="color:var(--muted)">${escHtml(hm.reason || "unavailable")}</span>`],
+      ["Dashboard health", hm.available ? escHtml(`${hm.probes} probes${hm.window ? ` (${hm.window.start_utc} to ${hm.window.end_utc}, this report's period)` : ""} · availability ${hm.availability_pct}% · ${hm.outage_count ?? 0} outage(s) · ${hm.restarts} monitor restart(s)`) : `<span style="color:var(--muted)">${escHtml(hm.reason || "unavailable")}</span>`],
       ["Recommendations", escHtml(`${rec.created ?? "?"} created · ${rec.open_now ?? "?"} open now · decided ${JSON.stringify(rec.decided_by_status || {})}`)],
       ["Approvals", escHtml(JSON.stringify(f.approvals || {}))],
       ["Executions", escHtml(JSON.stringify(f.executions || {}))],

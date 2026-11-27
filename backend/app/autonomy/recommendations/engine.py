@@ -102,8 +102,8 @@ class RecommendationEngine:
             permitted = False
         if not permitted:
             mode, reason = "BLOCKED", f"{ACTION_TYPE} is not a permitted action type"
-        elif ks.get("emergency_stop", ks["any_active"]):      # Remediation WS2/WS5: only an emergency stop blocks analysis
-            mode, reason = "BLOCKED", f"emergency stop: kill switch active: {', '.join(ks['active'])}"
+        elif ks["emergency_stop"]:      # Remediation WS2/WS5: only an emergency stop blocks analysis
+            mode, reason = "BLOCKED", f"emergency stop: {', '.join(ks['active'])}"
         elif level == Level.OFF:
             mode, reason = "OFF", "the recommendations autonomy level is OFF"
         elif level == Level.OBSERVE:
@@ -117,10 +117,12 @@ class RecommendationEngine:
             except Exception:
                 ok, why = False, ""
             if ok:
-                mode, reason = "RECOMMEND", f"recommendations stored automatically: {why}"
+                mode, reason = "RECOMMEND", (f"recommendations are stored automatically under the built-in policy at "
+                                             f"level OBSERVE (no level was raised): {why}")
         else:
             mode, reason = "RECOMMEND", "recommendations enabled"
         return {"mode": mode, "reason": reason, "level": level.name, "kill_switches": ks["active"],
+                "control_state": ks.get("control_state"),
                 "configuration_error": err, "explainer": "gemini" if self.explainer_enabled else "off"}
 
     # -- run ------------------------------------------------------------------------------------------------
@@ -231,8 +233,12 @@ class RecommendationEngine:
     def overview(self, status: str = "open", category: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
         now = self.clock()
         out: Dict[str, Any] = {"state": self.state(), "categories": rules_mod.CATEGORIES,
-                               "note": "Recommendations are advice for the operator. Approving one records agreement only; "
-                                       "nothing is executed. Executable approval requests are in Autonomy Control."}
+                               "note": "Recommendations are findings with a suggested action; this engine itself executes "
+                                       "nothing. Routine follow-ups the built-in policy covers (read-only diagnostics, "
+                                       "reports, local notifications) are executed automatically by the control plane and "
+                                       "appear under Done automatically. Anything else waits for a decision and is listed "
+                                       "once in Needs your attention. Approving a recommendation here only records your "
+                                       "agreement."}
         try:
             out["summary"] = self.store.summary(now)
             out["recommendations"] = self.store.list(status=status, category=category, limit=limit)

@@ -83,7 +83,9 @@ def test_restricted_runs_read_only_diagnostic_automatically_at_observe(tmp_path)
 def test_restricted_never_runs_actions_outside_its_policy(tmp_path):
     cp = make_cp(tmp_path, startup=False, policy=True)
     set_all(cp, "APPROVED_EXECUTION")
-    for action in ("selfheal.asset.reacquire_staged", "production.recovery.dispatch", "community.draft.prepare"):
+    # Operator-dependency reduction: the bounded, verified, reversible staged asset re-acquisition joined the
+    # RESTRICTED policy on purpose (test_operator_dependency_reduction.py); production and community never do.
+    for action in ("production.recovery.dispatch", "community.draft.prepare"):
         assert action not in POLICY_AUTOMATIC[RESTRICTED]
     res = cp.submit("community.draft.prepare", {"text": "a draft"}, reason="t", proposed_by="autonomy-engine")
     assert res["proposal"]["request"]["status"] == "PENDING" and res["execution"] is None

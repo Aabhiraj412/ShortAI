@@ -31,6 +31,8 @@ Full report: `docs/REMEDIATION_STABILITY_AUTONOMY.md`.
 
 **Update 2026-11-27 IST: Stage 4.02 (Hindi localization).** A completed English Short is adapted into natural Hindi (Gemini free tier, script QC), voiced (edge-tts hi-IN), rendered with Devanagari text through Lemo-Opuscar inside the shared render slot, and checked by Hindi QC. Output goes to `media/localizations/hi/<job>/`. Operator-enqueued from the Queue tab. **Never published automatically**; Hindi publishing stays blocked (channel unverified, not authorized). See `docs/STAGE_4_02_HINDI_LOCALIZATION.md`.
 
+**Update 2026-11-27 IST: Operator-dependency reduction.** Emergency stop, the optional startup configuration and the execution gate are separate fields (a missing `autonomy_startup.json` is RESTRICTED, never shown as a kill switch; blocking behaviour unchanged). The Autopilot controller heartbeat continues while OFF. Attention items are reconciled with live state (topic-flag decision gone while both flags are ON; credentials with a working fallback are optional; creative decisions typed). Self-healing reports diagnosed / recovery executed / resolved / output completed and current vs history. Staged asset re-acquisition (bounded, verified, reversible) is policy-automatic in RESTRICTED. See `docs/OPERATOR_DEPENDENCY_REDUCTION.md`.
+
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
 **Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, in step with `main`.
@@ -149,7 +151,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Community drafts | Automation ON (daily draft); API publishing OFF (pilot access and scope missing). |
 | Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
-| Control state (remediation) | RESTRICTED (no `autonomy_startup.json`). The automatic policy set becomes active when the remediation commit is deployed. |
+| Control state | RESTRICTED (no `autonomy_startup.json`; **not** an emergency stop). The automatic policy runs: reports, recommendation recording, read-only diagnostics, local notifications, self-healing diagnostics, read-only provider re-checks and (since the operator-dependency reduction) staged asset re-acquisition. Production dispatch, publishing, configuration and credentials stay outside it. |
 | Latest backup | `D:\Agents\CrazzyDocs_backups\predeploy_stage337_ws1_20261127_043307` (DB integrity ok; the token file is not included) |
 
 ## 4. Outstanding bugs and risks
@@ -167,6 +169,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
 | 11 | **3.37 rendering concurrency not benchmarked** | Heavy concurrency is fixed at 1. Raising it needs a concurrent-render benchmark in an operator-scheduled window with no production job (stage doc §6). Long-form steps must honour `should_yield()`; a step that overruns its estimate can overlap a Shorts render after the 600 s wait (recorded as `SHORTS_OVERLAP`). |
 | 17 | **Hindi channel** | PENDING_VERIFICATION: the operator must connect the Hindi channel's own Google account (Channels card). The 4.02 localization pipeline exists and produces QC-checked Hindi MP4s locally; **publishing stays blocked** until the channel is verified, ACTIVE and Hindi publishing is explicitly authorized (a separate milestone). Limits: translation uses the Gemini free tier (it waits on quota) and the voice uses edge-tts (needs the network); no offline Hindi translation or voice is installed (operator decision). |
+| 18 | **Autopilot heartbeat warning** | **Fixed** (operator-dependency reduction): the controller skipped its heartbeat while Autopilot was OFF, so the dashboard claimed "scheduler daemon down". |
 | 12 | **Topic supply** | `production_query_rotation` and `exhaustion_recovery` were **activated on 2026-11-27 at 05:45 IST with operator approval** (daemon restarted, PID 4692). Watch Ops → *Topic intelligence* for eligible counts and integrity-gate failures over the next 24 h. Revert: remove both keys from `creative_policy_config.json` and restart the daemon. |
 | 13 | **Gemini free tier** | 429 and 503/504 errors cause about 80 % fallback scripts, which score 13 points lower. The deferred round is measured by the feedback loop and is not claimed as a fix. |
 | 14 | **Dashboard CPU** | Root cause fixed: the one-minute health poll walked the whole media tree (7 CPU-s per poll, growing) and ran a full integrity check. Both are now cached. Confirm after deploying: `worker_top_stacks` in `/api/health/loop`, and dashboard CPU below 5 %. |
@@ -218,6 +221,8 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 - Run the full suite (about 13–19 minutes) in the background.
 
 ## 7. Exact next task
+
+**Operator-dependency reduction** is implemented (`docs/OPERATOR_DEPENDENCY_REDUCTION.md`). The remaining operator items are genuine: creative decisions, the Hindi channel connection, optional Pexels key, Autopilot enablement (optional) and Community API access (external).
 
 **Stage 4.02 (Hindi localization)** is implemented. Operator actions: use the Queue tab → *Hindi localization* card to localize completed Shorts. Hindi publishing is a separate milestone; it needs the Hindi channel verified first (Channels card). See `docs/STAGE_4_02_HINDI_LOCALIZATION.md` §9.
 

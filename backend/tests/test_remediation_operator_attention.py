@@ -36,7 +36,10 @@ def test_genuine_interventions_are_listed_once_each(tmp_path):
                      topic_supply=lambda: {"decision_needed": True, "evidence": "9 of 24 runs", "action": "decide flags"},
                      localizations=lambda: {})
     kinds = sorted(n["kind"] for n in a["needs_you"])
-    assert kinds == ["approval", "credential", "decision", "decision"]
+    # Operator-dependency reduction: the Pexels key has a working fallback (optional, still listed) and the creative
+    # proposal is typed as a human creative decision.
+    assert kinds == ["approval", "creative_decision", "decision"]
+    assert [o["title"] for o in a["optional_improvements"]] == ["Pexels: key missing"]
     approval = [n for n in a["needs_you"] if n["kind"] == "approval"][0]
     assert approval["title"].startswith("1 action")
 
