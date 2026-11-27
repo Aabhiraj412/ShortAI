@@ -115,6 +115,8 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 
 | Commit | Stage |
 |---|---|
+| `2de67d6`, `3eb938a` | **Remediation closure**: controller identity health (live PID plus registered daemon), six-state self-healing outcomes, readiness-metric window, attention groups, autonomous Hinglish localization (`localization_auto_daily_max` = 6). `docs/OPERATOR_DEPENDENCY_REDUCTION.md` §7 |
+| `ec92063` | **4.02 follow-up**: natural Hinglish narration, English or Roman-Hinglish on-screen text |
 | (4.02 commit, see `git log`) | **4.02** Hindi localization pipeline (translate, voice, render in the shared slot, Hindi QC). Publishing disabled. `docs/STAGE_4_02_HINDI_LOCALIZATION.md` |
 | `9ce835b` | **4.01** Multi-channel foundation (English verified, Hindi PENDING_VERIFICATION) |
 | (remediation commit, see `git log`) | **Remediation WS1 (part 2) to WS7 and the operator-attention feed** |
@@ -146,7 +148,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Operating mode / publishing policy | PRODUCTION / `automatic_private_scheduled` |
 | Autonomy | Global OBSERVE (categories OBSERVE; `community_drafts` and `production` OFF). The startup kill switch is active (no `autonomy_startup.json`). |
 | Autopilot controller (3.36) | OFF. The scheduler owns production. |
-| Production coordinator (3.37) | Long-form queue disabled (`long_form_enabled: false`), not paused, no executor; heavy render slots = 1. Shorts workers lease the slot (fail-open). **4.02:** LOCALIZATION queue (`localization_enabled: true`, runs only operator-enqueued Hindi localizations, in Shorts gaps). The active schedule profile is read from the coordinator's own database; HEAVY admission fails closed when the next Shorts start is unknown. |
+| Production coordinator (3.37) | Long-form queue disabled (`long_form_enabled: false`), not paused, no executor; heavy render slots = 1. Shorts workers lease the slot (fail-open). **4.02:** LOCALIZATION queue (`localization_enabled: true`, renders in Shorts gaps only). **Closure:** the coordinator tick auto-enqueues the newest completed English Short, one at a time, at most `localization_auto_daily_max` (6) per IST day; operator enqueue still works; publishing stays blocked. The active schedule profile is read from the coordinator's own database; HEAVY admission fails closed when the next Shorts start is unknown. |
 | Topic intelligence flags | `candidate_ledger` on; `production_query_rotation` and `exhaustion_recovery` **on** since 2026-11-27 05:45 IST (operator approved); `category_classifier_v2`, `demand_signals` and `scoring_v2` in shadow (3.31 report: do not activate v2 as-is). Backup of the previous file: `CrazzyDocs_backups\predeploy_remediation_20261127_054108\creative_policy_config.before_flags.json`. |
 | Community drafts | Automation ON (daily draft); API publishing OFF (pilot access and scope missing). |
 | Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
@@ -163,7 +165,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3 | **QC duration failures** | Duration 49.2 s, outside the 50–58 s window; seen after rendering. |
 | 4 | **High recovery-window expiry rate** | 40 of 98 jobs; YouTube daily quota exhaustion also delays publishing. |
 | 5 | **Monitor false unhealthy** | **Fixed in 3.32H** (2 s timeout on a ~2 s aggregate endpoint). The monitor now uses liveness/readiness probes and persists every decision. |
-| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite (Hinglish policy): 2007 passed, 4 failed, 174 skipped)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
+| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite (remediation closure): 2015 passed, 4 failed, 174 skipped)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
 | 7 | **DNS rebinding** | Could expose the CSRF token through a read (pre-existing; writes still need an allow-listed Origin). A Host-header allow-list is the suggested fix. |
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
