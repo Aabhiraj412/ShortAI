@@ -101,6 +101,8 @@ Builds on §1–§6 (deployed in `2c31dc8`). The live state before the closure w
 | **Attention groups** | Each request carries a `group`: security / approval, external authorization (credentials, Hindi publishing authorization), creative decision, or local operations. The feed returns counts per group, and the dashboard sorts and labels by group. | Test |
 | **Autonomous Hinglish localization** | Inside the existing coordinator tick, every 10 min: when the LOCALIZATION queue is enabled and idle, it enqueues the newest completed English Short (last 26 h, English artifacts present, no localization yet). The cap is `localization_auto_daily_max` per IST day (default **6**, 0–24, coordinator config; 0 turns it off). Renders still run only in Shorts gaps in the shared slot; QC, duplicate mapping and the publishing block are unchanged; operator enqueue still works. | Tests: newest first, test jobs and missing files skipped, one at a time, cap and switch, never runs with injected test executors. |
 
+**Tests:** full suite 2,015 passed, 174 skipped, and the same 4 known baseline failures (baseline 2,007 / 4 / 174; 8 new tests).
+
 **Not changed:** the 24-cycle schedule, the English pipeline, OAuth, channel identities, the publishing policy, autonomy levels, standing approvals and kill switches. No new scheduler, daemon or worker; no paid service.
 
 **Still requiring authorization (genuine):**
