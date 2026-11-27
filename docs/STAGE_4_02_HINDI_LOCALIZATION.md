@@ -1,7 +1,28 @@
 # Stage 4.02: Hindi localization and production pipeline
 
-**Status:** **accepted** on 2026-11-27. A real English Short (cycle_12) went through real translation, voice, rendering in the shared slot and Hindi QC, producing a valid Hindi MP4 that also passed visual inspection (§7.2). Deployment and blockers: §9.
+**Status:** **accepted** on 2026-11-27 and re-accepted under the Hinglish language policy (§0, §7.3). A real English Short (cycle_12) went through real translation, voice, rendering in the shared slot and Hindi QC, producing a valid Hindi MP4 that also passed visual inspection (§7.2). Deployment and blockers: §9.
 **Publishing:** disabled. A Hindi video is never published automatically. It becomes *eligible* only when the Hindi channel is ACTIVE, its identity is verified (4.01), Hindi publishing is explicitly authorized, and the video passed Hindi QC. Even then, no code path publishes it: Hindi publishing is a separate milestone.
+
+## 0. Language policy (follow-up, 2026-11-27 evening): natural Hinglish, English-first visual text
+
+The target audience is Indian YouTube viewers. This supersedes the formal-Hindi/Devanagari design of the first
+acceptance (§7.1–§7.2 are kept as history).
+
+| Element | Policy | Implementation |
+|---|---|---|
+| Narration (spoken) | Natural Indian Hinglish: Hindi and English mixed the way a creator talks. English technical terms, names and familiar words stay English. No formal, Sanskritized or textbook Hindi, and no sentence-by-sentence translation. Same facts, numbers, hook, curiosity gaps and payoff. | `translator.build_prompt`, using the policy's own examples |
+| Subtitles | Roman-script Hinglish that matches the spoken words | `narration` (Roman), written to ASS with Segoe UI (Latin) |
+| Voice input | The same Hinglish sentence, with Hindi words in Devanagari and English words in Latin. A hi-IN neural voice mispronounces Roman-script Hindi ("mein" sounds like "mine") but reads this code-mixed form naturally. It is internal and **never shown**. | `narration_tts`, used only by `voice.synthesize` |
+| All visible video text | English or Roman-script Hinglish only; English is the default for short labels. No Devanagari anywhere. | The Hindi film uses the **unchanged English engine**: the same typography and fonts, and the English stage pills ("THE SETUP", "THE TWIST", "THE REVEAL"). Headline, highlight, labels, units, category and title come from the adaptation in English or Roman Hinglish. |
+
+**QC under this policy:**
+- *Script QC* checks:
+  - Devanagari in any visible text (subtitles, headline, highlight, labels, units, title, category) is a problem.
+  - The narration must read as Hinglish: at least 12 % unambiguous everyday Hindi words, with English homographs such as "to", "is" and "the" excluded. English vocabulary is never a problem.
+  - Formal words (mahatvapurn, nirantar, sanchalit, …) are flagged.
+  - The voice form must carry its Hindi words in Devanagari and say the same numbers, at a similar length, as the subtitles.
+  - The facts, names, highlight and length rules are unchanged.
+- *Video QC* rejects Devanagari in any engine-drawn text (title, category, headline, highlight, stage label, labels, number units) and in the subtitle file, as a creative rejection.
 
 ## 1. Architecture
 
@@ -14,8 +35,8 @@ completed English Short (media/productions/<job>/: script + pop_info_film/plan.j
 content_localizations row (UNIQUE source job × target channel) ──► coordinator LOCALIZATION queue
   translate  (LIGHT, 3 min)  Gemini free tier → Hindi adaptation → script QC (2 attempts per model, with feedback)
   voice      (LIGHT, 3 min)  edge-tts hi-IN Swara → Madhur → SAPI hi-IN; per scene; pronunciation map
-  render     (HEAVY, 12 min) Hindi plan → Pop Info film (Nirmala UI) → Lemo-Opuscar → mix → MP4; ASS subtitles
-  qc         (LIGHT, 4 min)  container/codec/A-V/volume/decode + Devanagari + layout probe + script rules
+  render     (HEAVY, 12 min) Hinglish plan → Pop Info film (unchanged English engine) → Lemo-Opuscar → mix → MP4; Roman-script ASS subtitles
+  qc         (LIGHT, 4 min)  container/codec/A-V/volume/decode + no Devanagari in visible text + layout probe + script rules
   ▼
 QC_PASSED (eligible for publishing: no, unless every 4.01 condition holds) | QC_REJECTED | WAITING | FAILED
 ```
@@ -23,9 +44,9 @@ QC_PASSED (eligible for publishing: no, unless every 4.01 condition holds) | QC_
 | File | Role |
 |---|---|
 | `localization/translator.py` | Request (per scene: seconds, target words, narration, headline, highlight, labels, units), prompt, model chain, retries with feedback, error classes. |
-| `localization/script_qc.py` | Hindi script rules: scene ids, Devanagari share ≥ 85 %, headline ≤ 6 words, highlight inside the headline, label count, numbers (missing or invented, Devanagari digits normalised), proper-name coverage, estimated duration 27–61 s. |
+| `localization/script_qc.py` | Hinglish script rules (§0): scene ids, no Devanagari in visible text, natural Hinglish (everyday-Hindi share, no formal words), voice form consistent with the subtitles, headline ≤ 6 words, highlight inside the headline, label count, numbers (missing or invented), proper-name coverage, estimated duration. |
 | `localization/voice.py` | Per-scene synthesis with fallback, rate escalation (+8 %, +18 %, +25 %), clip and volume validation, timings. |
-| `localization/render.py` | Hindi plan (text replaced, scenes retimed, SFX moved), film packaging with a Devanagari font, Lemo render, mux, ASS subtitles plus a libass render check. |
+| `localization/render.py` | Hinglish plan (text replaced, scenes retimed, SFX moved), film packaging with the unchanged English engine, Lemo render, mux, Roman-script ASS subtitles plus a libass render check. |
 | `localization/qc.py` | Hindi QC with CREATIVE_REJECTION versus TECHNICAL_FAILURE. |
 | `localization/pipeline.py` | `HindiLocalizer` (state machine, retries, archive), coordinator executor, dashboard overview, enqueue. |
 | `channels/registry.py` | Localization columns (step, attempts, error kind, artifacts, QC, owner, version), and `publishing_eligibility`. |
@@ -40,10 +61,10 @@ Output files go in `media/localizations/hi/<english job>/`. They are separate fr
 
 | Component | Choice | Why | Limitation |
 |---|---|---|---|
-| Translation and adaptation | Gemini free tier via the existing key. Models: `gemini-3.7-flash`, `gemini-3.5-flash`, `gemma-4-31b-it`, `gemma-4-26b-a4b-it`. They are never the English chain's models, so Hindi never takes English production quota. Override: `CRAZZYDOCS_HINDI_MODELS`. | Already configured; no new service or cost. The prompt asks for a natural, conversational Hindi adaptation, not a word-for-word translation; facts, numbers and names are preserved, and there is a spoken-form list. | Free-tier quota (429 runs from about 01:00 to 13:30 IST on busy days). When every model is unavailable, the localization **waits** (an infrastructure condition, retried later). No paid fallback. **No offline translation is installed**: an offline model (for example IndicTrans2) would need a large download, which is an operator decision. |
+| Translation and adaptation | Gemini free tier via the existing key. Models: `gemini-3.7-flash`, `gemini-3.5-flash`, `gemma-4-31b-it`, `gemma-4-26b-a4b-it`. They are never the English chain's models, so Hindi never takes English production quota. Override: `CRAZZYDOCS_HINDI_MODELS`. | Already configured; no new service or cost. The prompt asks for natural Indian Hinglish (§0), not a translation; facts, numbers and names are preserved, and there is a spoken-form list. | Free-tier quota (429 runs from about 01:00 to 13:30 IST on busy days). When every model is unavailable, the localization **waits** (an infrastructure condition, retried later). No paid fallback. **No offline translation is installed**: an offline model (for example IndicTrans2) would need a large download, which is an operator decision. |
 | Voice | `edge-tts` `hi-IN-SwaraNeural`, then `hi-IN-MadhurNeural`, then any installed Windows SAPI `hi-IN` voice. | Free, no key. It is the same service the English pipeline already uses, so it adds no new dependency. Natural neural Hindi. | Needs the network. **No offline Hindi voice is installed** (SAPI has English voices only; no Piper or Coqui). Adding the Windows Hindi speech pack or a Piper Hindi voice is an operator decision. Without a voice, the localization waits. |
-| Visuals | The English film's licensed assets and animation reused; every on-screen text replaced; the film's `engine.js` copy patched to `"Nirmala UI"` first. | Chromium shapes Devanagari with HarfBuzz; Nirmala UI is a Windows system font (no download). The English engine file is not modified. | — |
-| Subtitles | ASS file (Nirmala UI, 1080×1920, ≤ 2 lines, ≤ 26 characters per line, word-safe wrap), checked by rendering a frame through FFmpeg libass (HarfBuzz, FriBiDi). | A burnable or uploadable subtitle track. Its rendering is measured, not assumed. PIL has no raqm, so it cannot shape Devanagari and is not used for Hindi text. | — |
+| Visuals | The English film's licensed assets, animation and **unchanged engine** reused (typography, fonts, English stage pills); headline, labels and category in English or Roman Hinglish. | Identical visual quality to the English Shorts; nothing Devanagari-specific is needed on screen. | — |
+| Subtitles | ASS file in Roman-script Hinglish (Segoe UI, 1080×1920, ≤ 2 lines, ≤ 32 characters per line, word-safe wrap), checked by rendering a frame through FFmpeg libass. | A burnable or uploadable subtitle track that matches the spoken words; its rendering is measured, not assumed. | — |
 | Rendering | Lemo-Opuscar through `lemo_adapter().render_video`, inside the coordinator's HEAVY render slot. | The existing renderer, so no second renderer is added. | One render at a time (3.37 heavy concurrency 1). |
 
 ## 3. States and failure classes
@@ -52,7 +73,7 @@ Output files go in `media/localizations/hi/<english job>/`. They are separate fr
 |---|---|---|
 | PLANNED, IN_PROGRESS | Queued or running in the LOCALIZATION queue. | Automatic |
 | WAITING | Infrastructure (translation quota, voice provider, render). Retried by the coordinator (bounded attempts); completed steps are reused. | Automatic |
-| QC_REJECTED | Creative: script rules, duration, non-Devanagari or clipped text. Final for these inputs. | Operator: *Retranslate* (archives the attempt) or leave it |
+| QC_REJECTED | Creative: script rules (including formal Hindi or Devanagari in visible text), duration, clipped text. Final for these inputs. | Operator: *Retranslate* (archives the attempt) or leave it |
 | FAILED | Technical failure after its attempts, or the source is missing. | Operator: *Retry* once the cause is fixed |
 | QC_PASSED | Valid Hindi MP4; eligibility reasons shown. | Publishing remains a separate milestone |
 
@@ -72,12 +93,12 @@ Output files go in `media/localizations/hi/<english job>/`. They are separate fr
 
 ## 6. Tests
 
-`backend/tests/test_stage_402_hindi_localization.py` (37 tests) covers:
+`backend/tests/test_stage_402_hindi_localization.py` (39 tests) covers:
 - translation (success, feedback retry, rejection, provider unavailable, malformed JSON, model separation);
 - each script-QC rule;
 - voice (pronunciation, voice fallback, unavailable, rate escalation, silent clip);
 - the Hindi plan and font patch (English engine unchanged);
-- the real libass Devanagari render check and word-safe wrap;
+- the real libass render check of Roman-script subtitles and word-safe wrap;
 - QC classification of each failure;
 - mapping uniqueness, a full run without publishing, retry reuse, creative rejection and archiving, a missing source, and no publishing or credential path;
 - coordinator queue admission in Shorts gaps, the switch and pause, and lazy executor registration;
@@ -141,6 +162,32 @@ The existing 3.37, 4.01 and remediation tests were updated for the new queue and
 
 **A network event the same day:** at 17:08:14–17:08:24 IST, DNS resolution failed for about 10 s (`getaddrinfo failed`, Errno 11001, reported by Node clients as ENOTFOUND). The English 17:00 cycle's first narration attempt failed on edge-tts. The scheduler's existing retry policy recovered it (COMPLETED 17:18, uploaded privately as usual). DNS resolves normally afterwards. This was a transient local network fault, not an application or provider-configuration fault, and nothing was changed.
 
+### 7.3 Hinglish reprocess under the language policy (2026-11-27, 18:26–18:40 IST): accepted
+
+The accepted formal-Hindi output was archived (`attempt_5_20261127T125625/`, never deleted) and the same English Short
+was reprocessed under §0. A new translation and voice were **necessary**: the stored ones were formal Devanagari Hindi,
+which the policy replaces. 18:26: every Hindi model was at 429 (it WAITED). 18:36: Gemini 3.7-flash returned 503, so
+3.5-flash adapted it; the voice took 64 s; the coordinator admitted the render ("ends before the next Shorts cycle"):
+render 162 s, finished about 18:40, before the 19:00 cycle; QC 16 s.
+
+**Script (excerpt):**
+- *Subtitles / narration:* "Vasoactive intestinal peptide, jise vasoactive intestinal polypeptide ya VIP kehte hain," · "gut samet vertebrates ke kaafi tissues VIP banate hain," · "Aisi aur real-world stories ke liye CrazzyDocs ko subscribe karein."
+- *Voice form:* "gut समेत vertebrates के काफी tissues VIP बनाते हैं,"
+- 113 voice words; Swara at +25 %, 56.72 s. Technical terms stay English.
+
+**Visible text** (one frame per scene, inspected): English only, in the English Shorts' own typography:
+- the "EVERYDAY SCIENCE" chip and every headline and highlight ("Vasoactive intestinal peptide", "28 amino acid", "class II G protein", "hypothalamus in the brain", "causes vasodilation", "VIP gene");
+- the stage pills "THE SETUP" and "THE TWIST";
+- the diagram labels (Stimulates, Contractility, Vasodilation) and the 28 callout.
+
+**No Devanagari anywhere on screen.** Subtitles: 18 events in Roman-script Hinglish (Segoe UI, two lines at most), timed per scene from the voice, with no Devanagari; the libass check frame is clean.
+
+**Final MP4** (ffprobe and ffmpeg):
+- Video: h264, 1080×1920, 30 fps, 1723 frames, 57.433 s.
+- Audio: AAC 48 kHz stereo, 57.429 s, so **A/V drift is 0.004 s**.
+- No decode errors; mean −17.0 dB, integrated −14.2 LUFS.
+- **Hindi QC: PASSED**, with no creative or technical findings.
+
 ## 8. Resource use and cost
 
 **Measured during the dry-run render** (`typeperf`, 10 s samples, 11:14–11:17):
@@ -163,7 +210,7 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 **Cost: zero.**
 - Gemini free tier, with the Hindi models separate from the English chain.
 - edge-tts (free, no key).
-- Local Chromium and FFmpeg; the Nirmala UI system font.
+- Local Chromium and FFmpeg; Windows system fonts.
 - No paid API, cloud rendering, subscription or download.
 
 ## 9. Remaining blockers
@@ -176,6 +223,6 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 | Dense technical sources | Long transliterated terms speak slowly, so a word estimate cannot guarantee the length. The voice step measures it and shortens automatically (at most 2 times); a source that still does not fit is a creative rejection, shown once in Needs your attention. | Automatic; rare cases are a human edit |
 | Automatic Hindi enqueue | Localizations are enqueued by the operator, one English job at a time. No automatic "localize every completed Short" rule was added. | Future decision |
 
-**Full suite** (final, at `75c68c4` with the operator-dependency reduction): **2005 passed, 4 failed (the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two `test_youtube_branding`), 174 skipped.** The baseline before 4.02 was 1948 / 4 / 174. Earlier run at `1a11ab7`: 1981 / 4 / 174.
+**Full suite** (Hinglish policy): **2007 passed, 4 failed (the same known baseline), 174 skipped**; 39 focused 4.02 tests. Earlier, at `75c68c4` with the operator-dependency reduction: **2005 passed, 4 failed (the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two `test_youtube_branding`), 174 skipped.** The baseline before 4.02 was 1948 / 4 / 174. Earlier run at `1a11ab7`: 1981 / 4 / 174.
 
 **Commits:** `1a11ab7` (stage), `33b392c` (queue display), `2afb167`, `8544aa6` and `75c68c4` (acceptance-run fixes). Deployment status is in the handover §3.

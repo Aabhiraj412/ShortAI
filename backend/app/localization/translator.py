@@ -1,16 +1,22 @@
-"""Stage 4.02: English Short -> natural, culturally adapted spoken Hindi, scene by scene.
+"""Stage 4.02: English Short -> natural Indian Hinglish, scene by scene (language policy 2026-11-27).
+
+The audience is Indian YouTube viewers: the narration is how an Indian creator actually talks (Hindi and English mixed
+conversationally, English technical terms kept in English, no formal or textbook Hindi). Every text visible in the
+video (headlines, labels, category, subtitles) is English or Roman-script Hinglish; Devanagari is never shown.
+
+Each scene carries the same Hinglish sentence twice:
+* ``narration``      Roman-script Hinglish: the subtitles (and the only narration text anyone sees);
+* ``narration_tts``  the same words for the Hindi neural voice: Hindi words in Devanagari, English words in Latin.
+                     A hi-IN voice mispronounces Hindi written in Roman script ("mein" -> "mine") but pronounces
+                     this code-mixed form naturally. It is never shown.
 
 Provider: the Gemini free tier already configured for English scripts (zero cost). The Hindi model chain EXCLUDES the
-models English production uses, because free-tier limits are per model and English scripts must not lose quota to
-Hindi. Order: ``CRAZZYDOCS_HINDI_MODELS`` (comma list) or ``DEFAULT_HINDI_MODELS``.
+models English production uses, because free-tier limits are per model. Order: ``CRAZZYDOCS_HINDI_MODELS`` or
+``DEFAULT_HINDI_MODELS``.
 
 * A transient provider error (429 / 5xx / timeout) on every model -> ``ProviderUnavailable`` (an infrastructure
   wait; the localization retries later and keeps any completed work).
-* A malformed or rule-breaking answer -> one retry with the problems as feedback, then ``TranslationRejected``
-  (a creative rejection, never retried as infrastructure).
-
-The request is per scene, so captions, headlines and timing stay aligned with the English film. The answer carries a
-term list (English form, Hindi display form, spoken Devanagari form) used for pronunciation.
+* A malformed or rule-breaking answer -> one retry with the problems as feedback, then ``TranslationRejected``.
 """
 from __future__ import annotations
 
@@ -68,26 +74,36 @@ def build_request(*, topic: str, category: str, script: Dict[str, Any], plan: Di
 
 def build_prompt(req: Dict[str, Any], feedback: Sequence[str] = ()) -> str:
     rules = [
-        "You adapt an English YouTube Short into a NATURAL, CONVERSATIONAL Hindi Short for a Hindi-speaking audience in "
-        "India. Write how a good Hindi science presenter actually speaks (simple, warm, energetic; everyday Hindi with "
-        "common English loanwords where Hindi speakers really use them). NOT a word-for-word translation.",
+        "You adapt an English YouTube Short for Indian viewers in natural, conversational HINGLISH: the way an Indian "
+        "YouTube creator actually talks, mixing Hindi and English. Keep familiar English words, technical terms, "
+        "names and phrases in English; use simple everyday Hindi where it sounds natural. Avoid formal, Sanskritized "
+        "or textbook Hindi (never words like mahatvapurn, nirantar, sanchalit, atyant). Do NOT translate sentence by "
+        "sentence; sound like a person explaining, not a translation engine.",
+        "Example. Avoid: 'Manav mastishk mein ek mahatvapurn prakriya nirantar sanchalit hoti rehti hai.' "
+        "Prefer: 'Aapke brain mein ek fascinating process continuously chalta rehta hai.' Another good example: "
+        "'Scientists ne ek surprising discovery ki, jo humare brain ko samajhne ka perspective change kar sakti hai.'",
         "Keep the meaning, every fact, every number and every name exactly. Do not add facts, numbers, dates or claims "
-        "that are not in the English. Do not drop any fact.",
-        "Adapt the hook, transitions, punchline and ending for Hindi audiences (a curiosity question or a surprising "
-        "turn works well), keeping the same story arc and tone.",
-        "narration_hi: spoken Hindi in Devanagari ONLY (write names and technical terms in Devanagari as they are "
-        "pronounced, e.g. 'बायोल्यूमिनेसेंस'). Aim for about target_words words per scene and NEVER exceed max_words for a "
-        "scene: the voice must fit each scene's seconds. Hindi tends to run longer than English, so when a scene is "
-        "dense, say it more simply and briefly; keep every fact and number, drop filler words.",
-        "Write numbers as digits (e.g. 1880, 3) exactly as in the English.",
-        "headline_hi: a short on-screen headline in Devanagari, at most 5 words, for the same idea as the English "
-        "headline. highlight_hi: copy EXACTLY one word or phrase that appears inside headline_hi (or \"\" if the "
-        "English highlight is empty). labels_hi: the labels translated, 1-2 words each, same count.",
-        "terms: every proper name and technical term you kept, as {\"en\": English form, \"hi\": Devanagari display "
-        "form, \"spoken\": Devanagari spelling that a Hindi voice pronounces correctly}.",
-        "Return ONLY JSON: {\"title_hi\": str, \"category_hi\": str, \"scenes\": [{\"scene_id\": str, \"narration_hi\": "
-        "str, \"headline_hi\": str, \"highlight_hi\": str, \"labels_hi\": [str], \"units_hi\": [str]}], \"terms\": "
-        "[{\"en\": str, \"hi\": str, \"spoken\": str}]}. One entry per scene, same scene_id order.",
+        "that are not in the English. Do not drop any fact. Keep the hook, curiosity gaps, transitions, humour and the "
+        "payoff; adapt expressions naturally for Indian viewers without changing facts.",
+        "narration: the scene's Hinglish narration in ROMAN script only (no Devanagari). These are the subtitles. "
+        "Write numbers as digits exactly as in the English (e.g. 1969, 28).",
+        "narration_tts: the SAME words as narration, for a Hindi text-to-speech voice: write the Hindi words in "
+        "Devanagari and keep the English words, names and terms in Latin letters, numbers as digits. Same sentence, "
+        "same meaning, same order; only the script of the Hindi words changes. Example: narration 'Aapke brain mein "
+        "ek fascinating process chalta rehta hai.' -> narration_tts 'आपके brain में एक fascinating process चलता रहता है।'",
+        "Aim for about target_words words per scene and NEVER exceed max_words for a scene: the voice must fit each "
+        "scene's seconds. Keep Shorts pacing: when a scene is dense, say it more simply and briefly; keep every fact.",
+        "On-screen text is English or Roman-script Hinglish ONLY (never Devanagari). English is the default for short "
+        "labels. headline: at most 5 words, the same idea as the English headline (keep the English headline when it "
+        "already works; Roman Hinglish such as 'Brain ka Secret' or 'Aapko pata tha?' when it is better). highlight: "
+        "copy EXACTLY one word or phrase that appears inside headline (or \"\" if the English highlight is empty). "
+        "labels: 1-2 words each, same count as the English, English or Roman Hinglish. units: English.",
+        "title: the Short's title in English or Roman Hinglish. category: the English category, unchanged.",
+        "terms: names or technical terms a Hindi voice might mispronounce, as {\"en\": the form used in the "
+        "narration, \"spoken\": a Devanagari spelling the Hindi voice pronounces correctly}. Use [] if none.",
+        "Return ONLY JSON: {\"title\": str, \"category\": str, \"scenes\": [{\"scene_id\": str, \"narration\": str, "
+        "\"narration_tts\": str, \"headline\": str, \"highlight\": str, \"labels\": [str], \"units\": [str]}], "
+        "\"terms\": [{\"en\": str, \"spoken\": str}]}. One entry per scene, same scene_id order.",
     ]
     body = {"topic": req["topic"], "category": req["category"], "scenes": req["scenes"]}
     fb = ("\n\nYour previous answer had these problems; fix all of them:\n- " + "\n- ".join(feedback)) if feedback else ""

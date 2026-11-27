@@ -1,7 +1,7 @@
 """Stage 4.02: Hindi localization pipeline.
 
 Fake Gemini clients, fake voices (FFmpeg test tones), temporary databases and media folders. FFmpeg/libass are real
-(the Devanagari subtitle render check). No network, no real token, no production data.
+(the Roman-script subtitle render check). No network, no real token, no production data.
 """
 from __future__ import annotations
 
@@ -97,13 +97,15 @@ def test_translation_success_and_prompt_rules():
     hindi, attempts = translator.translate(request(), client=c, models=["m1"], validate=script_qc.validate)
     assert hindi["_model"] == "m1" and attempts[-1]["ok"]
     prompt = c.prompts[0][1]
-    assert "NOT a word-for-word translation" in prompt and "Do not add facts" in prompt and "Devanagari" in prompt
+    assert "HINGLISH" in prompt and "Do not add facts" in prompt and "Do NOT translate sentence by sentence" in prompt
+    assert "never Devanagari" in prompt and "Keep familiar English words, technical terms" in prompt
+    assert "Aapke brain mein ek fascinating process" in prompt                 # the policy's own example
 
 
 def test_rule_breaking_answer_is_retried_with_feedback_then_rejected():
     bad = fixture_hindi()
-    bad["scenes"][2]["narration_hi"] = bad["scenes"][2]["narration_hi"].replace("1969", "")   # irrelevant
-    bad["scenes"][4]["narration_hi"] = bad["scenes"][4]["narration_hi"].replace("1969", "1970")
+    for k in ("narration", "narration_tts"):
+        bad["scenes"][4][k] = bad["scenes"][4][k].replace("1969", "1970")
     c = FakeClient({"m1": [bad, bad], "m2": [fixture_hindi()]})
     with pytest.raises(translator.TranslationRejected) as e:
         translator.translate(request(), client=c, models=["m1", "m2"], validate=script_qc.validate)
@@ -114,7 +116,7 @@ def test_rule_breaking_answer_is_retried_with_feedback_then_rejected():
 
 def test_feedback_retry_can_fix_the_answer():
     bad = fixture_hindi()
-    bad["scenes"][0]["highlight_hi"] = "अनुपस्थित"
+    bad["scenes"][0]["highlight"] = "missing"
     c = FakeClient({"m1": [bad, fixture_hindi()]})
     hindi, attempts = translator.translate(request(), client=c, models=["m1"], validate=script_qc.validate)
     assert [a["ok"] for a in attempts] == [False, True]
@@ -132,30 +134,61 @@ def test_malformed_json_is_retried():
     assert attempts[0]["ok"] is False and attempts[1]["ok"] is True
 
 
-# -- 2. Hindi script quality --------------------------------------------------------------------------------------
+# -- 2. Hinglish script quality ----------------------------------------------------------------------------------
+
+def _both(h, i, fn):
+    for k in ("narration", "narration_tts"):
+        h["scenes"][i][k] = fn(h["scenes"][i][k])
+
 
 def test_fixture_passes_and_each_rule_catches_its_problem():
     req, good = request(), fixture_hindi()
     assert script_qc.validate(req, good) == []
     cases = {
         "missing": lambda h: h["scenes"].pop(),
-        "latin": lambda h: h["scenes"][1].update(narration_hi="In Leeds it was not like that until recently."),
-        "highlight": lambda h: h["scenes"][1].update(highlight_hi="गायब"),
-        "number_missing": lambda h: h["scenes"][2].update(narration_hi=h["scenes"][2]["narration_hi"].replace("24 ", "")),
-        "number_invented": lambda h: h["scenes"][8].update(narration_hi=h["scenes"][8]["narration_hi"] + " 500 साल से।"),
+        "plain_english": lambda h: [h["scenes"][i].update(narration=s["narration"]) for i, s in enumerate(req["scenes"])],
+        "devanagari_subtitle": lambda h: h["scenes"][1].update(narration="लीड्स में तो पहले ऐसा नहीं था।"),
+        "devanagari_headline": lambda h: h["scenes"][1].update(headline="ऐसा नहीं था", highlight="नहीं"),
+        "devanagari_label": lambda h: h.update(category="कला और इतिहास"),
+        "formal": lambda h: _both(h, 1, lambda t: t + " mahatvapurn"),
+        "tts_roman": lambda h: [sc.update(narration_tts=sc["narration"]) for sc in h["scenes"]],
+        "tts_mismatch": lambda h: h["scenes"][2].update(narration_tts=h["scenes"][2]["narration_tts"].replace("24 ", "25 ")),
+        "highlight": lambda h: h["scenes"][1].update(highlight="gayab"),
+        "number_missing": lambda h: _both(h, 2, lambda t: t.replace("24 ", "")),
+        "number_invented": lambda h: _both(h, 8, lambda t: t + " 500 saal se."),
         "name": lambda h: h.update(terms=[t for t in h["terms"] if "Shonibare" not in t["en"]]) or
-                          h["scenes"][2].update(narration_hi=h["scenes"][2]["narration_hi"].replace("यिंका शोनीबारे", "एक कलाकार")),
-        "too_long": lambda h: h["scenes"][0].update(narration_hi=h["scenes"][0]["narration_hi"] + " " + "बहुत " * 80),
+                          _both(h, 2, lambda t: t.replace("Yinka Shonibare", "ek artist")),
+        "too_long": lambda h: _both(h, 0, lambda t: t + " " + "bahut " * 80),
         "spoken_form": lambda h: h["terms"][0].update(spoken="Leeds"),
     }
-    expect = {"missing": "scenes must be", "latin": "Devanagari", "highlight": "must appear inside",
-              "number_missing": "numbers missing", "number_invented": "not in the English", "name": "not preserved",
-              "too_long": "outside", "spoken_form": "spoken form"}
+    expect = {"missing": "scenes must be", "plain_english": "reads as English",
+              "devanagari_subtitle": "no Devanagari", "devanagari_headline": "no Devanagari",
+              "devanagari_label": "no Devanagari", "formal": "too formal", "tts_roman": "Hindi voice mispronounces",
+              "tts_mismatch": "same numbers", "highlight": "must appear inside", "number_missing": "numbers missing",
+              "number_invented": "not in the English", "name": "not preserved", "too_long": "outside",
+              "spoken_form": "spoken form"}
     for name, mutate in cases.items():
         h = copy.deepcopy(good)
         mutate(h)
         problems = script_qc.validate(req, h)
         assert any(expect[name] in p for p in problems), (name, problems)
+
+
+def test_english_vocabulary_and_technical_terms_are_never_rejected():
+    """Hinglish keeps English terms: a scene that is mostly English words (with everyday Hindi glue) is natural."""
+    req, h = request(), fixture_hindi()
+    h["scenes"][3].update(narration="Ye artwork David Oluwale ki life aur legacy ko honour karta hai, ek British-Nigerian man.",
+                          narration_tts="ये artwork David Oluwale की life और legacy को honour करता है, एक British-Nigerian man.")
+    h["scenes"][2]["headline"] = "THE BIG REVEAL"
+    h["scenes"][2]["highlight"] = "REVEAL"
+    assert script_qc.validate(req, h) == []
+
+
+def test_roman_hinglish_headlines_and_labels_are_accepted():
+    req, h = request(), fixture_hindi()
+    h["scenes"][0].update(headline="Aapko pata tha?", highlight="pata")
+    h["scenes"][9].update(headline="Leeds ka Secret", highlight="Secret")
+    assert script_qc.validate(req, h) == []
 
 
 def test_length_rule_accepts_what_the_fastest_natural_voice_rate_fits():
@@ -165,8 +198,9 @@ def test_length_rule_accepts_what_the_fastest_natural_voice_rate_fits():
 
     def words(n):
         h = fixture_hindi()
-        base = sum(len(sc["narration_hi"].split()) for sc in h["scenes"])
-        h["scenes"][8]["narration_hi"] += " " + " ".join(["यह"] * (n - base))
+        base = sum(len(sc["narration_tts"].split()) for sc in h["scenes"])
+        _both(h, 8, lambda t: t + " " + " ".join(["hai"] * (n - base)) if "Ye" in t or "ये" in t else t)
+        h["scenes"][8]["narration_tts"] = h["scenes"][8]["narration_tts"].replace(" hai", " है")
         return h
     assert not any("estimated spoken length" in p for p in script_qc.validate(req, words(128)))
     assert any("estimated spoken length" in p for p in script_qc.validate(req, words(134)))
@@ -178,7 +212,8 @@ def test_roman_numerals_may_become_digits_but_lone_i_never_counts():
     req = request()
     req["scenes"][0]["narration"] += " It binds class II receptors."
     h = fixture_hindi()
-    h["scenes"][0]["narration_hi"] += " यह क्लास 2 रिसेप्टर से जुड़ता है।"
+    h["scenes"][0]["narration"] += " Ye class 2 receptors se judta hai."
+    h["scenes"][0]["narration_tts"] += " ये class 2 receptors से जुड़ता है।"
     assert not any("not in the English" in p for p in script_qc.validate(req, h))
 
 
@@ -186,9 +221,10 @@ def test_length_feedback_names_the_scenes_over_their_ceiling():
     req = request()
     assert all(s["max_words"] >= s["target_words"] for s in req["scenes"])
     h = fixture_hindi()
-    h["scenes"][8]["narration_hi"] += " " + " ".join(["यह"] * 40)
+    h["scenes"][8]["narration"] += " " + " ".join(["hai"] * 40)
+    h["scenes"][8]["narration_tts"] += " " + " ".join(["है"] * 40)
     msg = [p for p in script_qc.validate(req, h) if "estimated spoken length" in p][0]
-    assert "shorten:" in msg and "scene_09 has" in msg
+    assert "shorten: scene_09 has" in msg                                  # the worst scene first
     assert "NEVER exceed max_words" in translator.build_prompt(req)
 
 
@@ -217,11 +253,13 @@ def test_voice_generates_per_scene_with_pronunciation(tmp_path):
     ffmpeg, _ = _ffmpeg()
     edge, calls = _tone_edge(ffmpeg)
     h = fixture_hindi()
-    h["terms"].append({"en": "Hibiscus Rising", "hi": "हिबिस्कस राइज़िंग", "spoken": "हिबिस्कस राइजिंग"})
+    h["terms"].append({"en": "Hibiscus Rising", "spoken": "हिबिस्कस राइज़िंग"})
     res = voice.synthesize(h["scenes"], h["terms"], tmp_path, ffmpeg=ffmpeg, edge=edge, sapi_list=lambda: [])
     assert res["provider"] == "edge-tts" and res["voice"] == "hi-IN-SwaraNeural" and len(res["timings"]) == 10
-    spoken = [c[2] for c in calls if "हिबिस्कस" in c[2]]
-    assert spoken and all("हिबिस्कस राइजिंग" in t and "राइज़िंग" not in t for t in spoken)   # spoken form used
+    texts = [c[2] for c in calls]
+    assert texts[0].startswith("आपको लगता होगा English cities")       # the voice form (code-mixed), never the Roman one
+    assert any("हिबिस्कस राइज़िंग" in t for t in texts) and not any("Hibiscus Rising" in t for t in texts)
+    assert any("यिंका शोनीबारे" in t for t in texts)                      # name pronunciation applied
     assert Path(res["voice_path"]).is_file() and res["total_sec"] <= voice.MAX_TOTAL_SEC
     assert res["timings"][1]["start"] == pytest.approx(res["timings"][0]["duration"] + voice.SCENE_GAP_SEC, abs=0.01)
 
@@ -277,21 +315,23 @@ def _timings(plan, factor=1.05):
     return out
 
 
-def test_hindi_plan_replaces_all_english_text_and_retimes():
+def test_plan_shows_only_english_or_roman_hinglish_and_retimes():
     en = english_plan()
     hi = hrender.build_hindi_plan(en, fixture_hindi(), _timings(en))
-    assert hi["language"] == "hi" and hi["category"] == "कला और इतिहास"
+    assert hi["language"] == "hi-Latn" and hi["category"] == "Art and History"
+    assert hi["topic"] == "Hibiscus Rising: Leeds ka naya monument"
+    for name, text in hqc.visible_texts(hi):
+        assert not script_qc.DEVANAGARI.search(str(text or "")), (name, text)
     for s in hi["scenes"]:
-        assert script_qc.devanagari_share(s["narration"]) > 0.85 and script_qc.devanagari_share(s["headline"]) > 0.5
-        assert s["highlight"] in s["headline"]
-        assert s["stage_label"] == hrender.STAGE_LABELS_HI[s["stage"]]
-        assert not s["stage_label"] or script_qc.devanagari_share(s["stage_label"]) > 0.5
+        assert not script_qc.DEVANAGARI.search(s["narration"])           # subtitles: Roman Hinglish
+        assert script_qc.DEVANAGARI.search(s["narration_tts"])           # voice form keeps Hindi words in Devanagari
+        assert s["highlight"] in s["headline"] and "stage_label" not in s
         assert all(s["start_sec"] <= c["t"] <= s["end_sec"] for c in s["sfx"])   # SFX moved with the scene
     assert hi["scenes"][1]["start_sec"] == pytest.approx(_timings(en)[1]["start"])
     assert en["scenes"][0]["headline"] == "Hibiscus Rising"                     # English plan untouched
 
 
-def test_package_uses_a_devanagari_font_without_touching_english(tmp_path):
+def test_package_uses_the_unchanged_english_engine_and_english_stage_labels(tmp_path):
     from backend.app.rendering.pop_info.film_builder import ENGINE_JS
     english_js = Path(ENGINE_JS).read_text(encoding="utf-8")
     src = tmp_path / "en_film"
@@ -300,29 +340,34 @@ def test_package_uses_a_devanagari_font_without_touching_english(tmp_path):
     en = english_plan()
     film = hrender.package_film(src, tmp_path / "hi_film", hrender.build_hindi_plan(en, fixture_hindi(), _timings(en)))
     js = (film / "engine.js").read_text(encoding="utf-8")
-    assert '"Nirmala UI"' in js.split("const FONT", 1)[1][:200]
-    # 4.02 acceptance finding: the stage pills come from the plan (Hindi), not the engine's English map
-    assert hrender.HINDI_STAGE_LINE in js and "'the setup'" not in js
-    assert "'the setup'" in english_js
+    assert js == english_js                         # same typography, fonts and English stage pills ("the setup", ...)
+    assert "ESCALATION: 'the twist'" in js and "Nirmala" not in js
     assert Path(ENGINE_JS).read_text(encoding="utf-8") == english_js           # the English engine is unchanged
     assert (film / "assets" / "photo_x.jpg").is_file()                         # licensed assets reused
     page = (film / "index.html").read_text(encoding="utf-8")
-    assert 'lang="hi"' in page and "हिबिस्कस" in page
+    assert 'lang="hi-Latn"' in page and "Leeds ka naya monument" in page
+    plan_text = (film / "plan.json").read_text(encoding="utf-8")
+    shown = json.loads(plan_text)
+    assert not any(script_qc.DEVANAGARI.search(str(t or "")) for _n, t in hqc.visible_texts(shown))
 
 
-def test_devanagari_subtitles_render_in_ffmpeg_without_clipping(tmp_path):
+def test_roman_hinglish_subtitles_render_without_clipping(tmp_path):
     ffmpeg, _ = _ffmpeg()
     en = english_plan()
     plan = hrender.build_hindi_plan(en, fixture_hindi(), _timings(en))
     ass = hrender.write_ass(plan, tmp_path / "subs.ass")
-    assert ass["events"] >= 10 and ass["longest_line_chars"] <= 30
+    text = Path(ass["path"]).read_text(encoding="utf-8-sig")
+    assert ass["events"] >= 10 and ass["longest_line_chars"] <= 36
+    assert "Leeds mein to pehle aisa nahi tha." in text.replace(chr(92) + "N", " ") and not script_qc.DEVANAGARI.search(text)
+    assert f"Style: HI,{hrender.SUBTITLE_FONT}," in text
     check = hrender.render_check_ass(ffmpeg, Path(ass["path"]), plan["scenes"][2]["start_sec"] + 0.5, tmp_path / "f.png")
     assert check["ok"] is True and check["inked_pixels"] > 1500 and check["clipped"] is False
 
 
-def test_hindi_wrap_keeps_words_whole():
-    lines = hrender.wrap_hindi("यह लीड्स की पहली सार्वजनिक कलाकृति है जो शहर की विविधता दिखाती है।", 20)
-    assert all(len(l) <= 26 for l in lines) and " ".join(lines).split() == "यह लीड्स की पहली सार्वजनिक कलाकृति है जो शहर की विविधता दिखाती है।".split()
+def test_subtitle_wrap_keeps_words_whole():
+    t = "Ye Leeds ka pehla public artwork hai jo cultural diversity dikhata hai."
+    lines = hrender.wrap_text(t, 24)
+    assert all(len(l) <= 24 for l in lines) and " ".join(lines).split() == t.split()
 
 
 # -- 5/6. QC --------------------------------------------------------------------------------------------------------
@@ -353,12 +398,29 @@ def test_qc_pass_and_each_failure_is_classified():
     assert _qc(plan, subtitle_check={"ok": False})["classification"] == "TECHNICAL_FAILURE"
     assert _qc(plan, typography_issues=[{"t": 3.0, "message": "text outside safe area"}])["classification"] == "CREATIVE_REJECTION"
     eng = copy.deepcopy(plan)
-    eng["scenes"][0]["headline"] = "Hibiscus Rising"
-    assert any("not in Devanagari" in c for c in _qc(eng)["creative"])
-    pill = copy.deepcopy(plan)
-    pill["scenes"][1]["stage_label"] = "the setup"
-    assert any("stage label" in c for c in _qc(pill)["creative"])
-    assert _qc(plan, script_problems=["numbers missing in Hindi: 1969"])["classification"] == "CREATIVE_REJECTION"
+    eng["scenes"][0]["headline"] = "THE BIG DISCOVERY"                         # English on screen is the default
+    assert _qc(eng)["passed"] is True
+    for where in ("headline", "highlight", "label", "category", "stage", "number", "subtitles"):
+        bad = copy.deepcopy(plan)
+        kw = {}
+        if where == "headline":
+            bad["scenes"][0]["headline"] = "हिबिस्कस राइज़िंग"
+        elif where == "highlight":
+            bad["scenes"][0]["highlight"] = "राइज़िंग"
+        elif where == "label":
+            bad["scenes"][0]["labels"] = ["कला"]
+        elif where == "category":
+            bad["category"] = "कला और इतिहास"
+        elif where == "stage":
+            bad["scenes"][1]["stage_label"] = "शुरुआत"
+        elif where == "number":
+            bad["scenes"][0]["numbers"] = [{"text": "28", "unit": "अमीनो"}]
+        else:
+            kw["subtitles_text"] = "Dialogue: 0,0:00:01.00,0:00:02.00,HI,,0,0,0,,लीड्स में"
+        res = _qc(bad, **kw)
+        assert res["classification"] == "CREATIVE_REJECTION" and any("Devanagari in video-visible text" in c
+                                                                      for c in res["creative"]), where
+    assert _qc(plan, script_problems=["numbers missing in the Hinglish: 1969"])["classification"] == "CREATIVE_REJECTION"
 
 
 # -- 7. pipeline: mapping, duplicates, retries, channel isolation, publishing safeguards --------------------------------

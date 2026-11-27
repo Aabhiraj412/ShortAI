@@ -1,12 +1,12 @@
-"""Stage 4.02: Hindi film from the English film's final plan, rendered by the existing Lemo-Opuscar / Pop Info path.
+"""Stage 4.02: the Hinglish film from the English film's final plan, rendered by the existing Lemo-Opuscar / Pop Info
+path. Language policy 2026-11-27: every visible text is English or Roman-script Hinglish.
 
-* Reused from the English job: the scene structure, templates, procedural art, licensed photos and footage
-  frames (``pop_info_film/assets``), the transitions and the sound design.
-* Never reused: any English text. Narration, headline, highlight, labels, units and the category come from the
-  Hindi adaptation; scenes are retimed to the Hindi voice; SFX cues move with their scene.
-* Devanagari: the canvas is shaped by Chromium (HarfBuzz), so conjuncts and vowel signs render correctly once the
-  font stack has a Devanagari face. The Hindi copy of engine.js puts the system "Nirmala UI" first (English is
-  untouched). Subtitles are an ASS file rendered by libass + HarfBuzz (validated by rendering one frame).
+* Reused from the English job: the scene structure, templates, procedural art, licensed photos and footage frames
+  (``pop_info_film/assets``), the transitions, the sound design, and the English engine UNCHANGED (its typography,
+  fonts and English stage pills such as "THE SETUP" / "THE TWIST").
+* From the adaptation: headline, highlight, labels, units, category and title (English or Roman Hinglish); scenes are
+  retimed to the Hindi voice; SFX cues move with their scene. The narration in the plan is the Roman-script Hinglish.
+* Subtitles: an ASS file in Roman-script Hinglish (the spoken words), rendered by libass and checked on one frame.
 """
 from __future__ import annotations
 
@@ -19,18 +19,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-HINDI_FONT = "Nirmala UI"
-FONT_LINE = re.compile(r"const FONT = \{[^}]*\};")
-HINDI_FONT_LINE = ("const FONT = { head: '\"Nirmala UI\", \"Fredoka\", \"Segoe UI\", sans-serif', "
-                   "num: '\"Lilita One\", \"Nirmala UI\", \"Fredoka\", Impact, sans-serif' };")
+SUBTITLE_FONT = "Segoe UI"         # Windows system font (Latin); the subtitles are Roman-script Hinglish
 OUTRO_SEC = 0.6
-
-
-# Hindi stage pills (the English engine shows "the setup", "the twist", "the reveal", "so..."; HOOK has none).
-STAGE_LABELS_HI = {"HOOK": "", "CONTEXT": "शुरुआत", "ESCALATION": "ट्विस्ट", "REVELATION": "असली बात", "PAYOFF": "तो..."}
-STAGE_LINE = ("stage_label: s.stage === 'HOOK' ? '' : ({ CONTEXT: 'the setup', ESCALATION: 'the twist', "
-              "REVELATION: 'the reveal', PAYOFF: 'so...' })[s.stage] || ''")
-HINDI_STAGE_LINE = "stage_label: (typeof s.stage_label === 'string' ? s.stage_label : '')"
 
 
 def build_hindi_plan(english_plan: Dict[str, Any], hindi: Dict[str, Any], timings: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -43,26 +33,25 @@ def build_hindi_plan(english_plan: Dict[str, Any], hindi: Dict[str, Any], timing
         old_start = float(sc["start_sec"])
         new_start = float(t["start"])
         new_end = round(new_start + float(t["duration"]) + 0.12, 3)
-        sc["narration"] = hi["narration_hi"]
-        sc["headline"] = hi["headline_hi"]
-        sc["highlight"] = hi.get("highlight_hi") or ""
-        labels = list(hi.get("labels_hi") or [])
+        sc["narration"] = hi["narration"]                       # Roman-script Hinglish (subtitles)
+        sc["narration_tts"] = hi.get("narration_tts") or hi["narration"]
+        sc["headline"] = hi["headline"]
+        sc["highlight"] = hi.get("highlight") or ""
+        labels = list(hi.get("labels") or [])
         if labels and len(labels) == len(sc.get("labels") or []):
             sc["labels"] = labels
-        units = list(hi.get("units_hi") or [])
+        units = list(hi.get("units") or [])
         for n, num in enumerate([x for x in (sc.get("numbers") or []) if x.get("unit")]):
             if n < len(units) and units[n]:
                 num["unit"] = units[n]
-        # The engine derives the stage pill from the stage with an English map; the Hindi film's engine copy is
-        # patched to use this plan value instead (package_film), so every scene carries its Hindi label.
-        sc["stage_label"] = STAGE_LABELS_HI.get(str(sc.get("stage") or "").upper(), "")
+        sc.pop("stage_label", None)     # the unchanged engine draws its English stage pills ("THE SETUP", ...)
         for cue in sc.get("sfx") or []:
             cue["t"] = round(min(new_end, max(new_start, float(cue["t"]) - old_start + new_start)), 3)
         sc["start_sec"], sc["end_sec"] = round(new_start, 3), new_end
     plan["duration_sec"] = round(float(plan["scenes"][-1]["end_sec"]) + OUTRO_SEC, 3)
-    plan["category"] = hindi.get("category_hi") or plan.get("category")
-    plan["topic"] = hindi.get("title_hi") or plan.get("topic")
-    plan["language"] = "hi"
+    plan["category"] = hindi.get("category") or plan.get("category")
+    plan["topic"] = hindi.get("title") or plan.get("topic")
+    plan["language"] = "hi-Latn"       # Hinglish in Roman script on screen
     plan["localized_from"] = {"job_id": english_plan.get("job_id"), "engine_revision": english_plan.get("engine_revision")}
     return plan
 
@@ -77,21 +66,12 @@ def package_film(english_film_dir: Path, out_dir: Path, plan: Dict[str, Any], *,
     src_fonts = Path(english_film_dir) / "fonts"
     if src_fonts.is_dir() and not (film / "fonts").exists():
         shutil.copytree(src_fonts, film / "fonts")
-    js = Path(ENGINE_JS).read_text(encoding="utf-8")
-    if not FONT_LINE.search(js):
-        raise RuntimeError("engine.js font table not found; cannot set the Devanagari font")
-    js = FONT_LINE.sub(lambda _m: HINDI_FONT_LINE, js, count=1)
-    if STAGE_LINE not in js:
-        # Found in the 4.02 acceptance run: the engine draws English stage pills from its own map. If that line
-        # changes, fail loudly instead of rendering English text in a Hindi Short.
-        raise RuntimeError("engine.js stage-label line not found; cannot localize the stage pills")
-    js = js.replace(STAGE_LINE, HINDI_STAGE_LINE, 1)
-    (film / "engine.js").write_text(js, encoding="utf-8")
+    shutil.copyfile(ENGINE_JS, film / "engine.js")       # the English engine, unchanged (typography, pills)
     shutil.copyfile(ENVIRONMENTS_JS, film / "environments.js")
     (film / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     page = PAGE.format(title=html.escape(str(plan.get("topic") or "")), w=size[0], h=size[1],
                        plan=json.dumps(plan, ensure_ascii=False).replace("</", "<\\/"))
-    page = page.replace('<html>', '<html lang="hi">', 1)
+    page = page.replace('<html>', '<html lang="hi-Latn">', 1)
     (film / "index.html").write_text(page, encoding="utf-8")
     return film
 
@@ -102,7 +82,7 @@ def _ass_time(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def wrap_hindi(text: str, max_chars: int = 26) -> List[str]:
+def wrap_text(text: str, max_chars: int = 32) -> List[str]:
     lines, cur = [], ""
     for w in text.split():
         if cur and len(cur) + 1 + len(w) > max_chars:
@@ -116,10 +96,10 @@ def wrap_hindi(text: str, max_chars: int = 26) -> List[str]:
 
 
 def write_ass(plan: Dict[str, Any], path: Path) -> Dict[str, Any]:
-    """Hindi subtitle file (one event per scene, at most two lines on screen, wrapped on word boundaries)."""
+    """Roman-script Hinglish subtitles (one event per scene, at most two lines on screen, wrapped on words)."""
     events, longest = [], 0
     for sc in plan["scenes"]:
-        lines = wrap_hindi(sc["narration"])
+        lines = wrap_text(sc["narration"])
         longest = max(longest, max((len(l) for l in lines), default=0))
         chunks = [lines[i:i + 2] for i in range(0, len(lines), 2)] or [[""]]
         span = (float(sc["end_sec"]) - float(sc["start_sec"])) / len(chunks)
@@ -131,7 +111,7 @@ def write_ass(plan: Dict[str, Any], path: Path) -> Dict[str, Any]:
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
             "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
             "MarginR, MarginV, Encoding\n"
-            f"Style: HI,{HINDI_FONT},58,&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,90,90,"
+            f"Style: HI,{SUBTITLE_FONT},58,&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,90,90,"
             "260,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
     path.write_text(head + "\n".join(events) + "\n", encoding="utf-8-sig")
     return {"path": str(path), "events": len(events), "longest_line_chars": longest}

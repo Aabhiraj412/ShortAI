@@ -113,7 +113,8 @@ def synthesize(scenes: Sequence[Dict[str, Any]], terms: Sequence[Dict[str, Any]]
             try:
                 clips = []
                 for sc in scenes:
-                    spoken = apply_pronunciation(sc["narration_hi"], terms)
+                    # the voice form: Hindi words in Devanagari, English words in Latin (never shown on screen)
+                    spoken = apply_pronunciation(sc.get("narration_tts") or sc["narration"], terms)
                     base = out_dir / f"{sc['scene_id']}_{voice}_{rate.replace('%', 'p').replace('+', '')}"
                     wav = base.with_suffix(".wav")
                     if not wav.is_file():

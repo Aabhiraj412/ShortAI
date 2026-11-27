@@ -258,8 +258,8 @@ class HindiLocalizer:
                                             "human edit or a shorter source") from exc
                 limit = voice.MAX_TOTAL_SEC - LENGTH_MARGIN_SEC
                 scale = float(doc.get("scale") or 1.0) * limit / exc.seconds
-                words = sum(len(s.get("narration_hi", "").split()) for s in doc["hindi"]["scenes"])
-                feedback = [f"MEASURED: your previous Hindi narration ({words} words) takes {exc.seconds:.1f} s to speak "
+                words = sum(len(str(s.get("narration_tts") or "").split()) for s in doc["hindi"]["scenes"])
+                feedback = [f"MEASURED: your previous Hinglish narration ({words} words) takes {exc.seconds:.1f} s to speak "
                             f"even at the fastest natural voice rate; it must take at most {limit:.0f} s. Write about "
                             f"{int(words * limit / exc.seconds)} words in total, at most max_words per scene: shorter, "
                             "simpler sentences with the same facts, numbers and names."]
@@ -311,7 +311,9 @@ class HindiLocalizer:
         return qc.evaluate(mp4=arts["final_mp4"], plan=plan, ffmpeg=self.ffmpeg, ffprobe=self.ffprobe,
                            script_problems=script_qc.validate(doc["request"], doc["hindi"]),
                            subtitle_check=arts.get("subtitle_check"), typography_issues=typo,
-                           voice_total_sec=vmeta.get("total_sec"))
+                           voice_total_sec=vmeta.get("total_sec"),
+                           subtitles_text=(Path(arts["subtitles_hi"]).read_text(encoding="utf-8-sig")
+                                           if arts.get("subtitles_hi") and Path(arts["subtitles_hi"]).is_file() else None))
 
 
 class CreativeRejection(RuntimeError):

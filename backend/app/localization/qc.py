@@ -1,8 +1,9 @@
-"""Stage 4.02: Hindi-specific quality control of a localized Short.
+"""Stage 4.02: quality control of a Hinglish-localized Short (language policy 2026-11-27).
 
 Two kinds of failure are kept apart:
 * ``creative`` (the content is not good enough; a retry of the same inputs does not fix it): script rule problems,
-  duration outside the Shorts window, on-screen text that is not Devanagari, clipped / overlapping text.
+  duration outside the Shorts window, Devanagari in any video-visible text (headline, highlight, labels, units,
+  category, title, stage label, subtitles: visible text is English or Roman-script Hinglish), clipped text.
 * ``technical`` (infrastructure / rendering; a retry may fix it): encoding, resolution, A/V sync, decode errors,
   missing or silent audio, subtitles that libass could not render.
 
@@ -15,7 +16,7 @@ import re
 import subprocess
 from typing import Any, Dict, List, Optional, Sequence
 
-from backend.app.localization.script_qc import devanagari_share
+from backend.app.localization.script_qc import DEVANAGARI
 
 MIN_SEC, MAX_SEC = 30.0, 58.0
 MAX_AV_DRIFT = 0.30
@@ -42,9 +43,25 @@ def mean_volume(ffmpeg: str, mp4: str) -> float:
     return float(m.group(1)) if m else -99.0
 
 
+def visible_texts(plan: Dict[str, Any]):
+    """Every text the film engine can draw: title, category, and per scene headline, highlight, labels, number units
+    and a stage label (the narration is not drawn by the engine; it is the subtitle text, checked separately)."""
+    yield "title", plan.get("topic")
+    yield "category", plan.get("category")
+    for s in plan.get("scenes") or []:
+        sid = s.get("scene_id")
+        yield f"{sid} headline", s.get("headline")
+        yield f"{sid} highlight", s.get("highlight")
+        yield f"{sid} stage label", s.get("stage_label")
+        for lab in s.get("labels") or []:
+            yield f"{sid} label", lab
+        for n in s.get("numbers") or []:
+            yield f"{sid} number", f"{n.get('text') or ''} {n.get('unit') or ''}"
+
+
 def evaluate(*, mp4: str, plan: Dict[str, Any], ffmpeg: str, ffprobe: str, script_problems: Sequence[str] = (),
              subtitle_check: Optional[Dict[str, Any]] = None, typography_issues: Sequence[Dict[str, Any]] = (),
-             voice_total_sec: Optional[float] = None,
+             voice_total_sec: Optional[float] = None, subtitles_text: Optional[str] = None,
              probe_fn=probe, decode_fn=decode_errors, volume_fn=mean_volume) -> Dict[str, Any]:
     creative: List[str] = [f"script: {p}" for p in script_problems]
     technical: List[str] = []
@@ -81,14 +98,12 @@ def evaluate(*, mp4: str, plan: Dict[str, Any], ffmpeg: str, ffprobe: str, scrip
     err = decode_fn(ffmpeg, mp4)
     if err:
         technical.append(f"decode errors: {err[:160]}")
-    latin_heads = [s["scene_id"] for s in plan.get("scenes") or []
-                   if s.get("headline") and devanagari_share(s["headline"]) < 0.5]
-    latin_heads += [f"{s.get('scene_id')} stage label" for s in plan.get("scenes") or []
-                    if s.get("stage_label") and devanagari_share(s["stage_label"]) < 0.5]
-    latin_heads += [f"{s.get('scene_id')} label" for s in plan.get("scenes") or []
-                    for lab in (s.get("labels") or []) if lab and devanagari_share(str(lab)) < 0.5]
-    if latin_heads:
-        creative.append(f"on-screen headline not in Devanagari: {', '.join(latin_heads)}")
+    found = [f"{w}: {str(t)[:30]}" for w, t in visible_texts(plan) if t and DEVANAGARI.search(str(t))]
+    if subtitles_text and DEVANAGARI.search(subtitles_text):
+        found.append("subtitles")
+    if found:
+        creative.append("Devanagari in video-visible text (must be English or Roman-script Hinglish): "
+                        + "; ".join(found[:6]))
     for issue in typography_issues:
         creative.append(f"on-screen text at {issue.get('t')}s: {issue.get('message')}")
     if subtitle_check is not None and not subtitle_check.get("ok"):
