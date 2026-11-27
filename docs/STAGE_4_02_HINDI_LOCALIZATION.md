@@ -1,6 +1,6 @@
 # Stage 4.02: Hindi localization and production pipeline
 
-**Status:** implemented and tested. Results, deployment and blockers: §7–§9.
+**Status:** **accepted** on 2026-11-27. A real English Short (cycle_12) went through real translation, voice, rendering in the shared slot and Hindi QC, producing a valid Hindi MP4 that also passed visual inspection (§7.2). Deployment and blockers: §9.
 **Publishing:** disabled. A Hindi video is never published automatically. It becomes *eligible* only when the Hindi channel is ACTIVE, its identity is verified (4.01), Hindi publishing is explicitly authorized, and the video passed Hindi QC. Even then, no code path publishes it: Hindi publishing is a separate milestone.
 
 ## 1. Architecture
@@ -72,7 +72,7 @@ Output files go in `media/localizations/hi/<english job>/`. They are separate fr
 
 ## 6. Tests
 
-`backend/tests/test_stage_402_hindi_localization.py` (30 tests) covers:
+`backend/tests/test_stage_402_hindi_localization.py` (37 tests) covers:
 - translation (success, feedback retry, rejection, provider unavailable, malformed JSON, model separation);
 - each script-QC rule;
 - voice (pronunciation, voice fallback, unavailable, rate escalation, silent clip);
@@ -110,9 +110,36 @@ The existing 3.37, 4.01 and remediation tests were updated for the new queue and
 2. A second attempt (11:12) found that the coordinator read Shorts demand from its own database but the schedule from the process database. Admission correctly **failed closed** ("schedule unreadable").
 3. **Fix:** the coordinator now reads the active profile from its own database, read-only, and admission fails closed whenever the next Shorts start is unknown. Regression tests cover both.
 
-### 7.2 Real acceptance run
+### 7.2 Real acceptance run (2026-11-27, 13:32–16:40 IST): accepted
 
-TO FILL (Gemini free-tier quota resets around 13:30 IST).
+**Source:** `cycle_12_20261127_1100`, "Vasoactive intestinal peptide". A completed English Short that was not the fixture: a dense science text with 119 English words in 56.4 s.
+
+**Path:** the real Gemini translator, then the real edge-tts voice, then a render inside the production render slot (admitted by the production coordinator against the live 24-cycle schedule, read-only), then real Hindi QC. Scratch database and media only; the English files were only read.
+
+| Attempt (IST) | Outcome | What it found and the fix |
+|---|---|---|
+| 13:32 | Script QC rejection (128 words, estimated 61 s) | The estimate assumed the slowest voice rate, although +18 % speaks 128 words in about 56.6 s. **Fix (`2afb167`):** the upper bound uses the fastest natural rate; the voice still measures the real audio. |
+| 13:34 | Rejection: "invented number 2"; 137 words | The English said "class II"; the Hindi correctly wrote "क्लास 2". **Fix:** Roman numerals II–XII are allowed as digits. Each scene now has a `max_words` ceiling, and the feedback names the scenes over it. |
+| 13:40, 14:26, 14:30, 15:18 | WAITING: every Hindi model at 429 (free-tier rate limit) | Correct infrastructure handling: waited and retried; nothing failed or was lost. |
+| 14:18 | Rendered, then **Hindi QC rejected the MP4 at 59.27 s** | The voice was 58.55 s even at +25 % (over its own 57 s limit) and was still passed on to the renderer, wasting a render. Word counts underestimate technical Hindi (long transliterated terms speak at about 2.0 words/s even at +25 %). **Fix (`8544aa6`):** the voice never returns over-length audio (`ScriptTooLong`). The voice step re-translates with the **measured** duration as feedback, at most 2 times, archiving each attempt; after that it is a creative rejection. |
+| 15:36 | The automatic shortening ran; its re-translation was rejected: "name not preserved: II" | A Roman numeral was treated as a proper name. **Fix (`75c68c4`)**. |
+| **16:27** | **QC_PASSED** | Gemini 3.7-flash returned 429, so 3.5-flash translated: 116 words. Swara at +25 %: 56.55 s. Render 180 s; QC 16 s. |
+| — | Visual inspection of the 16:27 frames | **English stage pills ("THE SETUP", "THE TWIST")**: the engine derives them from its own English map and ignored the plan, so QC could not see them. **Fix (`75c68c4`):** the Hindi film's engine copy takes the plan's Hindi `stage_label` (packaging fails loudly if that engine line changes), and QC checks stage labels and labels for Devanagari. |
+| **16:36** | **Re-render QC_PASSED** (the accepted output) | Explicit `reopen(from_step="render")`. The 16:27 output is archived in `attempt_5_20261127T110653/`, not deleted. The accepted translation and voice were reused (0 s). The coordinator admitted it ("ends before the next Shorts cycle"): render 191 s, finished about 16:40, before the 17:00 cycle. |
+
+**Final MP4** `hindi_cycle_12_20261127_1100.mp4` (14.8 MB), checked independently with ffprobe and ffmpeg:
+- Video: h264 High, yuv420p, 1080×1920, 30/1 fps, 1718 frames, 57.267 s.
+- Audio: AAC LC, 48 kHz stereo, 57.259 s, so **A/V drift is 0.008 s**.
+- No decode errors. Mean −17.0 dB, peak −4.7 dB, integrated −14.2 LUFS.
+- Hindi QC: PASSED with no creative or technical findings.
+
+**Visual inspection** (16 frames across every scene):
+- The category chip (रोजमर्रा का विज्ञान), every headline and highlight (वैसोएक्टिव इंटेस्टाइनल पेप्टाइड, 28 अमीनो एसिड, क्लास 2 जी प्रोटीन, दिमाग का हाइपोथैलेमस, …) and the diagram labels (उत्तेजित करता है, संकुचनशीलता, वैसोडिलेशन) are in Devanagari.
+- The stage pills are शुरुआत and ट्विस्ट; the diagram, card and ending templates draw no pill.
+- The number callout counts up to 28.
+- Conjuncts shape correctly. **No English text appears anywhere.**
+
+**A network event the same day:** at 17:08:14–17:08:24 IST, DNS resolution failed for about 10 s (`getaddrinfo failed`, Errno 11001, reported by Node clients as ENOTFOUND). The English 17:00 cycle's first narration attempt failed on edge-tts. The scheduler's existing retry policy recovered it (COMPLETED 17:18, uploaded privately as usual). DNS resolves normally afterwards. This was a transient local network fault, not an application or provider-configuration fault, and nothing was changed.
 
 ## 8. Resource use and cost
 
@@ -125,6 +152,13 @@ TO FILL (Gemini free-tier quota resets around 13:30 IST).
 | QC (decode, volumedetect, layout probe) | mean 80 %, max 86 % | about 3.7 GB |
 
 The coordinator's `heavy_min_ram_available_gb` (3.5 GB) is checked **at admission**. During the render, available RAM fell to 2.38 GB because the render itself uses about 1.7 GB. That is expected and safe while only one heavy job runs at a time (3.37 heavy concurrency 1). It is also why heavy concurrency must not be raised without the concurrent-render benchmark. The 12-minute HEAVY estimate is conservative: the render took about 3 minutes.
+
+**Acceptance-run timings:**
+- Translation: 28–138 s per call chain (Gemini latency varies; a 429 moves on to the next model).
+- Voice: 53–62 s, or about 240 s with one automatic shortening.
+- Render: 180–191 s inside the slot. Hindi QC: 16–17 s.
+
+The CPU and RAM profile of a render is the dry-run measurement above: render CPU mean 63 % / max 99 %, render RAM about 1.7 GB. The acceptance renders use the same engine and film size; they were not sampled again.
 
 **Cost: zero.**
 - Gemini free tier, with the Hindi models separate from the English chain.
@@ -139,6 +173,9 @@ The coordinator's `heavy_min_ram_available_gb` (3.5 GB) is checked **at admissio
 | Hindi publishing | The Hindi channel is PENDING_VERIFICATION. No Hindi OAuth exists (`backend/channel_tokens/hi/token.json` absent), and `publishing_authorized` is not set. Publishing itself is a separate milestone; this stage adds no publishing path. | Operator: connect the Hindi channel's own account (Channels card), then authorize the milestone |
 | Translation availability | Gemini free tier only. On days when the English pipeline exhausts its quota, the Hindi models (3.7-flash, 3.5-flash) can also be at 429 and Gemma at 503. The localization then waits and retries (bounded); it never falls back to a paid service. | Automatic; an offline translator (for example IndicTrans2) would need a large download, which is an operator decision |
 | Offline voice | None installed: SAPI has English voices only, and there is no Piper or Coqui. edge-tts needs the network. | Operator decision: Windows Hindi speech pack or a Piper Hindi voice |
+| Dense technical sources | Long transliterated terms speak slowly, so a word estimate cannot guarantee the length. The voice step measures it and shortens automatically (at most 2 times); a source that still does not fit is a creative rejection, shown once in Needs your attention. | Automatic; rare cases are a human edit |
 | Automatic Hindi enqueue | Localizations are enqueued by the operator, one English job at a time. No automatic "localize every completed Short" rule was added. | Future decision |
 
-**Full suite at 4.02:** 1981 passed, 4 failed (the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two `test_youtube_branding`), 174 skipped. Baseline before 4.02: 1948 / 4 / 174.
+**Full suite** (final, at `75c68c4` with the operator-dependency reduction): **2005 passed, 4 failed (the known baseline: `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two `test_youtube_branding`), 174 skipped.** The baseline before 4.02 was 1948 / 4 / 174. Earlier run at `1a11ab7`: 1981 / 4 / 174.
+
+**Commits:** `1a11ab7` (stage), `33b392c` (queue display), `2afb167`, `8544aa6` and `75c68c4` (acceptance-run fixes). Deployment status is in the handover §3.

@@ -163,7 +163,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3 | **QC duration failures** | Duration 49.2 s, outside the 50–58 s window; seen after rendering. |
 | 4 | **High recovery-window expiry rate** | 40 of 98 jobs; YouTube daily quota exhaustion also delays publishing. |
 | 5 | **Monitor false unhealthy** | **Fixed in 3.32H** (2 s timeout on a ~2 s aggregate endpoint). The monitor now uses liveness/readiness probes and persists every decision. |
-| 6 | **Known test failures (baseline, 2026-11-27: 4; full suite at 4.02: 1981 passed, 4 failed, 174 skipped)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
+| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite at `75c68c4`: 2005 passed, 4 failed, 174 skipped)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
 | 7 | **DNS rebinding** | Could expose the CSRF token through a read (pre-existing; writes still need an allow-listed Origin). A Host-header allow-list is the suggested fix. |
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
@@ -224,7 +224,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 **Operator-dependency reduction** is implemented (`docs/OPERATOR_DEPENDENCY_REDUCTION.md`). The remaining operator items are genuine: creative decisions, the Hindi channel connection, optional Pexels key, Autopilot enablement (optional) and Community API access (external).
 
-**Stage 4.02 (Hindi localization)** is implemented. Operator actions: use the Queue tab → *Hindi localization* card to localize completed Shorts. Hindi publishing is a separate milestone; it needs the Hindi channel verified first (Channels card). See `docs/STAGE_4_02_HINDI_LOCALIZATION.md` §9.
+**Stage 4.02 (Hindi localization)** is **accepted** (2026-11-27): a real English Short went through real translation, voice, rendering in the shared slot and Hindi QC, and the MP4 passed visual inspection (`docs/STAGE_4_02_HINDI_LOCALIZATION.md` §7.2). Operator actions: use the Queue tab → *Hindi localization* card to localize completed Shorts. Hindi publishing is a separate milestone; it needs the Hindi channel verified first (Channels card). See `docs/STAGE_4_02_HINDI_LOCALIZATION.md` §9.
 
 **Remediation:** deploy the remediation commit once its full suite matches the baseline (same procedure, :15–:50 IST, no active job, new backup). Then:
 - verify `/api/operations/attention` and the control state RESTRICTED;
