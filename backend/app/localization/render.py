@@ -26,6 +26,13 @@ HINDI_FONT_LINE = ("const FONT = { head: '\"Nirmala UI\", \"Fredoka\", \"Segoe U
 OUTRO_SEC = 0.6
 
 
+# Hindi stage pills (the English engine shows "the setup", "the twist", "the reveal", "so..."; HOOK has none).
+STAGE_LABELS_HI = {"HOOK": "", "CONTEXT": "शुरुआत", "ESCALATION": "ट्विस्ट", "REVELATION": "असली बात", "PAYOFF": "तो..."}
+STAGE_LINE = ("stage_label: s.stage === 'HOOK' ? '' : ({ CONTEXT: 'the setup', ESCALATION: 'the twist', "
+              "REVELATION: 'the reveal', PAYOFF: 'so...' })[s.stage] || ''")
+HINDI_STAGE_LINE = "stage_label: (typeof s.stage_label === 'string' ? s.stage_label : '')"
+
+
 def build_hindi_plan(english_plan: Dict[str, Any], hindi: Dict[str, Any], timings: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     plan = copy.deepcopy(english_plan)
     by_id = {s["scene_id"]: s for s in hindi["scenes"]}
@@ -46,9 +53,9 @@ def build_hindi_plan(english_plan: Dict[str, Any], hindi: Dict[str, Any], timing
         for n, num in enumerate([x for x in (sc.get("numbers") or []) if x.get("unit")]):
             if n < len(units) and units[n]:
                 num["unit"] = units[n]
-        if sc.get("stage_label"):
-            sc["stage_label"] = {"HOOK": "सवाल", "CONTEXT": "समझिए", "ESCALATION": "और भी", "REVELATION": "असली बात",
-                                 "PAYOFF": "नतीजा"}.get(str(sc.get("stage") or "").upper(), sc["stage_label"])
+        # The engine derives the stage pill from the stage with an English map; the Hindi film's engine copy is
+        # patched to use this plan value instead (package_film), so every scene carries its Hindi label.
+        sc["stage_label"] = STAGE_LABELS_HI.get(str(sc.get("stage") or "").upper(), "")
         for cue in sc.get("sfx") or []:
             cue["t"] = round(min(new_end, max(new_start, float(cue["t"]) - old_start + new_start)), 3)
         sc["start_sec"], sc["end_sec"] = round(new_start, 3), new_end
@@ -73,7 +80,13 @@ def package_film(english_film_dir: Path, out_dir: Path, plan: Dict[str, Any], *,
     js = Path(ENGINE_JS).read_text(encoding="utf-8")
     if not FONT_LINE.search(js):
         raise RuntimeError("engine.js font table not found; cannot set the Devanagari font")
-    (film / "engine.js").write_text(FONT_LINE.sub(lambda _m: HINDI_FONT_LINE, js, count=1), encoding="utf-8")
+    js = FONT_LINE.sub(lambda _m: HINDI_FONT_LINE, js, count=1)
+    if STAGE_LINE not in js:
+        # Found in the 4.02 acceptance run: the engine draws English stage pills from its own map. If that line
+        # changes, fail loudly instead of rendering English text in a Hindi Short.
+        raise RuntimeError("engine.js stage-label line not found; cannot localize the stage pills")
+    js = js.replace(STAGE_LINE, HINDI_STAGE_LINE, 1)
+    (film / "engine.js").write_text(js, encoding="utf-8")
     shutil.copyfile(ENVIRONMENTS_JS, film / "environments.js")
     (film / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     page = PAGE.format(title=html.escape(str(plan.get("topic") or "")), w=size[0], h=size[1],

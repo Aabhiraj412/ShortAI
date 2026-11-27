@@ -62,7 +62,7 @@ def proper_names(text: str) -> Set[str]:
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", sent)
         for i, w in enumerate(words):
             core = w.strip("'-")
-            if len(core) < 2 or core in STOP_CAPS:
+            if len(core) < 2 or core in STOP_CAPS or core in ROMAN:       # "class II" is a number, not a name
                 continue
             if core.isupper() and len(core) >= 2:
                 names.add(core)

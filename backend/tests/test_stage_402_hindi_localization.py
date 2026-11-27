@@ -174,6 +174,7 @@ def test_length_rule_accepts_what_the_fastest_natural_voice_rate_fits():
 
 def test_roman_numerals_may_become_digits_but_lone_i_never_counts():
     assert script_qc.roman_numbers("receptors of class II and phase IV; I think") == {"2", "4"}
+    assert "II" not in script_qc.proper_names("VIP binds class II receptors in Leeds.")      # 4.02 acceptance finding
     req = request()
     req["scenes"][0]["narration"] += " It binds class II receptors."
     h = fixture_hindi()
@@ -283,6 +284,8 @@ def test_hindi_plan_replaces_all_english_text_and_retimes():
     for s in hi["scenes"]:
         assert script_qc.devanagari_share(s["narration"]) > 0.85 and script_qc.devanagari_share(s["headline"]) > 0.5
         assert s["highlight"] in s["headline"]
+        assert s["stage_label"] == hrender.STAGE_LABELS_HI[s["stage"]]
+        assert not s["stage_label"] or script_qc.devanagari_share(s["stage_label"]) > 0.5
         assert all(s["start_sec"] <= c["t"] <= s["end_sec"] for c in s["sfx"])   # SFX moved with the scene
     assert hi["scenes"][1]["start_sec"] == pytest.approx(_timings(en)[1]["start"])
     assert en["scenes"][0]["headline"] == "Hibiscus Rising"                     # English plan untouched
@@ -298,6 +301,9 @@ def test_package_uses_a_devanagari_font_without_touching_english(tmp_path):
     film = hrender.package_film(src, tmp_path / "hi_film", hrender.build_hindi_plan(en, fixture_hindi(), _timings(en)))
     js = (film / "engine.js").read_text(encoding="utf-8")
     assert '"Nirmala UI"' in js.split("const FONT", 1)[1][:200]
+    # 4.02 acceptance finding: the stage pills come from the plan (Hindi), not the engine's English map
+    assert hrender.HINDI_STAGE_LINE in js and "'the setup'" not in js
+    assert "'the setup'" in english_js
     assert Path(ENGINE_JS).read_text(encoding="utf-8") == english_js           # the English engine is unchanged
     assert (film / "assets" / "photo_x.jpg").is_file()                         # licensed assets reused
     page = (film / "index.html").read_text(encoding="utf-8")
@@ -349,6 +355,9 @@ def test_qc_pass_and_each_failure_is_classified():
     eng = copy.deepcopy(plan)
     eng["scenes"][0]["headline"] = "Hibiscus Rising"
     assert any("not in Devanagari" in c for c in _qc(eng)["creative"])
+    pill = copy.deepcopy(plan)
+    pill["scenes"][1]["stage_label"] = "the setup"
+    assert any("stage label" in c for c in _qc(pill)["creative"])
     assert _qc(plan, script_problems=["numbers missing in Hindi: 1969"])["classification"] == "CREATIVE_REJECTION"
 
 
@@ -425,6 +434,21 @@ def test_full_run_passes_qc_and_never_publishes(world):
     n = sqlite3.connect(world.db).execute("SELECT COUNT(*) FROM publishing_ledger").fetchone()[0]
     assert n == 0                                                           # nothing entered the publishing queue
     assert Path(row["artifacts"]["script_hi"]).parent != world.media / "productions" / JOB   # stored separately
+
+
+def test_passed_localization_can_be_rerendered_only_explicitly(world):
+    lid = world.loc.plan(JOB)["localization"]["id"]
+    for step in ("translate", "voice", "render", "qc"):
+        world.loc.run_step(lid, step)
+    with pytest.raises(ValueError, match="redo a step explicitly"):
+        world.loc.reopen(lid, actor="op")
+    row = world.loc.reopen(lid, actor="op", from_step="render")
+    assert row["status"] == "PLANNED" and set(row["artifacts"]) == {"script_hi", "voice_meta"}
+    wd = world.loc.work_dir(row)
+    assert any((p / f"hindi_{JOB}.mp4").is_file() for p in wd.iterdir() if p.name.startswith("attempt_"))
+    for step in ("render", "qc"):
+        world.loc.run_step(lid, step)
+    assert world.loc.get(lid)["status"] == "QC_PASSED" and world.calls["translate"] == 1
 
 
 def test_retry_reuses_completed_steps(world):

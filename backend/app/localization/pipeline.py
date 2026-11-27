@@ -165,8 +165,10 @@ class HindiLocalizer:
         "translate" after a creative rejection), archive that step's and later steps' outputs into
         ``attempt_<n>/`` (never deleted) and redo them."""
         loc = self.get(loc_id)
-        if loc["status"] == "QC_PASSED":
-            raise ValueError("this localization already passed Hindi QC")
+        if loc["status"] == "QC_PASSED" and not from_step:
+            # A defect found after QC (e.g. on-screen text QC could not see) needs an explicit redo step; the passed
+            # outputs are archived, never deleted.
+            raise ValueError("this localization already passed Hindi QC; redo a step explicitly (e.g. 'render')")
         if loc["status"] == "QC_REJECTED" and not from_step:
             raise ValueError("a creative rejection needs a new adaptation: retry from 'translate'")
         if loc["status"] == "IN_PROGRESS":

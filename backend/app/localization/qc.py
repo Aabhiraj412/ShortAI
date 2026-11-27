@@ -83,6 +83,10 @@ def evaluate(*, mp4: str, plan: Dict[str, Any], ffmpeg: str, ffprobe: str, scrip
         technical.append(f"decode errors: {err[:160]}")
     latin_heads = [s["scene_id"] for s in plan.get("scenes") or []
                    if s.get("headline") and devanagari_share(s["headline"]) < 0.5]
+    latin_heads += [f"{s.get('scene_id')} stage label" for s in plan.get("scenes") or []
+                    if s.get("stage_label") and devanagari_share(s["stage_label"]) < 0.5]
+    latin_heads += [f"{s.get('scene_id')} label" for s in plan.get("scenes") or []
+                    for lab in (s.get("labels") or []) if lab and devanagari_share(str(lab)) < 0.5]
     if latin_heads:
         creative.append(f"on-screen headline not in Devanagari: {', '.join(latin_heads)}")
     for issue in typography_issues:
