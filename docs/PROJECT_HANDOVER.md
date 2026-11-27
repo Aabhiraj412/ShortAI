@@ -137,12 +137,12 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 
 **Docs for each stage:** `docs/STAGE_3_32*.md`. The latest audit is `docs/STAGE_3_32D_FINAL_SECURITY_AUDIT.md`.
 
-## 3. Current production state (2026-11-27 03:00 IST)
+## 3. Current production state (2026-11-27 21:30 IST)
 
 | Item | State |
 |---|---|
-| Daemon | PID 14348, started 04:34 IST by a controlled restart; code `7b4f632` (3.37 + WS1). 24 cycles plus Community, Autopilot-observation, creative, analytics and junk-cleaner jobs. |
-| Dashboard | PID 17252, relaunched 04:35 IST by the monitor; code `7b4f632`. The Task Scheduler launch died on the startup-status race (fixed in the worktree, not yet deployed). Selector loop. Liveness 3 ms, CPU 0.3 % of a core. |
+| Daemon | PID 16232, started 21:24 IST by a controlled restart; code `bf44855` (remediation closure). 24 cycles plus Community, Autopilot-observation, creative, analytics and junk-cleaner jobs. Autopilot controller health: identity "scheduler daemon", heartbeat under 180 s. |
+| Dashboard | PID 19628, started 21:24 IST through the Task Scheduler; code `bf44855`, `stale_code: false`. |
 | Monitor | `startup_manager.py --monitor`, PID 7688. |
 | Schedule | Active revision `ccf0bd04f159`, CUSTOM 24 hourly cycles, 45-min recovery windows, concurrency 1. |
 | Operating mode / publishing policy | PRODUCTION / `automatic_private_scheduled` |
@@ -154,7 +154,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
 | Control state | RESTRICTED (no `autonomy_startup.json`; **not** an emergency stop). The automatic policy runs: reports, recommendation recording, read-only diagnostics, local notifications, self-healing diagnostics, read-only provider re-checks and (since the operator-dependency reduction) staged asset re-acquisition. Production dispatch, publishing, configuration and credentials stay outside it. |
-| Latest backup | `D:\Agents\CrazzyDocs_backups\predeploy_stage337_ws1_20261127_043307` (DB integrity ok; the token file is not included) |
+| Latest backup | `D:AgentsCrazzyDocs_backupspredeploy_closure_copyfix_20261127_212326` (DB integrity ok, restart_safe; the token file is not included) |
 
 ## 4. Outstanding bugs and risks
 
