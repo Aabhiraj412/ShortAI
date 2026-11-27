@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 import json
 import logging
 import os
+from pathlib import Path
 import shutil
 import sqlite3
 import time
@@ -56,6 +57,65 @@ def _event_timestamp_utc(value: Any) -> Optional[str]:
     else:
         parsed = parsed.astimezone(timezone.utc)
     return parsed.isoformat().replace("+00:00", "Z")
+
+
+INTEGRITY_TTL_SEC = 1800.0
+_integrity_lock = __import__("threading").Lock()
+_integrity_state: Dict[str, Any] = {}
+MEDIA_SIZE_TTL_SEC = 1800.0
+_media_size_lock = __import__("threading").Lock()
+_media_size_state: Dict[str, Any] = {"mb": None, "at": None, "running": False, "dir": None}
+
+
+def _scan_media_mb(media_dir: str) -> float:
+    total = 0
+    stack = [media_dir]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return round(total / (1024 * 1024), 2)
+
+
+def _refresh_media_size(media_dir: str) -> None:
+    try:
+        mb = _scan_media_mb(media_dir) if os.path.isdir(media_dir) else 0.0
+        with _media_size_lock:
+            _media_size_state.update(mb=mb, at=time.time(), dir=media_dir)
+    finally:
+        with _media_size_lock:
+            _media_size_state["running"] = False
+
+
+def media_footprint_mb(media_dir: str, *, now: Optional[float] = None, background: bool = True):
+    """(last measured media footprint in MB or None, epoch measured). Starts at most one background re-scan when
+    the value is older than MEDIA_SIZE_TTL_SEC; never scans on the caller's thread when ``background``."""
+    import threading as _th
+    now = time.time() if now is None else now
+    with _media_size_lock:
+        st = dict(_media_size_state)
+        stale = st["at"] is None or st["dir"] != media_dir or now - st["at"] >= MEDIA_SIZE_TTL_SEC
+        start = stale and not st["running"]
+        if start:
+            _media_size_state["running"] = True
+    if start:
+        if background:
+            _th.Thread(target=_refresh_media_size, args=(media_dir,), name="media-size-scan", daemon=True).start()
+        else:
+            _refresh_media_size(media_dir)
+            with _media_size_lock:
+                st = dict(_media_size_state)
+    return st["mb"] if st["dir"] == media_dir else None, st["at"] if st["dir"] == media_dir else None
 
 
 @dataclass
@@ -612,11 +672,22 @@ class ProductionHealthDashboard:
         if not os.path.exists(self.db_path):
             return {"status": "MISSING", "integrity": "File not found"}
         try:
-            conn = sqlite3.connect(self.db_path)
+            # Remediation follow-up: a full PRAGMA integrity_check (reads the whole 38 MB file) ran on every one-minute
+            # health poll, on a read-write connection beside the daemon's writes. It now runs at most every
+            # INTEGRITY_TTL_SEC on a read-only connection; table count and journal mode stay live (cheap).
+            conn = sqlite3.connect(Path(self.db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
             cur = conn.cursor()
-            cur.execute("PRAGMA integrity_check;")
-            row = cur.fetchone()
-            integrity = row[0] if row else "unknown"
+            with _integrity_lock:
+                cached = _integrity_state.get(self.db_path)
+                fresh = cached is not None and time.time() - cached[1] < INTEGRITY_TTL_SEC
+            if fresh:
+                integrity = cached[0]
+            else:
+                cur.execute("PRAGMA integrity_check;")
+                row = cur.fetchone()
+                integrity = row[0] if row else "unknown"
+                with _integrity_lock:
+                    _integrity_state[self.db_path] = (integrity, time.time())
             cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
             table_count = cur.fetchone()[0]
             cur.execute("PRAGMA journal_mode;")
@@ -640,21 +711,16 @@ class ProductionHealthDashboard:
             total_gb = round(usage.total / (1024 ** 3), 2)
             used_pct = round(((usage.total - usage.free) / usage.total) * 100, 1)
 
-            media_dir = os.path.join(self.workspace, "media")
-            media_size = 0
-            if os.path.exists(media_dir):
-                for root, _, files in os.walk(media_dir):
-                    for f in files:
-                        try:
-                            media_size += os.path.getsize(os.path.join(root, f))
-                        except Exception:
-                            pass
-            media_mb = round(media_size / (1024 * 1024), 2)
+            # Remediation follow-up: walking the whole media tree (60k+ files, ~10k more per day) on every
+            # one-minute health poll cost ~10 CPU-s per poll and grew with every day of production. The footprint
+            # is now measured in one background thread at most every MEDIA_SIZE_TTL_SEC; this call never walks.
+            media_mb, measured_at = media_footprint_mb(os.path.join(self.workspace, "media"))
             return {
                 "free_gb": free_gb,
                 "total_gb": total_gb,
                 "used_pct": used_pct,
                 "media_size_mb": media_mb,
+                "media_size_measured_at_epoch": measured_at,
                 "status": "HEALTHY" if free_gb > 5.0 else "WARNING",
             }
         except Exception as e:

@@ -202,7 +202,7 @@ Existing page controls are kept. Removing every per-page instruction is left to 
 | Pexels | `KEY_MISSING` in the provider audit and listed once under *Needs you* with `PEXELS_API_KEY`. No key was invented and nothing was disabled. |
 | Shorts, ownership, publishing, OAuth | 24 cycles, schedule revision `ccf0bd04f159` (active = loaded). Autopilot OFF, scheduler owns production. `automatic_private_scheduled`, no public auto-release. OAuth CONNECTED. `cycle_6` and `cycle_7` both took and released the shared render slot, completed, and were uploaded private and scheduled. |
 | Dashboard health since deploy | 90/90 probes HEALTHY, 100 % availability, liveness p50 5.8 ms, p95 50 ms. Loop lag p95 16 ms, loop thread idle. Day before: 79.9 %, p50 567 ms. |
-| Dashboard CPU | A **burst every 60 s** of about 10 CPU-seconds (56–112 % of a core for about 10 s), in short-lived worker threads after the page's poll batch, not in the event loop. The cause is not yet identified. The diagnostic sampler now also records busy worker-thread stacks (`/api/health/loop` → `worker_top_stacks`) so the next deploy names the code. |
+| Dashboard CPU | **Root cause found** (worker-thread sampler after the `69ca792` deploy: 22 of 58 busy samples were in `production_health_dashboard.get_disk_health`). Every one-minute `/api/dashboard/health` poll walked the whole media tree: 61,331 files, 22.1 GB, **7.0 CPU-s per poll**, growing by about 10k files a day. That poll is hidden from the access log by the quiet-polling filter. It explains both the 60 s bursts and the old process climbing to a full core. The same endpoint also ran a full `PRAGMA integrity_check` on every poll. **Fixed:** the media footprint is scanned in the background at most every 30 min (0.6 s, `os.scandir`), and the per-poll call is 0.01 ms. The integrity check is cached for 30 min on a read-only connection. |
 | Daemon | 0.2 % of a core, 38 MB. |
 
 **Dashboard (operator experience):**
@@ -213,3 +213,21 @@ Existing page controls are kept. Removing every per-page instruction is left to 
 - All controls are kept. Genuine confirmations for operator-initiated actions (approve, propose, start/stop) remain, as they are not routine prompts.
 
 **Creative QC vs infrastructure:** `/api/creative-intel/feedback` keeps them apart (7 days: creative `CHECK_A_TOPIC_NARRATION` 9; infrastructure `RECOVERY_WINDOW_EXPIRED` 12). The retry policy still classifies `QCBlocked` as deterministic, so it is never retried as an infrastructure failure.
+
+**Follow-up results (2026-11-27, 07:00–09:00 IST):**
+
+- **Recommendation Center live** (07:41 observation cycle, after `69ca792`): 15 recommendations stored. 4 automatic follow-ups executed and SUCCEEDED (operational report, read-only diagnostic, 2 local notifications for high-severity findings). 1 duplicate was skipped by the 6 h cooldown.
+- **Topic flags.** These 3 runs are consistent, but not yet a verdict; the evening runs are the test.
+
+  | | Same hours, 11-26 | 07:00–09:00, 11-27 |
+  |---|---|---|
+  | Eligible topics | 7.3 | 13.3 |
+  | Recently-used rejections | 25.7 | 7.0 |
+  | Categories among eligible | 0–1 | 5–8 |
+  | Integrity failures | 0 | 0 |
+
+  On 11-26, 19:00–21:00 had 0 eligible topics and 3 integrity failures.
+- **`test_daemon_does_not_exit_while_render_in_progress` is intermittent before and after this work:** 1/30 on `a7b0b81` (pre-remediation) and 1/30 now.
+  - The 3.36 Autopilot tick's first call takes about 250 ms, which leaves 4–6 dispatches against the test's minimum of 3.
+  - My coordinator tick had added contention (Autopilot 2nd/3rd calls at 40–110 ms). It now starts 30 s after daemon start, and those calls are back to 8–11 ms, as before.
+  - Recorded as a known intermittent test with this evidence. It is not counted as a baseline failure.

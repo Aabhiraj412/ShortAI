@@ -38,7 +38,11 @@ async def autopilot_controller_tick() -> None:
 
 
 COORDINATOR_TICK_MIN_SECONDS = 60.0
-_last_coordinator_tick = [float("-inf")]
+# The first tick waits COORDINATOR_FIRST_DELAY_SECONDS after daemon start: its one-time setup (schema, recovery,
+# snapshot) otherwise competed for CPU with the Stage 3.36 Autopilot tick's first, ~250 ms, run and delayed the
+# recovery loop's dispatch and controlled-restart checks. Shorts lease the render slot without any tick.
+COORDINATOR_FIRST_DELAY_SECONDS = 30.0
+_last_coordinator_tick: list = [None]
 _coordinator_task: list = [None]
 
 
@@ -56,6 +60,9 @@ async def production_coordinator_tick() -> None:
     never awaited by the recovery loop, so it cannot delay recovery dispatch or the controlled-restart check. Never
     affects the Shorts path; a failure is logged and skipped."""
     now = time.monotonic()
+    if _last_coordinator_tick[0] is None:      # first call after start: schedule the first tick after the warm-up
+        _last_coordinator_tick[0] = now - COORDINATOR_TICK_MIN_SECONDS + COORDINATOR_FIRST_DELAY_SECONDS
+        return
     if now - _last_coordinator_tick[0] < COORDINATOR_TICK_MIN_SECONDS:
         return
     running = _coordinator_task[0]

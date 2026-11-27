@@ -642,3 +642,33 @@ def test_daemon_coordinator_tick_never_blocks_the_recovery_loop(monkeypatch):
         return took
 
     assert asyncio.run(go()) < 0.1
+
+
+def test_first_coordinator_tick_waits_for_daemon_warm_up(monkeypatch):
+    """The first tick after start is deferred, so its one-time setup never competes with the first recovery-loop
+    iterations (root cause of the intermittent test_daemon_does_not_exit_while_render_in_progress failure)."""
+    from backend.app.scheduler import daemon_runtime as dr
+    import backend.app.scheduler.production_coordinator as mod
+    ticks = []
+
+    class Fake:
+        async def tick(self):
+            ticks.append(1)
+
+    monkeypatch.setattr(mod, "get_coordinator", lambda: Fake())
+    monkeypatch.setattr(dr, "_last_coordinator_tick", [None])
+    monkeypatch.setattr(dr, "_coordinator_task", [None])
+    clock = [1000.0]
+    monkeypatch.setattr(dr.time, "monotonic", lambda: clock[0])
+
+    async def go():
+        await dr.production_coordinator_tick()          # daemon start: nothing runs yet
+        clock[0] += dr.COORDINATOR_FIRST_DELAY_SECONDS - 1
+        await dr.production_coordinator_tick()
+        assert ticks == []
+        clock[0] += 2                                    # warm-up elapsed: the first tick runs
+        await dr.production_coordinator_tick()
+        await dr._coordinator_task[0]
+
+    asyncio.run(go())
+    assert ticks == [1]
