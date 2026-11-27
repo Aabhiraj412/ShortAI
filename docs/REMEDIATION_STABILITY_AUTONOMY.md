@@ -83,7 +83,10 @@ Fixes (no flags, no gate weakened):
 1. **Identity pre-check before enrichment.** The registry's `topic_conflict` for the current job runs at discovery, the news-lead path and recovery. The final `filter_fresh` integrity gate is unchanged. Rejections are recorded with stage `identity_precheck` and the conflicting job.
 2. **Ledger re-sighting no longer overwrites stored data** (3.31 report §9.10 item 1). Empty summary, category, entities, score breakdown and v2 prediction keep the stored values. Each run's v2 prediction is also kept as a `classification/PREDICTED` event.
 
-**Needs the operator (not done, protected):** the implemented and tested flags `production_query_rotation` and `exhaustion_recovery` (3.31C/D) are **off** in `creative_policy_config.json`. The evidence says they address the remaining supply limit. Activating flags and editing that file require explicit approval. Topics are never recycled.
+**Activated with operator approval (2026-11-27 05:45 IST):** the implemented and tested flags `production_query_rotation` and `exhaustion_recovery` (3.31C/D) are now **on**.
+- Change: only those two keys were added to `creative_policy_config.json`; the previous file is backed up.
+- The daemon restarted (PID 4692) to load them.
+- Effect is to be measured on eligible counts and integrity-gate failures. Topics are still never recycled.
 
 ## 5. WS4: provider status accuracy
 
@@ -181,6 +184,6 @@ Existing page controls are kept. Removing every per-page instruction is left to 
 - **Full suite on the remediation tree, first run:** 1898 passed, 5 failed (the 4 baseline failures plus the daemon test above, since fixed), 174 skipped. The rerun result is in the handover §2.
 - **Open:**
   1. Re-check dashboard CPU and loop lag after many hours of uptime.
-  2. Operator decision on `production_query_rotation` and `exhaustion_recovery`.
+  2. Measure the effect of the topic-supply flags, active since 05:45 IST.
   3. Gemini free-tier limits remain external. The deferred retry's effect is measured, not assumed.
   4. The long-form executor and the concurrency benchmark (Stage 3.37) are still open.

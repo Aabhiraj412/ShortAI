@@ -137,7 +137,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Autonomy | Global OBSERVE (categories OBSERVE; `community_drafts` and `production` OFF). The startup kill switch is active (no `autonomy_startup.json`). |
 | Autopilot controller (3.36) | OFF. The scheduler owns production. |
 | Production coordinator (3.37) | Long-form queue disabled (`long_form_enabled: false`), not paused, no executor; heavy render slots = 1. Shorts workers lease the slot (fail-open). |
-| Topic intelligence flags | `candidate_ledger` on; `category_classifier_v2`, `demand_signals` and `scoring_v2` in shadow (3.31 report: do not activate v2 as-is). |
+| Topic intelligence flags | `candidate_ledger` on; `production_query_rotation` and `exhaustion_recovery` **on** since 2026-11-27 05:45 IST (operator approved); `category_classifier_v2`, `demand_signals` and `scoring_v2` in shadow (3.31 report: do not activate v2 as-is). Backup of the previous file: `CrazzyDocs_backups\predeploy_remediation_20261127_054108\creative_policy_config.before_flags.json`. |
 | Community drafts | Automation ON (daily draft); API publishing OFF (pilot access and scope missing). |
 | Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
@@ -158,7 +158,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
 | 11 | **3.37 rendering concurrency not benchmarked** | Heavy concurrency is fixed at 1. Raising it needs a concurrent-render benchmark in an operator-scheduled window with no production job (stage doc §6). Long-form steps must honour `should_yield()`; a step that overruns its estimate can overlap a Shorts render after the 600 s wait (recorded as `SHORTS_OVERLAP`). |
-| 12 | **Topic supply** | The two flags that widen discovery (`production_query_rotation`, `exhaustion_recovery`) are implemented but OFF. Activating them needs explicit approval. Exhaustion can still recur late in the day. |
+| 12 | **Topic supply** | `production_query_rotation` and `exhaustion_recovery` were **activated on 2026-11-27 at 05:45 IST with operator approval** (daemon restarted, PID 4692). Watch Ops → *Topic intelligence* for eligible counts and integrity-gate failures over the next 24 h. Revert: remove both keys from `creative_policy_config.json` and restart the daemon. |
 | 13 | **Gemini free tier** | 429 and 503/504 errors cause about 80 % fallback scripts, which score 13 points lower. The deferred round is measured by the feedback loop and is not claimed as a fix. |
 | 14 | **Dashboard long-run** | CPU and loop lag were measured only shortly after the deploy. Re-check `/api/health/loop` after many hours. |
 | 9 | **Junk cleaner reclaims almost nothing yet** | By design: intermediates are kept for 30 days, and production intermediates only date from mid-November. Test renders (about 1.8 GB) and downloaded assets have no retention rule (kept). The media tree grows by about 10k files a day. |
@@ -213,7 +213,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 - verify the first `policy:RESTRICTED` executions;
 - verify the dashboard's long-run CPU.
 
-Operator decisions: the two topic-supply flags (WS3), and an optional hook experiment (WS7 proposal).
+Operator decisions: an optional hook experiment (WS7 proposal). The topic-supply flags were approved and activated on 2026-11-27; review their effect after 24 h.
 
 **Stage 3.37 is complete** (long-form OFF). Next: build the long-form pipeline as an executor (stage doc §8). Then the operator decides on `long_form_enabled` and, separately, on a concurrent-render benchmark before any heavy concurrency above 1.
 
