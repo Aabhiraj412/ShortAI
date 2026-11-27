@@ -137,8 +137,8 @@ class SelfHealingEngine:
             permitted = False
         if not permitted:
             mode, reason = "BLOCKED", "self-healing action types are not permitted registry entries"
-        elif ks["any_active"]:
-            mode, reason = "BLOCKED", f"kill switch active: {', '.join(ks['active'])}"
+        elif ks.get("emergency_stop", ks["any_active"]):
+            mode, reason = "BLOCKED", f"emergency stop: kill switch active: {', '.join(ks['active'])}"
         elif level == Level.OFF:
             mode, reason = "OFF", "the self_healing autonomy level is OFF"
         elif level == Level.OBSERVE:
@@ -148,7 +148,18 @@ class SelfHealingEngine:
         else:
             mode, reason = "APPROVED_EXECUTION", "approved, allow-listed actions may execute through the control plane"
         grants = {a: g for a, g in (cfg.get("standing_approvals") or {}).items() if a.startswith("selfheal.")}
+        # Remediation WS6: actions the control plane's built-in policy runs automatically in this control state.
+        automatic = []
+        if mode not in ("BLOCKED", "OFF") and not err:
+            state = ks.get("control_state")
+            for a in (DIAG, "selfheal.provider.retry_readonly", "selfheal.asset.reacquire_staged"):
+                try:
+                    if state and self.cp.policy_allows(a, cfg, state)[0]:
+                        automatic.append(a)
+                except Exception:
+                    pass
         return {"mode": mode, "reason": reason, "level": level.name, "kill_switches": ks["active"],
+                "control_state": ks.get("control_state"), "automatic_actions": automatic,
                 "configuration_error": err, "notifications_level": notif.name, "standing_approvals": grants,
                 "explainer": "gemini" if self.explainer_enabled else "off", "enabled": mode in ("OBSERVE", "RECOMMEND",
                                                                                                 "APPROVED_EXECUTION")}
@@ -174,7 +185,9 @@ class SelfHealingEngine:
         last = self.store.last_scan()
         if not force and last and last["started_at_utc"] > _ts(now - timedelta(seconds=MIN_SCAN_INTERVAL_SECONDS)):
             return {"ran": False, "mode": st["mode"], "reason": "scanned less than 5 minutes ago", "last_scan": last}
-        propose = st["mode"] in ("RECOMMEND", "APPROVED_EXECUTION")
+        propose = st["mode"] in ("RECOMMEND", "APPROVED_EXECUTION") or bool(st.get("automatic_actions"))
+        # At OBSERVE only the policy-automatic actions are submitted; approval-required ones wait for RECOMMEND.
+        self._submit_only = None if st["mode"] in ("RECOMMEND", "APPROVED_EXECUTION") else set(st.get("automatic_actions") or ())
         run: Dict[str, Any] = {"run_id": "shs_" + secrets.token_hex(6), "started_at": _ts(now), "mode": st["mode"],
                                "triggered_by": triggered_by, "new_failures": 0, "incidents_created": 0,
                                "incidents_updated": 0, "proposals": 0, "executed": 0, "replanned": 0,
@@ -298,8 +311,12 @@ class SelfHealingEngine:
                 self._propose(dict(inc, plan=plan, status=status), plan, now, run)
 
     def _propose(self, inc: Dict[str, Any], plan: Dict[str, Any], now: datetime, run: Dict[str, Any]) -> None:
+        only = getattr(self, "_submit_only", None)
         for a in plan["actions"]:
             if a["blocked"]:
+                continue
+            if only is not None and a["action_type"] not in only:
+                run["approval_required"] = run.get("approval_required", 0) + 1
                 continue
             spec = registry.require_permitted(a["action_type"])
             with self.store.tx() as conn:

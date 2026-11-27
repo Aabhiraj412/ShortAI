@@ -16,6 +16,17 @@ See `docs/STAGE_3_35_IMPLEMENTATION_REPORT.md` and the other `STAGE_3_35_*` repo
 
 **Update 2026-11-27 IST: Stage 3.37 (multi-pipeline production and resource orchestration).** It adds one shared, resource-aware coordinator over two logical queues: Shorts (the unchanged scheduler) and long-form (a new persisted, step-based queue). There is one heavyweight render-slot lease, and Shorts always comes first. Long-form is **OFF** by default and no long-form executor is installed. See `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md`.
 
+**Update 2026-11-27 IST: Remediation (stability and autonomy, before Stage 4.01).**
+- **Dashboard stability (WS1):** Selector event loop, blocking handlers moved off the loop, resource cache, and the deploy-time startup race fixed. Committed and deployed: `7b4f632` (WS1 part 1). The startup race fix is in the worktree.
+- **Autonomy (WS2):** three control states. Production is now RESTRICTED (a fixed, read-only policy set runs automatically), not blocked.
+- **Recommendations and self-healing (WS5/WS6):** both run, and their policy actions execute automatically.
+- **Topics (WS3):** the identity pre-check runs before enrichment; the ledger re-sighting fix.
+- **Providers (WS4):** status built from production evidence.
+- **Quality (WS7):** a creative feedback loop, plus a deferred Gemini retry.
+- **Operator attention:** one feed.
+
+Full report: `docs/REMEDIATION_STABILITY_AUTONOMY.md`.
+
 **Repository:** `D:\Agents\CrazzyDocs` (production checkout, branch `main`). GitHub: `Aabhiraj412/ShortAI`, branch `main`.
 
 **Development worktree:** `.claude\worktrees\crazzy-docs-handover-b1a088`, branch `claude/crazzy-docs-handover-b1a088`, in step with `main`.
@@ -55,6 +66,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Email redesign (2026-11) | `services/email_templates/` (new), `email_monitoring_service.py`, `daily_publishing_summary.py`, `notification_service.py` | **Email notifications and reports redesigned.**<br>- **Design:** one shared design system (responsive table layout, inline styles, escaped content, plain-text twin, CID inline images).<br>- **Accuracy fixes:** YouTube state read from the publishing ledger (emails said "withheld" for uploaded/scheduled videos); fabricated QC defaults removed; day summary covers all 24 cycles (was cycles 1-4); daily report now covers the previous complete day (was 00:00-06:00 of the current day).<br>- **Unchanged:** triggers, dedup ledger, retry semantics, recipients, subject formats.<br>- **Details:** `docs/EMAIL_SYSTEM.md`; previews: `python backend/scripts/render_email_previews.py`. |
 | 3.36 | `autonomy/production_controller.py`, `production_ownership.py`, `decision_engine.py`, `production_handlers.py`; hooks in `scheduler/scheduler.py`, `daemon_runtime.py` | **Autopilot continuous production controller.**<br>- **State machine:** OFF / STARTING / ON / STOPPING / BLOCKED, persisted and audited, separate from the autonomy mode (`production` category, min with global).<br>- **Where it runs:** one tick in the daemon recovery loop; not a new scheduler or worker.<br>- **Ownership:** taken only as EXECUTOR (APPROVED_EXECUTION plus standing approvals for `production.scheduled_cycle.dispatch` and `production.recovery.dispatch`). While Autopilot owns production, the unchanged cron jobs hand fired occurrences to it and it dispatches them through the same `run_cycle_generation`, one renderer at a time. On release, undispatched occurrences are replayed through the scheduler path.<br>- **Decisions:** the decision engine explains every proceed, wait or hold decision and covers bottlenecks, resources, quota and repeated failures.<br>- **Dashboard:** Autopilot tab → controller panel. |
 | 3.37 | `scheduler/production_coordinator.py`, `scheduler/resource_monitor.py`; hooks in `scheduler.py` (Shorts worker lease), `daemon_runtime.py` (tick, 60 s throttle), `main.py` (manual-run lease, `/api/production/queues*`) | **Multi-pipeline production and resource orchestration.**<br>- **Queues:** Shorts = the existing scheduler and `persistent_jobs`; long-form = `production_queue_jobs` (operator-enqueued, checkpointed LIGHT/HEAVY steps, executor per kind, none installed).<br>- **Render slot:** `production_render_slots`, a CAS lease with ceiling `BENCHMARKED_MAX_HEAVY` = 1. Shorts never waits more than 600 s and is fail-open.<br>- **Admission:** CPU, available-RAM and disk thresholds; a heavy long-form step must end before the next Shorts start and needs no active Shorts job; light steps may overlap.<br>- **Fairness:** aging (+1 per 30 min waited); starvation flag after 6 h.<br>- **Recovery:** dead-owner claims are requeued at their checkpoint, bounded to 3 attempts.<br>- **Resources:** CPU, RAM, GPU (PDH) and disk, plus FFmpeg process count.<br>- **Dashboard:** Autopilot tab → *Production queues and resources*. |
+| Remediation | `core/loop_diagnostics.py`, `core/dashboard_startup.py`, `scripts/run_dashboard.py`, `autonomy/control_plane.py` (control states, `POLICY_AUTOMATIC`), `autonomy/autopilot.py` (`auto_bridge`), `self_healing/engine.py`, `recommendations/engine.py`, `content/candidate_ledger.py`, `content/curiosity_topic_engine.py` (`identity_precheck`), `services/provider_audit.py` (`production_evidence`), `content/grounded_script_writer.py` (deferred round), `creative_intel/feedback.py`, `services/operator_attention.py` | **Stability and autonomy remediation.**<br>- **Dashboard:** Selector loop on Windows; read-only GETs in the threadpool; `/api/health/loop`.<br>- **Control states:** EMERGENCY_STOP / RESTRICTED / NORMAL. A missing startup config means RESTRICTED, never a silent block.<br>- **Automatic policy:** signed `policy:<STATE>` approvals for read-only diagnostics, reports, recommendation records, local notifications and self-healing diagnostics.<br>- **Recommendations:** automatic follow-ups, each run once, with a 6 h cooldown.<br>- **Topics:** identity pre-check before enrichment.<br>- **Providers:** state from production evidence.<br>- **Quality:** feedback loop at `/api/creative-intel/feedback`; one deferred Gemini round when all models fail transiently.<br>- **Attention:** `/api/operations/attention`. |
 | 3.35b | `content/curiosity_topic_engine.py` | **Topic discovery rate limiting.** Wikimedia answered HTTP 429 to unpaced discovery bursts, and throttled candidates were recorded as INSUFFICIENT_EVIDENCE. That drained the pool, and 7 cycles on 2026-11-21 failed the integrity gate. Fix: `WikimediaGate` paces requests at 1 per second, honours Retry-After, makes at most 2 retries and waits at most 180 s per run. Throttled candidates are `PROVIDER_FAILURE` (not judged), and request statistics are recorded per run. Details: `docs/STAGE_3_35B_TOPIC_DISCOVERY_RATE_LIMIT.md`. |
 | 3.31K | `content/demand_signals.py`, `topic_scoring_v2.py`, `expanded_categories.py` | **Demand-led topic intelligence.** Wikimedia most-read + pageview velocity and Google Trends daily searches (provenance in `topic_demand_signals`); eight-signal scoring v2 with historical performance as one bounded signal (5 %, neutral until analytics exist); Cinema & Entertainment, Media & Internet Culture, Sports & Major Events (politics stays out of scope). Flags `demand_signals`, `scoring_v2` (off/shadow/on), `expanded_categories` (off/on). Details: `docs/STAGE_3_31K_DEMAND_LED_TOPIC_INTELLIGENCE.md`. |
 | 3.32 (roadmap) | `creative_intel/` | **Video creative intelligence.** 14 craft dimensions from the script, rendered Pop Info plan, subtitles and the rendered MP4; one `creative_records` row per job linked to its YouTube video ID (for 3.35); controlled `hook_type` experiments. Hourly `creative_evaluation_tick` (skips while a job is active). Details: `docs/STAGE_3_32_CREATIVE_INTELLIGENCE.md`. |
@@ -95,7 +107,9 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 
 | Commit | Stage |
 |---|---|
-| (this stage's commit) | **3.37** Multi-pipeline production and resource coordinator (long-form OFF, no executor) |
+| (remediation commit, see `git log`) | **Remediation WS1 (part 2) to WS7 and the operator-attention feed** |
+| `7b4f632` | **Remediation WS1**: dashboard event loop (deployed 2026-11-27 04:34 IST) |
+| `13e846b` | **3.37** Multi-pipeline production and resource coordinator (deployed; long-form OFF, no executor) |
 | `fed2845` | **3.36** Autopilot continuous production controller (deployed; Autopilot OFF) |
 | `3596f5d`, `1db7e03`, `0361710` | 3.31 formal 48-hour shadow observation and its final report (`docs/STAGE_3_31_SHADOW_OBSERVATION.md` §9) |
 | `f6c1d34` … `68c1c0c` | Email redesign plus fixes (`docs/EMAIL_SYSTEM.md`) |
@@ -115,8 +129,8 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 
 | Item | State |
 |---|---|
-| Daemon | PID 3032, started 02:33 IST by a controlled restart at a safe point; code `fed2845`. 24 cycles plus Community, Autopilot-observation, creative, analytics and junk-cleaner jobs. |
-| Dashboard | PID 4920 (Task Scheduler `CrazzyDocs-Health-Dashboard`); code `fed2845`. |
+| Daemon | PID 14348, started 04:34 IST by a controlled restart; code `7b4f632` (3.37 + WS1). 24 cycles plus Community, Autopilot-observation, creative, analytics and junk-cleaner jobs. |
+| Dashboard | PID 17252, relaunched 04:35 IST by the monitor; code `7b4f632`. The Task Scheduler launch died on the startup-status race (fixed in the worktree, not yet deployed). Selector loop. Liveness 3 ms, CPU 0.3 % of a core. |
 | Monitor | `startup_manager.py --monitor`, PID 7688. |
 | Schedule | Active revision `ccf0bd04f159`, CUSTOM 24 hourly cycles, 45-min recovery windows, concurrency 1. |
 | Operating mode / publishing policy | PRODUCTION / `automatic_private_scheduled` |
@@ -127,7 +141,8 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Community drafts | Automation ON (daily draft); API publishing OFF (pilot access and scope missing). |
 | Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
-| Latest backup | `D:\Agents\CrazzyDocs_backups\predeploy_stage336_autopilot_20261127_023218` |
+| Control state (remediation) | RESTRICTED (no `autonomy_startup.json`). The automatic policy set becomes active when the remediation commit is deployed. |
+| Latest backup | `D:\Agents\CrazzyDocs_backups\predeploy_stage337_ws1_20261127_043307` (DB integrity ok; the token file is not included) |
 
 ## 4. Outstanding bugs and risks
 
@@ -143,6 +158,9 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
 | 11 | **3.37 rendering concurrency not benchmarked** | Heavy concurrency is fixed at 1. Raising it needs a concurrent-render benchmark in an operator-scheduled window with no production job (stage doc §6). Long-form steps must honour `should_yield()`; a step that overruns its estimate can overlap a Shorts render after the 600 s wait (recorded as `SHORTS_OVERLAP`). |
+| 12 | **Topic supply** | The two flags that widen discovery (`production_query_rotation`, `exhaustion_recovery`) are implemented but OFF. Activating them needs explicit approval. Exhaustion can still recur late in the day. |
+| 13 | **Gemini free tier** | 429 and 503/504 errors cause about 80 % fallback scripts, which score 13 points lower. The deferred round is measured by the feedback loop and is not claimed as a fix. |
+| 14 | **Dashboard long-run** | CPU and loop lag were measured only shortly after the deploy. Re-check `/api/health/loop` after many hours. |
 | 9 | **Junk cleaner reclaims almost nothing yet** | By design: intermediates are kept for 30 days, and production intermediates only date from mid-November. Test renders (about 1.8 GB) and downloaded assets have no retention rule (kept). The media tree grows by about 10k files a day. |
 
 ## 5. Pending roadmap
@@ -189,6 +207,13 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 - Run the full suite (about 13–19 minutes) in the background.
 
 ## 7. Exact next task
+
+**Remediation:** deploy the remediation commit once its full suite matches the baseline (same procedure, :15–:50 IST, no active job, new backup). Then:
+- verify `/api/operations/attention` and the control state RESTRICTED;
+- verify the first `policy:RESTRICTED` executions;
+- verify the dashboard's long-run CPU.
+
+Operator decisions: the two topic-supply flags (WS3), and an optional hook experiment (WS7 proposal).
 
 **Stage 3.37 is complete** (long-form OFF). Next: build the long-form pipeline as an executor (stage doc §8). Then the operator decides on `long_form_enabled` and, separately, on a concurrent-render benchmark before any heavy concurrency above 1.
 

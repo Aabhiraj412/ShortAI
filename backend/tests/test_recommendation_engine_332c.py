@@ -484,7 +484,7 @@ def test_engine_never_changes_permissions_or_creates_executable_requests(tmp_pat
     assert cp.verify_audit_chain()["ok"]
 
 
-@pytest.mark.parametrize("switch", ["dashboard", "sentinel", "startup"])
+@pytest.mark.parametrize("switch", ["dashboard", "sentinel"])
 def test_each_kill_switch_pauses_the_engine(tmp_path, switch):
     cp, e, intel, clock = make(tmp_path, startup=(switch != "startup"))
     if switch == "dashboard":
@@ -494,6 +494,15 @@ def test_each_kill_switch_pauses_the_engine(tmp_path, switch):
     out = e.run(OP, force=True)
     assert out["ran"] is False and out["mode"] == "BLOCKED" and "kill switch" in out["reason"] and intel.calls == 0
     assert any(x["event_type"] == "RECOMMENDATION_RUN_BLOCKED" for x in cp.audit_events())
+
+
+def test_missing_startup_config_does_not_pause_analysis(tmp_path):
+    """Remediation WS2/WS5: a missing startup configuration is RESTRICTED autonomy, not an emergency stop, so the
+    recommendation analysis (observation and recording) keeps running."""
+    cp, e, intel, clock = make(tmp_path, startup=False)
+    out = e.run(OP, force=True)
+    assert out["ran"] is True and out["mode"] != "BLOCKED"
+    assert not any(x["event_type"] == "RECOMMENDATION_RUN_BLOCKED" for x in cp.audit_events())
 
 
 def test_kill_switch_keeps_existing_recommendations_readable(tmp_path):

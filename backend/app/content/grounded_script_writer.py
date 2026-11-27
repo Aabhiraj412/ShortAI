@@ -44,6 +44,9 @@ TRANSIENT_RETRIES = 2                    # per attempt, for 429 / 5xx / timeouts
 BACKOFF_SEC = (4.0, 12.0)
 _TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
 MODEL_BUDGET_SEC = 180.0                 # stop retrying one model after this much wall time
+# Remediation WS7: one deferred round when every model failed transiently (0 disables).
+DEFERRED_RETRY_SEC = float(os.environ.get("CRAZZYDOCS_SCRIPT_DEFERRED_RETRY_SEC", "150"))
+_deferred_sleep = time.sleep
 # Used only when the configured model fails with transient errors (overload, timeouts). The model
 # that actually wrote the script is recorded in script_source, so a fallback model is never hidden.
 DEFAULT_FALLBACK_MODELS = ("gemini-3.6-flash",)
@@ -306,42 +309,57 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
     attempts: List[Dict[str, Any]] = []
     if client is not None and model:
         corpus = fact_corpus(topic)
-        for current in model_chain(model):
-            feedback: List[str] = []
-            api_unavailable = False
-            for attempt in range(1, MAX_ATTEMPTS + 1):
-                calls: List[Dict[str, Any]] = []
-                try:
-                    raw, info = _call_with_backoff(client, current, build_prompt(topic, hook_type, hook_text, feedback))
-                    calls = info["calls"]
-                    data = _parse(raw)
-                    sections = data.get("sections") or []
-                    feedback = validate_sections(sections, corpus)
-                except Exception as exc:   # API, quota, timeout or malformed JSON: never fail the production
-                    calls = calls or list(getattr(exc, "calls", []))
-                    feedback = [f"{type(exc).__name__}"]
-                    attempts.append({"attempt": attempt, "model": current, "accepted": False,
-                                     "problems": feedback, "calls": calls})
-                    if not isinstance(exc, (ValueError, KeyError, TypeError)):
-                        last = calls[-1] if calls else {}
-                        # overloaded/timed-out after bounded retries, or model not served: next model.
-                        # Any other API error (auth, network down, bad request) ends the attempt.
-                        api_unavailable = bool(last.get("transient") or last.get("http_status") == 404)
-                        break
-                    continue
-                attempts.append({"attempt": attempt, "model": current, "accepted": not feedback,
-                                 "problems": feedback, "calls": calls, "draft": data if feedback else None})
-                if not feedback:
-                    policy_arc, category = _arc_and_category(topic, execution_context)
-                    out = _assemble(sections, policy_arc, category, script_source=f"llm:{current}",
-                                    model=current, configured_model=model,
-                                    hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
-                                    writer_attempts=attempts)
-                    if experiment:
-                        out["creative_experiment"] = experiment
-                    return _with_quality(out, topic)
-            if not api_unavailable:
-                break   # drafts failed validation, or a non-transient API error: another model is not the fix
+        # Remediation WS7: when EVERY model failed with transient errors (HTTP 429 / 5xx / timeouts; the free tier is
+        # often overloaded for minutes), one deferred round runs after DEFERRED_RETRY_SEC before falling back to the
+        # extractive script, which measured 13 points lower overall (storytelling 25 vs 79, hook 24 vs 53).
+        for round_no in (1, 2):
+            exhausted_transient = True
+            for current in model_chain(model):
+                feedback: List[str] = []
+                api_unavailable = False
+                for attempt in range(1, MAX_ATTEMPTS + 1):
+                    calls: List[Dict[str, Any]] = []
+                    try:
+                        raw, info = _call_with_backoff(client, current, build_prompt(topic, hook_type, hook_text, feedback))
+                        calls = info["calls"]
+                        data = _parse(raw)
+                        sections = data.get("sections") or []
+                        feedback = validate_sections(sections, corpus)
+                    except Exception as exc:   # API, quota, timeout or malformed JSON: never fail the production
+                        calls = calls or list(getattr(exc, "calls", []))
+                        feedback = [f"{type(exc).__name__}"]
+                        attempts.append({"attempt": attempt, "model": current, "accepted": False,
+                                         "problems": feedback, "calls": calls, "round": round_no})
+                        if not isinstance(exc, (ValueError, KeyError, TypeError)):
+                            last = calls[-1] if calls else {}
+                            # overloaded/timed-out after bounded retries, or model not served: next model.
+                            # Any other API error (auth, network down, bad request) ends the attempt.
+                            api_unavailable = bool(last.get("transient") or last.get("http_status") == 404)
+                            break
+                        continue
+                    attempts.append({"attempt": attempt, "model": current, "accepted": not feedback,
+                                     "problems": feedback, "calls": calls, "draft": data if feedback else None,
+                                     "round": round_no})
+                    if not feedback:
+                        policy_arc, category = _arc_and_category(topic, execution_context)
+                        out = _assemble(sections, policy_arc, category, script_source=f"llm:{current}",
+                                        model=current, configured_model=model,
+                                        hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
+                                        writer_attempts=attempts)
+                        if experiment:
+                            out["creative_experiment"] = experiment
+                        return _with_quality(out, topic)
+                if not api_unavailable:
+                    exhausted_transient = False
+                    break   # drafts failed validation, or a non-transient API error: another model is not the fix
+            if round_no == 1 and exhausted_transient and DEFERRED_RETRY_SEC > 0:
+                attempts.append({"deferred_retry_after_sec": DEFERRED_RETRY_SEC,
+                                 "reason": "every model failed with transient errors (rate limit / overload)"})
+                logger.info("Script writer: all models unavailable (transient); one deferred retry in %.0f s",
+                            DEFERRED_RETRY_SEC)
+                _deferred_sleep(DEFERRED_RETRY_SEC)
+                continue
+            break
         logger.warning("Script writer: no accepted model draft, using extractive fallback: %s",
                        [{k: a.get(k) for k in ("attempt", "model", "problems")} for a in attempts])
 

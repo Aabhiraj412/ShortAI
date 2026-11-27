@@ -181,7 +181,10 @@ def world(tmp_path):
     svc_mod.set_services(None)
 
 
-def build(tmp_path, *, level="RECOMMEND", startup=True, environ=None, explainer=None, seed_fn=seed, notifications=None):
+def build(tmp_path, *, level="RECOMMEND", startup=True, environ=None, explainer=None, seed_fn=seed, notifications=None,
+          policy=False):
+    """policy=False: these tests exercise the explicit/standing approval paths, so the Remediation WS2 built-in
+    automatic policy is disabled; test_remediation_ws2_autonomy_control_states.py covers it enabled."""
     data = tmp_path / "data"
     data.mkdir(parents=True, exist_ok=True)
     db = tmp_path / "studio.db"
@@ -191,7 +194,8 @@ def build(tmp_path, *, level="RECOMMEND", startup=True, environ=None, explainer=
         (data / "autonomy_startup.json").write_text('{"autonomy_execution": "enabled"}', encoding="utf-8")
     clock = Clock()
     oi = OperationalIntelligence(db_path=str(db), data_dir=str(tmp_path / "nodata"), cache_ttl=0, clock=clock)
-    cp = ControlPlane(str(db), str(data), environ={}, intelligence=lambda: oi, clock=clock)
+    cp = ControlPlane(str(db), str(data), environ={}, intelligence=lambda: oi, clock=clock,
+                      automatic_policy=None if policy else {})
     if level:
         cp.set_level("global", "APPROVED_EXECUTION", OP, "test")
         cp.set_level("self_healing", level, OP, "test")
@@ -443,9 +447,15 @@ def test_resource_lock_protection(tmp_path, world):
 # -- 9 / 10 / 11. kill switches, approval, self-approval ----------------------------------------------------------
 @pytest.mark.parametrize("switch", ["dashboard", "sentinel", "startup"])
 def test_kill_switch_enforcement(tmp_path, world, switch):
+    """Emergency stops (dashboard, sentinel) block scans and execution. Remediation WS2 changed the "startup" case on
+    purpose: a missing startup configuration is RESTRICTED autonomy, not an emergency stop, so scanning continues
+    while explicit-approval recoveries are still refused (see test_missing_startup_config_is_restricted_not_blocked)."""
+    if switch == "startup":
+        pytest.skip("covered by test_missing_startup_config_is_restricted_not_blocked (Remediation WS2)")
     cp, eng, clock, db = build(tmp_path, level="APPROVED_EXECUTION", startup=(switch != "startup"))
     if switch != "startup":
-        cp2 = ControlPlane(cp.db_path, str(cp.data_dir), environ={}, intelligence=cp.intelligence, clock=clock)
+        cp2 = ControlPlane(cp.db_path, str(cp.data_dir), environ={}, intelligence=cp.intelligence, clock=clock,
+                           automatic_policy={})
         eng2 = SelfHealingEngine(cp2, environ={}, clock=clock)
         eng2.scan(force=True)                                            # incidents + proposals exist before the switch
         rec = recs(eng2, J_PROV, "selfheal.provider.retry_readonly")[0]
@@ -464,6 +474,18 @@ def test_kill_switch_enforcement(tmp_path, world, switch):
     if before is not None:
         assert len(eng.store.list_recoveries("all", 500)) == before
     assert eng.state()["mode"] == "BLOCKED" and eng.overview()["state"]["kill_switches"]
+
+
+def test_missing_startup_config_is_restricted_not_blocked(tmp_path, world):
+    cp, eng, clock, db = build(tmp_path, level="APPROVED_EXECUTION", startup=False)
+    st = eng.state()
+    assert st["mode"] == "APPROVED_EXECUTION" and st["control_state"] == "RESTRICTED"
+    out = eng.scan(force=True)
+    assert out["ran"] is True and "SELF_HEALING_SCAN_BLOCKED" not in events(cp)
+    rec = recs(eng, J_PROV, "selfheal.provider.retry_readonly")[0]
+    approve(eng, rec)
+    res = eng.execute(rec["id"], OP)                     # explicit approval: still needs the startup configuration
+    assert res["executed"] is False and "startup_config" in (res["reason"] or "") and world.calls == []
 
 
 def test_approval_enforcement(tmp_path, world):
@@ -904,7 +926,11 @@ def test_api_reports_blocked_engine(tmp_path, world, monkeypatch):
     local = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     h = {"X-CrazzyDocs-CSRF": local.get("/api/autonomy/session").json()["csrf_token"]}
     ov = local.get("/api/self-healing").json()
-    assert ov["state"]["mode"] == "BLOCKED" and "startup_config" in ov["state"]["kill_switches"]
+    # Remediation WS2: without the startup configuration the engine is RESTRICTED (it scans), not BLOCKED.
+    assert ov["state"]["mode"] == "APPROVED_EXECUTION" and ov["state"]["control_state"] == "RESTRICTED"
+    cp.set_dashboard_kill_switch(True, OP, "emergency stop")
+    ov = local.get("/api/self-healing").json()
+    assert ov["state"]["mode"] == "BLOCKED" and "dashboard" in ov["state"]["kill_switches"]
     r = local.post("/api/self-healing/scan", json={"operator": OP, "force": True}, headers=h).json()
     assert r["ran"] is False and r["mode"] == "BLOCKED"
 

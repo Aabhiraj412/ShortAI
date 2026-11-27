@@ -941,6 +941,10 @@
           <input id="intelHypothesis" maxlength="500" placeholder="hypothesis" style="width:260px;" />
           <button class="btn sm" onclick="intelCreateExperiment()">Create draft</button></div>
         <div id="intelExperiments" style="margin-top:6px;"></div></div></div>
+    <!-- Remediation WS7: creative quality feedback loop -->
+    <div class="card"><div class="card-head"><div><h2 class="card-title">Quality feedback loop</h2>
+      <p class="card-desc">From the stored craft evaluation of every completed video. A change is shown as improving or declining only with enough videos on both sides and a meaningful difference; otherwise it says so. Creative (QC) failures and infrastructure failures are counted apart. Proposals that change creative policy need you; measured interventions show their before/after.</p></div></div>
+      <div id="intelFeedback" style="font-size:12px;">--</div></div>
     <!-- Roadmap 3.35: audience analytics, learning, providers, visual composition -->
     <div class="card"><div class="card-head"><div><h2 class="card-title">YouTube Analytics and learning</h2><p class="card-desc">Read-only Analytics API data per published video. A fixed first-7-days window makes videos comparable. Learning findings stay <em>preliminary</em> until at least 30 videos have first-7-days metrics, and every recommendation is a proposal that is never applied automatically. "not yet" means YouTube has not reported data, which is different from zero.</p></div></div>
       <div id="intelAnalytics" style="font-size:12px;overflow-x:auto;">--</div></div>
@@ -1140,6 +1144,15 @@
       <div class="kpi-card"><div class="kpi-label">Executions</div><div class="kpi-val" id="apExecCount">--</div><div class="kpi-sub" id="apExecCountSub">--</div></div>
       <div class="kpi-card"><div class="kpi-label">Safety</div><div class="kpi-val" id="apSafety">--</div><div class="kpi-sub" id="apSafetySub">--</div></div>
     </div>
+    <!-- REMEDIATION: one operator-attention feed (needs you / done automatically / blocked) -->
+    <div class="card" id="attnCard"><div class="card-head"><div><h2 class="card-title">Needs your attention</h2>
+      <p class="card-desc">The one place that asks for you: missing credentials, approvals outside the automatic policy, decisions that need human judgement, and recoveries that failed after their permitted attempts. Routine recoverable work runs automatically and is listed below with its outcome or the exact reason it was blocked.</p></div>
+      <div class="kpi-card" style="min-width:180px;"><div class="kpi-label">Control state</div><div class="kpi-val" id="attnState" style="font-size:15px;">--</div><div class="kpi-sub" id="attnStateSub">--</div></div></div>
+      <div id="attnNeeds" style="font-size:12px;">--</div>
+      <div class="grid-2">
+        <div><h3 style="font-size:13px;margin:10px 0 4px;">Done automatically</h3><div id="attnAuto" style="font-size:12px;overflow-x:auto;">--</div></div>
+        <div><h3 style="font-size:13px;margin:10px 0 4px;">Blocked (with reason)</h3><div id="attnBlocked" style="font-size:12px;overflow-x:auto;">--</div></div>
+      </div></div>
     <!-- STAGE 3.36: Autopilot continuous production controller -->
     <div class="card" id="apCtlCard"><div class="card-head"><div><h2 class="card-title">Autopilot controller (production)</h2>
       <p class="card-desc">Operational state (<strong>OFF / STARTING / ON / STOPPING / BLOCKED</strong>) is separate from the autonomy mode (the <code>production</code> level, the lower of global and category). The controller runs inside the scheduler daemon. It takes production ownership only at <strong>APPROVED_EXECUTION</strong> with active standing approvals, and it dispatches only cycle occurrences the unchanged 24-cycle schedule fired, one renderer at a time. Start and Stop are requests: the state shown is the one the backend has verified. Publishing, schedule, configuration, restart, deletion and git actions are permanently prohibited.</p></div>
@@ -2866,6 +2879,7 @@ async function intelWrite(url, body) {
   return autoWrite(url, "POST", body);
 }
 async function refreshIntel() {
+  refreshCreativeFeedback();   // Remediation WS7
   const t = document.getElementById("intelTopic"); if (!t) return;
   const arms = document.getElementById("intelArms");
   if (arms && !arms.innerHTML) arms.innerHTML = INTEL_HOOKS.map(h => `<label style="margin-right:6px;"><input type="checkbox" class="intelArm" value="${h}"> ${h.replace(/_/g, " ")}</label>`).join("");
@@ -2907,10 +2921,10 @@ async function refreshIntel() {
     }).join("")
     + ((ln.recommendations || []).length ? `<div style="margin-top:8px;"><strong>Recommendations</strong> (proposals; never applied automatically)</div>` + apTable(["Area", "Status", "Detail", "Confidence"], ln.recommendations.map(r => `<tr><td>${escHtml(r.area)}</td><td>${escHtml(r.status)}</td><td>${escHtml(r.recommendation || r.needs || "")}${r.expected_benefit ? " · " + escHtml(r.expected_benefit) : ""}</td><td>${escHtml(r.confidence)}</td></tr>`)) : "");
   const pv = (d.providers || {}).inventory || {}, fp = (d.providers || {}).footage || [];
-  const STATE_COLOR = { HEALTHY: "#86efac", CONFIGURED: "#93c5fd", NOT_USED: "#fcd34d", DEGRADED: "#fcd34d", RATE_LIMITED: "#fcd34d", KEY_MISSING: "#fca5a5", AUTHENTICATION_REQUIRED: "#fca5a5", DISABLED: "var(--muted)" };
+  const STATE_COLOR = { HEALTHY: "#86efac", CONFIGURED: "#93c5fd", NOT_USED: "#fcd34d", AVAILABLE_NOT_SELECTED: "#93c5fd", DEGRADED: "#fcd34d", RATE_LIMITED: "#fcd34d", KEY_MISSING: "#fca5a5", AUTHENTICATION_REQUIRED: "#fca5a5", DISABLED: "var(--muted)" };
   document.getElementById("intelProviders").innerHTML = apTable(["Provider", "State", "Requests ok/failed", "Rendered (last 20)"], (pv.providers || []).map(r => {
       const h = r.recent_health || {}; const u = r.rendered_usage_last_20;
-      return `<tr><td>${escHtml(r.name)}</td><td style="color:${STATE_COLOR[r.state] || "inherit"}">${escHtml(r.state || r.status)}</td><td>${h.ok != null ? escHtml(`${h.ok}/${h.failed}`) : "--"}${r.error_category ? ` <span style="color:var(--muted)">${escHtml(r.error_category)}</span>` : ""}</td><td>${u == null ? "n/a" : (Object.keys(u).length ? escHtml(Object.entries(u).map(([k, v]) => `${k.replace("video_footage", "footage")} ${v}`).join(", ")) : "0")}</td></tr>`;
+      return `<tr><td>${escHtml(r.name)}</td><td style="color:${STATE_COLOR[r.state] || "inherit"}">${escHtml(r.state || r.status)}${r.state_reason ? `<div style="color:var(--muted);font-size:11px;max-width:320px;">${escHtml(r.state_reason)}</div>` : ""}</td><td>${h.ok != null ? escHtml(`${h.ok}/${h.failed}`) : "--"}${r.error_category ? ` <span style="color:var(--muted)">${escHtml(r.error_category)}</span>` : ""}</td><td>${u == null ? "n/a" : (Object.keys(u).length ? escHtml(Object.entries(u).map(([k, v]) => `${k.replace("video_footage", "footage")} ${v}`).join(", ")) : "0")}</td></tr>`;
     })) + `<div style="margin-top:6px;"><strong>Footage providers</strong>: ${fp.map(p => `${escHtml(p.provider)} ${p.configured ? '<span class="auto-on">configured</span>' : '<span style="color:#fca5a5">key missing</span>'}`).join(" · ")}</div>`;
   const vs = d.visual || {}, sh = vs.share_pct || {};
   document.getElementById("intelVisual").innerHTML = vs.videos ? opsKV([
@@ -2924,6 +2938,28 @@ async function refreshIntel() {
   const ex = c.experiments || [];
   document.getElementById("intelExperiments").innerHTML = ex.length ? apTable(["Experiment", "Arms (productions)", "Status", "Hypothesis", ""], ex.map(e => `<tr><td>${escHtml(e.id)}</td><td>${escHtml(Object.entries(e.productions_per_arm || {}).map(([a, n]) => `${a} (${n})`).join(", "))}</td><td>${escHtml(e.status)}</td><td>${escHtml(e.hypothesis)}</td><td>${e.status === "ACTIVE" ? `<button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'PAUSED')">Pause</button>` : (e.status !== "COMPLETED" ? `<button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'ACTIVE')">Activate</button>` : "")}${e.status !== "COMPLETED" ? ` <button class="btn sm" data-id="${escHtml(e.id)}" onclick="intelSetStatus(this.dataset.id, 'COMPLETED')">Complete</button>` : ""}</td></tr>`))
     : `<div style="color:var(--muted)">No experiments. Hook styles rotate across all five by job (the default).</div>`;
+}
+
+async function refreshCreativeFeedback() {
+  const el = document.getElementById("intelFeedback");
+  if (!el) return;
+  try {
+    const f = await apiJson("/api/creative-intel/feedback");
+    if (!f.available) { el.innerHTML = `<span style="color:var(--muted)">${escHtml(f.reason || "unavailable")}</span>`; return; }
+    const src = f.by_script_source || {}, tr = f.trend || {}, fl = f.failures || {};
+    const vtxt = v => v ? `${v.verdict}${v.delta != null ? ` (${v.delta > 0 ? "+" : ""}${v.delta})` : ""}` : "--";
+    el.innerHTML = opsKV([
+      ["Videos evaluated", escHtml(String(f.videos))],
+      ["By script source", escHtml(Object.entries(src).map(([k, v]) => `${k}: ${v.overall} overall (n=${v.n})`).join(" · "))],
+      ["Model script share (last " + f.window + ")", escHtml(`${Math.round((f.recent.model_share || 0) * 100)}% · trend ${vtxt(tr.model_share)}`)],
+      ["Overall quality trend", escHtml(vtxt(tr.overall))],
+      ["Recurring weaknesses", escHtml(Object.entries(f.recurring_weaknesses || {}).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", "))],
+      ["Failures (7 days)", escHtml(`creative: ${Object.entries(fl.creative_quality || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none"} · infrastructure: ${Object.entries(fl.infrastructure || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none"}`)],
+    ]) + ((f.interventions || []).length ? apTable(["Intervention", "Since", "Before", "After", "Verdict"], f.interventions.map(i =>
+      `<tr><td>${escHtml(i.id)}</td><td>${autoTime(i.applied_from_utc)}</td><td>${escHtml(`${i.metric} ${i.before[i.metric] ?? "--"} (n=${i.before.n})`)}</td><td>${escHtml(`${i.metric} ${i.after[i.metric] ?? "--"} (n=${i.after.n})`)}</td><td>${escHtml(i.verdict + (i.detail ? ": " + i.detail : ""))}</td></tr>`)) : "")
+      + ((f.proposals || []).length ? apTable(["Proposal", "Evidence", "Action", "Needs you"], f.proposals.map(p =>
+      `<tr><td>${escHtml(p.id)}</td><td style="max-width:360px;overflow-wrap:anywhere;">${escHtml(p.evidence)}</td><td>${escHtml(p.action)}</td><td>${p.requires_operator ? "yes" : "no (automatic)"}</td></tr>`)) : "");
+  } catch (err) { el.innerHTML = `<span class="auto-kill">feedback unavailable: ${escHtml(err.message || String(err))}</span>`; }
 }
 async function intelCreateExperiment() {
   const arms = [...document.querySelectorAll(".intelArm:checked")].map(x => x.value);
@@ -4135,6 +4171,37 @@ async function refreshAutopilot(force = false) {
   refreshAutopilotOps(force);
   refreshAutopilotController(force);
   refreshProductionQueues(force);
+  refreshOperatorAttention(force);
+}
+
+// -- Remediation: the single operator-attention feed. --
+const ATTN_STATE_COLOR = { NORMAL: "#86efac", RESTRICTED: "#93c5fd", EMERGENCY_STOP: "#fca5a5" };
+const ATTN_SEV_COLOR = { high: "#fca5a5", medium: "#fcd34d", low: "var(--muted)" };
+async function refreshOperatorAttention(force = false) {
+  const panel = document.getElementById("tab-autopilot");
+  if (!panel || (!force && !panel.classList.contains("active"))) return;
+  try {
+    const a = await apiJson("/api/operations/attention");
+    const cs = a.control_state || {};
+    document.getElementById("attnState").innerHTML = `<span style="color:${ATTN_STATE_COLOR[cs.state] || "inherit"}">${escHtml(cs.state || "--")}</span>`;
+    document.getElementById("attnStateSub").textContent = cs.reason || "";
+    const n = a.needs_you || [];
+    document.getElementById("attnNeeds").innerHTML = n.length ? apTable(["", "What", "Why", "What to do"], n.map(x =>
+      `<tr><td style="color:${ATTN_SEV_COLOR[x.severity] || "inherit"}">${escHtml(x.severity)}</td><td>${escHtml(x.title)}</td><td style="max-width:380px;overflow-wrap:anywhere;">${escHtml(x.why || "")}</td><td style="max-width:320px;overflow-wrap:anywhere;">${escHtml(x.action || "")}</td></tr>`))
+      : `<div class="auto-on">Nothing needs you right now.</div>`;
+    if ((a.unavailable || []).length) document.getElementById("attnNeeds").innerHTML += `<div style="color:var(--muted);margin-top:4px;">Not checked: ${escHtml(a.unavailable.join("; "))}</div>`;
+    const au = a.done_automatically || [];
+    document.getElementById("attnAuto").innerHTML = au.length ? apTable(["When", "Action", "Outcome", "Approval"], au.map(x =>
+      `<tr><td>${autoTime(x.at_utc)}</td><td>${escHtml(x.action_type)}</td><td>${escHtml(x.outcome)}</td><td>${escHtml(x.approval || "")}</td></tr>`))
+      : `<div style="color:var(--muted)">No automatic actions yet.</div>`;
+    const bl = a.blocked || [];
+    document.getElementById("attnBlocked").innerHTML = bl.length ? apTable(["When", "Event", "Action", "Reason"], bl.map(x =>
+      `<tr><td>${autoTime(x.at_utc)}</td><td>${escHtml(x.event)}</td><td>${escHtml(x.action_type || "")}</td><td style="max-width:360px;overflow-wrap:anywhere;">${escHtml(x.reason)}</td></tr>`))
+      : `<div style="color:var(--muted)">Nothing blocked.</div>`;
+  } catch (err) {
+    const el = document.getElementById("attnNeeds");
+    if (el) el.innerHTML = `<span class="auto-kill">attention feed unavailable: ${escHtml(err.message || String(err))}</span>`;
+  }
 }
 
 async function apPropose(recId, actionType) {

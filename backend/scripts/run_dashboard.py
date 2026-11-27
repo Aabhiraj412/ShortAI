@@ -311,4 +311,10 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException as _exc:  # noqa: BLE001 - under pythonw a traceback would otherwise vanish
+        logger.critical("Dashboard runner exited on an unhandled exception: %s", _exc, exc_info=True)
+        sys.exit(1)

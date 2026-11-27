@@ -125,3 +125,45 @@ def test_liveness_still_answers_from_the_loop():
     c = TestClient(main.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     assert c.get("/api/health/live").json()["status"] == "alive"
     assert asyncio.iscoroutinefunction(main.api_health_live)
+
+
+def test_concurrent_startup_status_writes_never_raise(tmp_path, monkeypatch):
+    """Root cause of the dying Task Scheduler launches: the browser thread and the main thread wrote the startup
+    status through one shared .tmp file at the same moment; the losing os.replace raised before uvicorn.run."""
+    import json as _json
+    import threading as _th
+    from backend.app.core import dashboard_startup as ds
+    monkeypatch.setattr(ds, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(ds, "STATUS_PATH", tmp_path / "dashboard_startup_status.json")
+    errors = []
+    barrier = _th.Barrier(8)
+
+    def writer(i):
+        barrier.wait()
+        try:
+            for _ in range(25):
+                ds.write_status("launching" if i % 2 else "waiting_for_health", source=f"t{i}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    ts = [_th.Thread(target=writer, args=(i,)) for i in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert errors == []
+    data = _json.loads((tmp_path / "dashboard_startup_status.json").read_text(encoding="utf-8"))
+    assert data["phase"] in ("launching", "waiting_for_health") and len(data["history"]) <= 20
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_write_status_survives_an_unwritable_directory(tmp_path, monkeypatch):
+    from backend.app.core import dashboard_startup as ds
+    blocker = tmp_path / "file_not_dir"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(ds, "LOGS_DIR", blocker / "logs")
+    monkeypatch.setattr(ds, "STATUS_PATH", blocker / "logs" / "status.json")
+    assert ds.write_status("launching")["phase"] == "launching"      # informational: never raises
+
+
+def test_run_dashboard_logs_unhandled_exceptions():
+    src = (ROOT / "backend" / "scripts" / "run_dashboard.py").read_text(encoding="utf-8")
+    assert "exited on an unhandled exception" in src

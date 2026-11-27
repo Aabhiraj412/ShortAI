@@ -29,6 +29,9 @@ if str(CHECKOUT_ROOT) not in sys.path[:1]:
 # Enforce TEST execution context and TEST_MODE for all pytest runs
 os.environ["CRAZZYDOCS_EXECUTION_CONTEXT"] = "TEST"
 os.environ["CRAZZYDOCS_TEST_MODE"] = "1"
+# Remediation WS7: the script writer's deferred retry round (150 s in production) is disabled for the suite;
+# test_remediation_ws7_creative_feedback.py enables it explicitly with an injected sleep.
+os.environ.setdefault("CRAZZYDOCS_SCRIPT_DEFERRED_RETRY_SEC", "0")
 
 # A worktree has no gitignored portable binaries (tools/ffmpeg); borrow them read-only.
 _MAIN_TOOLS = Path("D:/Agents/CrazzyDocs/tools")

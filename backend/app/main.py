@@ -481,6 +481,21 @@ class YouTubeConnectRequest(ConfirmedActionRequest):
     confirm: bool = False
 
 
+@app.get("/api/operations/attention")
+def api_operations_attention(_: None = Depends(require_local_control)):
+    """Remediation section 4: the one place that asks for the operator (needs you / done automatically / blocked)."""
+    from backend.app.services.operator_attention import attention
+    return attention()
+
+
+@app.get("/api/creative-intel/feedback")
+def api_creative_feedback(_: None = Depends(require_local_control)):
+    """Remediation WS7: quality feedback loop (by script source, trends, recurring weaknesses, failures split into
+    creative vs infrastructure, proposals, measured interventions). Read-only."""
+    from backend.app.creative_intel.feedback import feedback_report
+    return feedback_report()
+
+
 @app.get("/api/creative-engine/status")
 async def api_creative_engine_status(_: None = Depends(require_local_control)):
     """Pop Info engine flag, script/asset sources, API configuration (presence only) and quality reports."""

@@ -1062,6 +1062,11 @@ def run_creative_evaluation_tick() -> Dict:
     """Stage 3.32 (creative intelligence): evaluates up to 3 finished productions from their saved artifacts and
     links them to their YouTube video ids. Skips entirely while any production job is active; never touches
     jobs, cycles, recovery windows or publishing."""
+    try:   # Remediation WS7: record when each applied creative intervention started (idempotent, tiny write)
+        from backend.app.creative_intel.feedback import record_interventions
+        record_interventions()
+    except Exception as exc:
+        logger.debug("[SCHEDULER] creative interventions not recorded: %s", type(exc).__name__)
     try:
         from backend.app.creative_intel.runner import evaluate_pending
         res = evaluate_pending()

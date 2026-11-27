@@ -611,6 +611,27 @@ class CuriosityTopicEngine:
             self._trace_reject_new(origin, title, blurb, cl.INSUFFICIENT_EVIDENCE, stage,
                                    {"rule": "no usable encyclopedic extract (short, disambiguation or fetch failed)"})
 
+    # Remediation WS3: the orchestrator sets this to the creative-identity registry's topic_conflict for the
+    # current job. Subjects another job already selected are then dropped BEFORE enrichment (they used to pass
+    # ranking, consume the enrichment budget and inflate eligible_count, and only the final integrity gate,
+    # which is unchanged, removed them).
+    identity_precheck: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+
+    def _identity_conflict(self, origin: str, title: str, blurb: str, stage: str) -> bool:
+        check = self.identity_precheck
+        if not callable(check) or not title:
+            return False
+        try:
+            hit = check(title)
+        except Exception:                      # the final integrity gate still applies
+            return False
+        if not hit:
+            return False
+        self._trace_reject_new(origin, title, blurb, cl.RECENTLY_USED, stage,
+                               {"rule": "creative identity: subject already selected by another job",
+                                "conflicts_with": hit.get("job_id"), "status": hit.get("status")})
+        return True
+
     def _trace_reject_new(self, source: str, title: str, blurb: str, reason: str, stage: str,
                           detail: Optional[Dict[str, Any]] = None, match: Optional[str] = None) -> None:
         """Records a candidate that was dropped before scoring. A candidate already registered in
@@ -772,6 +793,8 @@ class CuriosityTopicEngine:
             if dup:
                 self._trace_reject_new(origin, t, "", cl.classify_duplicate_reason(why), "pre_enrichment", match=why)
                 continue
+            if self._identity_conflict(origin, t, "", "identity_precheck"):
+                continue
             cand = self.enrich_wikipedia_candidate(t, event_blurb="", discovery_origin=origin)
             if not cand:
                 continue
@@ -918,6 +941,8 @@ class CuriosityTopicEngine:
                     if dup:
                         self._trace_reject_new(origin, title, blurb, cl.classify_duplicate_reason(why),
                                                "recovery_pre_enrichment", match=why)
+                        continue
+                    if self._identity_conflict(origin, title, blurb, "recovery_identity_precheck"):
                         continue
                     report["candidates_evaluated"] += 1
                     step["evaluated"] += 1
@@ -1686,6 +1711,8 @@ class CuriosityTopicEngine:
             if pre_dup:
                 self._trace_reject_new(origin, wiki_title, blurb, cl.classify_duplicate_reason(pre_reason),
                                        "pre_enrichment", match=pre_reason)
+                continue
+            if self._identity_conflict(origin, wiki_title, blurb, "identity_precheck"):
                 continue
 
             cand = self.enrich_wikipedia_candidate(wiki_title, event_blurb=blurb, discovery_origin=origin)

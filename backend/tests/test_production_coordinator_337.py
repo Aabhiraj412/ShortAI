@@ -610,6 +610,35 @@ def test_daemon_coordinator_tick_is_throttled(monkeypatch):
 
     monkeypatch.setattr(mod, "get_coordinator", lambda: Fake())
     monkeypatch.setattr(dr, "_last_coordinator_tick", [float("-inf")])
-    for _ in range(5):
-        asyncio.run(dr.production_coordinator_tick())
+    monkeypatch.setattr(dr, "_coordinator_task", [None])
+
+    async def go():
+        for _ in range(5):
+            await dr.production_coordinator_tick()
+        await dr._coordinator_task[0]
+
+    asyncio.run(go())
     assert ticks == [1]
+
+
+def test_daemon_coordinator_tick_never_blocks_the_recovery_loop(monkeypatch):
+    """Remediation: the recovery loop must not wait for a slow coordinator tick (restart/recovery checks first)."""
+    from backend.app.scheduler import daemon_runtime as dr
+    import backend.app.scheduler.production_coordinator as mod
+
+    class Slow:
+        async def tick(self):
+            await asyncio.sleep(1.0)
+
+    monkeypatch.setattr(mod, "get_coordinator", lambda: Slow())
+    monkeypatch.setattr(dr, "_last_coordinator_tick", [float("-inf")])
+    monkeypatch.setattr(dr, "_coordinator_task", [None])
+
+    async def go():
+        t0 = time.monotonic()
+        await dr.production_coordinator_tick()
+        took = time.monotonic() - t0
+        dr._coordinator_task[0].cancel()
+        return took
+
+    assert asyncio.run(go()) < 0.1

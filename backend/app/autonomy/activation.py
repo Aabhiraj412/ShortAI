@@ -498,7 +498,8 @@ class ActivationManager:
     # -- observation cycle (called by the existing scheduler daemon; never advances a phase) -------------------
     def run_observation_cycle(self, *, assessment: Optional[Callable[[], Dict[str, Any]]] = None,
                               recommendations: Optional[Callable[[], Dict[str, Any]]] = None,
-                              self_healing: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
+                              self_healing: Optional[Callable[[], Dict[str, Any]]] = None,
+                              auto_actions: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
         st = self.state()
         phase = st.get("phase", OFF)
         if phase == OFF:
@@ -512,11 +513,16 @@ class ActivationManager:
                                                                       fromlist=["x"]).get_engine().run(triggered_by="autopilot-observation")),
             "self_healing": self_healing or (lambda: __import__("backend.app.autonomy.self_healing.engine",
                                                                 fromlist=["x"]).get_engine().scan(triggered_by="autopilot-observation")),
+            # Remediation WS5: policy-automatic follow-ups of open recommendations (deduplicated, audited).
+            "auto_actions": auto_actions or (lambda: __import__("backend.app.autonomy.autopilot",
+                                                                fromlist=["x"]).Autopilot(self.cp).auto_bridge()),
         }
         for name, fn in steps.items():
             try:
                 res = fn() or {}
-                summary[name] = {k: res.get(k) for k in ("ran", "mode", "observations", "reason", "findings")
+                summary[name] = {k: res.get(k) for k in ("ran", "mode", "observations", "reason", "findings",
+                                                         "control_state", "executed", "blocked", "skipped_duplicate",
+                                                         "approval_required", "informational", "proposals")
                                  if k in res and not isinstance(res.get(k), (list, dict))}
                 if isinstance(res.get("findings"), list):
                     summary[name]["findings"] = len(res["findings"])

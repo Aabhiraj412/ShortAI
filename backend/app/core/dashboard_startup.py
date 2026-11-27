@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -44,20 +45,46 @@ def _now_iso() -> str:
 
 
 # ------------------------------------------------------------------ status
+_status_lock = threading.Lock()
+
+
 def write_status(phase: str, **details: Any) -> Dict[str, Any]:
-    """Records the latest startup phase (launching, waiting, healthy, browser_opened, failed, ...)."""
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        current = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        current = {}
-    history = (current.get("history") or [])[-19:]
+    """Records the latest startup phase (launching, waiting, healthy, browser_opened, failed, ...).
+
+    Remediation WS1: this is informational and must never take the dashboard down. With ``--open-browser`` the
+    browser-opener thread and the main thread wrote the status within milliseconds through ONE shared ``.tmp``
+    path; the second ``os.replace`` failed, the exception escaped before ``uvicorn.run`` and pythonw exited with
+    code 1 (every Task Scheduler launch died; the monitor's relaunch, without the browser thread, survived).
+    Now: one writer at a time per process, a per-thread temp file, bounded retries for Windows sharing
+    violations, and failures are swallowed.
+    """
     entry = {"phase": phase, "at_utc": _now_iso(), "pid": os.getpid(), **details}
-    history.append(entry)
-    status = {**entry, "boot_id": boot_id(), "history": history}
-    tmp = STATUS_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(status, indent=2), encoding="utf-8")
-    os.replace(tmp, STATUS_PATH)
+    status: Dict[str, Any] = dict(entry)
+    with _status_lock:
+        try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            try:
+                current = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                current = {}
+            history = (current.get("history") or [])[-19:]
+            history.append(entry)
+            status = {**entry, "boot_id": boot_id(), "history": history}
+            tmp = STATUS_PATH.with_name(f"{STATUS_PATH.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps(status, indent=2), encoding="utf-8")
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, STATUS_PATH)
+                    break
+                except PermissionError:            # another process is reading the file right now
+                    time.sleep(0.05 * (attempt + 1))
+            else:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+        except Exception:                          # noqa: BLE001 - never fatal
+            pass
     return status
 
 

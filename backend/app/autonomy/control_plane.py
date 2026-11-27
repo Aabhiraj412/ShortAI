@@ -64,6 +64,42 @@ OPERATOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,63}$")
 MAX_EVIDENCE_BYTES = 8000
 MAX_REASON = 500
 STARTUP_ENV = "CRAZZYDOCS_AUTONOMY"
+
+# -- Remediation WS2: three control states --------------------------------------------------------------------
+# EMERGENCY_STOP  a dashboard kill switch, the sentinel file, CRAZZYDOCS_AUTONOMY=off, or an unreadable
+#                 configuration: no autonomous execution at all. Independent of the startup configuration.
+# RESTRICTED      no operator startup configuration (absent, invalid, or not "enabled"): only the fixed
+#                 POLICY_AUTOMATIC[RESTRICTED] set runs (read-only diagnostics, reports, recording recommendations,
+#                 local notifications, read-only provider re-checks). Everything else is blocked as before.
+# NORMAL          the operator-created startup configuration enables execution: the NORMAL policy set runs
+#                 automatically; every other action still needs its standing or explicit approval and level.
+# Observation, reporting and the scheduler's own production are never governed by these states.
+NORMAL, RESTRICTED, EMERGENCY_STOP = "NORMAL", "RESTRICTED", "EMERGENCY_STOP"
+CONTROL_STATES = (NORMAL, RESTRICTED, EMERGENCY_STOP)
+POLICY_APPROVER = "policy"
+# Built-in, code-defined approvals: minimum effective category level per action and state. Only LOW/READ_ONLY
+# actions with local, verifiable handlers, plus one staged recovery in NORMAL. Never production dispatch,
+# publishing, configuration, credentials, restarts or deletion (those are not even permitted actions).
+POLICY_AUTOMATIC: Dict[str, Dict[str, str]] = {
+    RESTRICTED: {
+        "report.operational.generate": "OBSERVE",
+        "recommendation.record": "OBSERVE",
+        "diagnostic.readonly.run": "OBSERVE",
+        "operator.notify": "OBSERVE",
+        "selfheal.diagnostic.run": "OBSERVE",
+        "selfheal.provider.retry_readonly": "OBSERVE",
+    },
+    NORMAL: {
+        "report.operational.generate": "OBSERVE",
+        "recommendation.record": "OBSERVE",
+        "diagnostic.readonly.run": "OBSERVE",
+        "operator.notify": "OBSERVE",
+        "selfheal.diagnostic.run": "OBSERVE",
+        "selfheal.provider.retry_readonly": "OBSERVE",
+        "selfheal.asset.reacquire_staged": "RECOMMEND",
+    },
+    EMERGENCY_STOP: {},
+}
 TS_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 SCHEMA = """
@@ -296,7 +332,8 @@ class ControlPlane:
                  handlers: Optional[Dict[str, Any]] = None, intelligence: Optional[Callable[[], Any]] = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
                  pid_alive: Optional[Callable[[int], bool]] = None,
-                 retry_backoff: Optional[Callable[[int], float]] = None):
+                 retry_backoff: Optional[Callable[[int], float]] = None,
+                 automatic_policy: Optional[Dict[str, Dict[str, str]]] = None):
         if db_path is None:
             from backend.app.core.paths import DATABASE_PATH
             db_path = str(DATABASE_PATH)
@@ -323,6 +360,9 @@ class ControlPlane:
         self._schema_lock = threading.Lock()
         self.pid_alive = pid_alive or _default_pid_alive
         self.retry_backoff = retry_backoff or (lambda attempt: min(2.0 * attempt, 10.0))
+        # Remediation WS2: the built-in automatic policy (production default; tests of the explicit approval
+        # machinery pass an empty policy).
+        self.automatic_policy = POLICY_AUTOMATIC if automatic_policy is None else automatic_policy
         # Kill switch C is latched once, at process start (fail closed: missing or invalid -> active).
         self.startup_kill_switch = self._evaluate_startup(os.environ if environ is None else environ)
 
@@ -471,7 +511,7 @@ class ControlPlane:
     def _evaluate_startup(self, environ: Dict[str, str]) -> Dict[str, Any]:
         env = environ.get(STARTUP_ENV)
         if env is not None and env.strip().lower() in ("off", "disabled", "0", "false", "kill", "no"):
-            return {"active": True, "detail": f"{STARTUP_ENV}={env.strip()} at process start"}
+            return {"active": True, "emergency": True, "detail": f"{STARTUP_ENV}={env.strip()} at process start"}
         try:
             data = json.loads(self.startup_config_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -499,8 +539,41 @@ class ControlPlane:
             sentinel = {"active": True, "detail": f"sentinel check failed ({type(exc).__name__}): fail closed"}
         switches = {"dashboard": dashboard, "sentinel_file": sentinel, "startup_config": dict(self.startup_kill_switch)}
         active = [name for name, s in switches.items() if s["active"]]
+        emergency = bool(dashboard["active"] or sentinel["active"] or switches["startup_config"].get("emergency"))
+        state = EMERGENCY_STOP if emergency else (RESTRICTED if switches["startup_config"]["active"] else NORMAL)
         return {"any_active": bool(active), "active": active, "switches": switches,
+                "emergency_stop": emergency, "control_state": state,
                 "sentinel_path": str(self.sentinel_path), "startup_config_path": str(self.startup_config_path)}
+
+    def control_state(self, cfg: Optional[Dict[str, Any]] = None, cfg_error: Optional[str] = None) -> Dict[str, Any]:
+        """The current control state with the reason and what may run automatically (Remediation WS2)."""
+        if cfg is None:
+            cfg, cfg_error = self._safe_config()
+        ks = self.kill_switches(cfg, cfg_error)
+        state = ks["control_state"]
+        stops = [n for n in ks["active"] if n != "startup_config" or ks["switches"]["startup_config"].get("emergency")]
+        reason = {EMERGENCY_STOP: "emergency stop: " + ", ".join(stops),
+                  RESTRICTED: "restricted autonomy: " + ks["switches"]["startup_config"]["detail"],
+                  NORMAL: "normal autonomy: " + ks["switches"]["startup_config"]["detail"]}[state]
+        automatic = {}
+        for action, need in self.automatic_policy.get(state, {}).items():
+            ok, why = self.policy_allows(action, cfg, state)
+            automatic[action] = {"minimum_level": need, "active": ok, "detail": why}
+        return {"state": state, "reason": reason, "automatic_actions": automatic,
+                "emergency_stop": ks["emergency_stop"], "configuration_error": cfg_error, "kill_switches": ks}
+
+    def policy_allows(self, action_type: str, cfg: Dict[str, Any], state: str) -> Tuple[bool, str]:
+        """Whether the built-in policy approval covers this action now (state + minimum category level)."""
+        need = self.automatic_policy.get(state, {}).get(action_type)
+        if need is None:
+            return False, f"{action_type} is not automatic in the {state} control state"
+        spec = registry.REGISTRY.get(action_type)
+        if spec is None or spec.prohibited:
+            return False, "not a permitted action"
+        level = self._effective(cfg, spec.category)
+        if level < Level.parse(need):
+            return False, f"{spec.category} autonomy level is {level.name}; automatic execution needs {need}"
+        return True, f"automatic under the {state} policy ({spec.category} level {level.name})"
 
     def set_dashboard_kill_switch(self, active: bool, operator: str, reason: str) -> Dict[str, Any]:
         op = validate_operator(operator)
@@ -662,7 +735,9 @@ class ControlPlane:
             self._maintenance(conn)
             cfg = self._load_config(conn)
             level = self._effective(cfg, spec.category)
-            if level < Level.RECOMMEND:
+            state = self.kill_switches(cfg, None)["control_state"]
+            policy_ok, policy_why = self.policy_allows(spec.action_type, cfg, state)
+            if level < Level.RECOMMEND and not policy_ok:
                 self._audit(conn, "PROPOSAL_REFUSED", proposed_by, action_type=spec.action_type,
                             reason=f"{spec.category} autonomy level is {level.name}", details={"payload_hash": p_hash})
                 refused = PermissionDenied(f"{spec.category} autonomy level is {level.name}; proposals need RECOMMEND or higher")
@@ -688,6 +763,8 @@ class ControlPlane:
                             and grant.get("expires_at_utc", "") > self._ts(now)):
                         self._sign_and_approve(conn, rid, "STANDING", f"standing-approval:{grant['grant_id']}",
                                                f"standing approval granted by {grant.get('granted_by')}")
+                    elif policy_ok:
+                        self._sign_and_approve(conn, rid, "POLICY", f"{POLICY_APPROVER}:{state}", policy_why)
                     result = {"request": self._get(conn, rid), "duplicate": False}
         if refused:
             raise refused
@@ -961,11 +1038,20 @@ class ControlPlane:
             return "no handler is registered for this action type", {}
         cfg = self._load_config(conn)
         ks = self.kill_switches(cfg, None)
-        if ks["any_active"]:
-            return f"kill switch active: {', '.join(ks['active'])}", {}
-        level = self._effective(cfg, spec.category)
-        if level < Level.APPROVED_EXECUTION:
-            return f"{spec.category} autonomy level is {level.name}; execution needs APPROVED_EXECUTION", {}
+        state = ks["control_state"]
+        if state == EMERGENCY_STOP:
+            return f"emergency stop: kill switch active: {', '.join(ks['active'])}", {}
+        if row.get("approval_mode") == "POLICY":
+            ok, why = self.policy_allows(row["action_type"], cfg, state)
+            if not ok:
+                return f"policy approval no longer covers this action: {why}", {}
+        else:
+            if ks["any_active"]:
+                return (f"kill switch active: {', '.join(ks['active'])} (restricted autonomy: without the operator "
+                        "startup configuration only the built-in automatic actions run)"), {}
+            level = self._effective(cfg, spec.category)
+            if level < Level.APPROVED_EXECUTION:
+                return f"{spec.category} autonomy level is {level.name}; execution needs APPROVED_EXECUTION", {}
         if row["status"] != APPROVED:
             return f"request is {row['status']}, not APPROVED", {}
         if row["expires_at_utc"] <= self._ts(self._now()):
@@ -1062,7 +1148,12 @@ class ControlPlane:
             if attempt > 1:
                 time.sleep(max(0.0, float(self.retry_backoff(attempt - 1))))   # bounded backoff between retries
             ks = self.kill_switches()
-            if ks["any_active"]:
+            # Remediation WS2: an emergency stop always stops; a policy-approved request continues in RESTRICTED as
+            # long as the policy still covers it, every other request stops on any active switch (unchanged).
+            stop = ks["emergency_stop"] or (ks["any_active"] and not (
+                row.get("approval_mode") == "POLICY"
+                and self.policy_allows(row["action_type"], self._safe_config()[0], ks["control_state"])[0]))
+            if stop:
                 error = f"kill switch activated during execution ({', '.join(ks['active'])}); remaining attempts cancelled"
                 if attempt == 1:
                     return self._release_claim(row, token, actor, error)
@@ -1139,7 +1230,7 @@ class ControlPlane:
         """Propose; if a standing approval approved it, execute it immediately (all gates still apply)."""
         proposal = self.propose(action_type, payload, reason=reason, evidence=evidence, proposed_by=proposed_by)
         req = proposal["request"]
-        if req["status"] == APPROVED and req.get("approval_mode") == "STANDING":
+        if req["status"] == APPROVED and req.get("approval_mode") in ("STANDING", "POLICY"):
             return {"proposal": proposal, "execution": self.execute(req["id"], actor=proposed_by)}
         return {"proposal": proposal, "execution": None}
 

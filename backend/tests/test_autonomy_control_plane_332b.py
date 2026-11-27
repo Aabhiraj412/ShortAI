@@ -59,7 +59,10 @@ class FakeIntelligence:
         return {"status": "actual", "metrics": {"total_failures": 2}}
 
 
-def make_cp(tmp_path, *, startup=True, environ=None, clock=None, handlers_map=None, db=True, name="studio.db"):
+def make_cp(tmp_path, *, startup=True, environ=None, clock=None, handlers_map=None, db=True, name="studio.db",
+            policy=False):
+    """policy=False: these tests exercise the explicit/standing approval machinery, so the Remediation WS2 built-in
+    automatic policy is disabled here; test_remediation_ws2_autonomy_control_states.py covers it enabled."""
     data = tmp_path / "data"
     data.mkdir(exist_ok=True)
     db_path = tmp_path / name
@@ -69,7 +72,8 @@ def make_cp(tmp_path, *, startup=True, environ=None, clock=None, handlers_map=No
         (data / "autonomy_startup.json").write_text(json.dumps({"autonomy_execution": "enabled"}), encoding="utf-8")
     intel = FakeIntelligence()
     cp = ControlPlane(str(db_path), str(data), environ=environ if environ is not None else {},
-                      intelligence=lambda: intel, clock=clock or Clock(), handlers=handlers_map)
+                      intelligence=lambda: intel, clock=clock or Clock(), handlers=handlers_map,
+                      automatic_policy=None if policy else {})
     cp._fake_intel = intel
     return cp
 

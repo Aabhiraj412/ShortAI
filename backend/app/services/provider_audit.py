@@ -19,7 +19,7 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
 KEY_MISSING = "KEY_MISSING"
@@ -356,16 +356,132 @@ def rendered_usage(limit: int = 20) -> Dict[str, Dict[str, int]]:
         return {}
 
 
+def production_evidence(limit_jobs: int = 20, limit_runs: int = 24) -> Dict[str, Dict[str, Any]]:
+    """Remediation WS4: what production actually did with each non-media provider, from persisted records only
+    (read-only; never calls a provider). Configured is not healthy and healthy is not used."""
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        import json as _json
+        import sqlite3
+        from datetime import datetime, timedelta
+        from backend.app.core.paths import DATABASE_PATH
+        c = sqlite3.connect(Path(DATABASE_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return out
+    try:
+        def q(sql: str, *a: Any) -> List[Any]:
+            try:
+                return c.execute(sql, a).fetchall()
+            except Exception:
+                return []
+        # Script writer (Gemini): which source wrote the last N evaluated videos.
+        src: Dict[str, int] = {}
+        for (dj,) in q("SELECT decisions_json FROM creative_records ORDER BY evaluated_at_utc DESC LIMIT ?", limit_jobs):
+            try:
+                s = str((_json.loads(dj or "{}") or {}).get("script_source") or "unknown")
+            except ValueError:
+                s = "unknown"
+            key = "llm" if s.startswith("llm:") else s
+            src[key] = src.get(key, 0) + 1
+        if src:
+            n = sum(src.values())
+            out["gemini"] = {"scripts_last_n": n, "written_by_model": src.get("llm", 0),
+                             "extractive_fallback": src.get("extractive_fallback", 0),
+                             "model_share": round(src.get("llm", 0) / n, 2)}
+        # Voice-over (edge-tts): every completed production went through VOICEOVER (no fallback is enabled).
+        since = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        done = q("SELECT COUNT(*) FROM persistent_jobs WHERE status='COMPLETED' AND updated_at >= ? "
+                 "AND id NOT LIKE 'test%' AND id NOT LIKE 'mock%'", since)
+        if done:
+            out["edge_tts"] = {"productions_voiced_24h": int(done[0][0])}
+        # Topic discovery providers: the last N discovery runs.
+        agg: Dict[str, Dict[str, int]] = {}
+        for (pj,) in q("SELECT provider_stats_json FROM topic_discovery_runs ORDER BY started_at DESC LIMIT ?", limit_runs):
+            try:
+                stats = _json.loads(pj or "{}") or {}
+            except ValueError:
+                continue
+            for fam, v in stats.items():
+                a = agg.setdefault(fam, {})
+                for k in ("queries", "articles", "candidates_created", "accepted", "duplicates", "errors"):
+                    a[k] = a.get(k, 0) + int((v or {}).get(k) or 0)
+        def fam_sum(prefixes: Tuple[str, ...]) -> Optional[Dict[str, int]]:
+            fams = {k: v for k, v in agg.items() if k.startswith(prefixes)}
+            if not fams:
+                return None
+            tot = {k: sum(v.get(k, 0) for v in fams.values()) for k in ("queries", "articles", "candidates_created",
+                                                                       "accepted", "duplicates", "errors")}
+            tot["families"] = sorted(fams)
+            return tot
+        for key, prefixes in (("gnews", ("gnews",)), ("wikipedia", ("wikipedia", "physorg")), ("nasa", ("nasa",))):
+            s = fam_sum(prefixes)
+            if s:
+                out.setdefault(key, {})["topic_discovery_last_runs"] = dict(s, runs=limit_runs)
+        # Email (SMTP): delivery outcomes in the last 24 h.
+        rows = q("SELECT status, COUNT(*) FROM persistent_notifications WHERE created_at >= ? GROUP BY status", since)
+        if rows:
+            out["smtp"] = {"notifications_24h": {str(s): int(n) for s, n in rows}}
+    finally:
+        c.close()
+    return out
+
+
+def state_with_evidence(row: Dict[str, Any], ev: Dict[str, Any], rendered: Optional[int]) -> Tuple[str, str]:
+    """Remediation WS4: the provider state from what production actually observed, with a one-line reason."""
+    base = state_335(row, rendered)
+    key = row.get("key")
+    if base in ("KEY_MISSING", "AUTHENTICATION_REQUIRED", "DISABLED"):
+        return base, "credential or authorization missing"
+    if key == "gemini" and ev:
+        share = ev.get("model_share", 0)
+        if ev.get("written_by_model", 0) == 0:
+            return "DEGRADED", (f"0 of the last {ev['scripts_last_n']} scripts came from the model; all used the "
+                                "labelled extractive fallback")
+        if share < 0.5:
+            return "DEGRADED", (f"{ev['written_by_model']} of the last {ev['scripts_last_n']} scripts came from the "
+                                f"model; {ev['extractive_fallback']} used the extractive fallback (rate limits / overload)")
+        return "HEALTHY", f"{ev['written_by_model']} of the last {ev['scripts_last_n']} scripts came from the model"
+    if key == "edge_tts" and ev:
+        n = ev.get("productions_voiced_24h", 0)
+        return ("HEALTHY", f"voiced {n} completed productions in 24 h") if n else ("CONFIGURED", "no completed production in 24 h")
+    if key == "smtp" and ev:
+        counts = ev.get("notifications_24h", {})
+        sent = sum(v for k, v in counts.items() if k.upper() == "SENT")
+        bad = sum(v for k, v in counts.items() if k.upper() in ("FAILED", "DELIVERY_UNKNOWN"))
+        if sent and not bad:
+            return "HEALTHY", f"{sent} notifications sent in 24 h"
+        if bad:
+            return "DEGRADED", f"{sent} sent, {bad} failed or unknown in 24 h"
+    disc = (ev or {}).get("topic_discovery_last_runs")
+    if key in ("gnews", "wikipedia") and disc:
+        if disc.get("errors") and not disc.get("candidates_created"):
+            return "DEGRADED", f"{disc['errors']} errors and no candidates in the last {disc['runs']} discovery runs"
+        return "HEALTHY", (f"{disc['candidates_created']} candidates, {disc['accepted']} accepted in the last "
+                           f"{disc['runs']} discovery runs")
+    if base == "NOT_USED":
+        ok = (row.get("recent_health") or {}).get("ok", 0)
+        return "AVAILABLE_NOT_SELECTED", (f"{ok} successful requests, but none of its assets was selected in the last "
+                                          "20 rendered videos")
+    if rendered and base == "CONFIGURED":
+        return "HEALTHY", f"{rendered} of its assets appear in the last 20 rendered videos"
+    if base == "CONFIGURED":
+        return base, "configured; no production evidence of use or health yet"
+    return base, ""
+
+
 def summary() -> Dict[str, Any]:
     rows = inventory()
     usage = rendered_usage()
+    evidence = production_evidence()
     for r in rows:
         name = str(r.get("name") or "")
         is_media = any(m.lower() in name.lower() for m in MEDIA_PROVIDER_NAMES)
         used = {k: v for prov, kinds in usage.items() for k, v in kinds.items()
                 if prov.lower().startswith(name.lower().split(" (")[0].split(" api")[0].strip())} if is_media else None
         r["rendered_usage_last_20"] = used
-        r["state"] = state_335(r, (sum(used.values()) if used is not None else None))
+        ev = evidence.get(str(r.get("key") or ""), {})
+        r["production_evidence"] = ev or None
+        r["state"], r["state_reason"] = state_with_evidence(r, ev, (sum(used.values()) if used is not None else None))
     counts: Dict[str, int] = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1

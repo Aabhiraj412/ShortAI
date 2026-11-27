@@ -39,21 +39,30 @@ async def autopilot_controller_tick() -> None:
 
 COORDINATOR_TICK_MIN_SECONDS = 60.0
 _last_coordinator_tick = [float("-inf")]
+_coordinator_task: list = [None]
 
 
-async def production_coordinator_tick() -> None:
-    """Stage 3.37: one resource-coordinator step (recovery of leases/claims, long-form admission, snapshot) inside
-    the same recovery loop, at most once per COORDINATOR_TICK_MIN_SECONDS so the loop's restart and recovery checks
-    are never slowed. Never affects the Shorts path; a failure here is logged and skipped."""
-    now = time.monotonic()
-    if now - _last_coordinator_tick[0] < COORDINATOR_TICK_MIN_SECONDS:
-        return
-    _last_coordinator_tick[0] = now
+async def _run_coordinator_tick() -> None:
     try:
         from backend.app.scheduler.production_coordinator import get_coordinator
         await get_coordinator().tick()
     except Exception as exc:  # noqa: BLE001
         logger.warning("[COORDINATOR] tick skipped: %s", type(exc).__name__)
+
+
+async def production_coordinator_tick() -> None:
+    """Stage 3.37: one resource-coordinator step (recovery of leases/claims, long-form admission, snapshot), at most
+    once per COORDINATOR_TICK_MIN_SECONDS. Remediation: it runs as a background task (at most one in flight) and is
+    never awaited by the recovery loop, so it cannot delay recovery dispatch or the controlled-restart check. Never
+    affects the Shorts path; a failure is logged and skipped."""
+    now = time.monotonic()
+    if now - _last_coordinator_tick[0] < COORDINATOR_TICK_MIN_SECONDS:
+        return
+    running = _coordinator_task[0]
+    if running is not None and not running.done():
+        return
+    _last_coordinator_tick[0] = now
+    _coordinator_task[0] = asyncio.get_running_loop().create_task(_run_coordinator_tick(), name="coordinator-tick")
 
 
 class ControlledRestart(Exception):

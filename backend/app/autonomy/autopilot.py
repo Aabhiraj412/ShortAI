@@ -19,7 +19,10 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backend.app.autonomy import registry
-from backend.app.autonomy.control_plane import ControlPlane, ControlPlaneError, NotFound, PermissionDenied, validate_operator
+from datetime import timedelta
+
+from backend.app.autonomy.control_plane import (EMERGENCY_STOP, ControlPlane, ControlPlaneError, NotFound,
+                                                PermissionDenied, payload_hash, validate_operator)
 from backend.app.autonomy.registry import Level
 
 BRIDGE_ACTOR = "recommendation-bridge"          # reserved prefix: no human can approve as this identity
@@ -42,6 +45,8 @@ BRIDGE: Tuple[Tuple[str, Tuple[Tuple[str, Callable[[Dict[str, Any]], Dict[str, A
     ("api.", (_SUMMARY, _NOTIFY)),
 )
 BRIDGEABLE_STATUSES = ("NEW", "ACKNOWLEDGED", "APPROVED")
+AUTO_BRIDGE_LIMIT = 4                 # automatic follow-ups executed per observation cycle
+AUTO_BRIDGE_COOLDOWN_HOURS = 6        # the same action + payload runs at most once per window
 
 
 def _clip(text: str, n: int) -> str:
@@ -122,6 +127,94 @@ class Autopilot:
                                          "requested_by": f"operator:{op}", "bridge": "deterministic rule mapping"},
                                proposed_by=BRIDGE_ACTOR)
 
+    # -- automatic bridge (Remediation WS5) -------------------------------------------------------------------
+    def auto_bridge(self, *, limit: int = AUTO_BRIDGE_LIMIT) -> Dict[str, Any]:
+        """Execute the policy-automatic follow-ups of open recommendations, without an operator click.
+
+        * Only actions the control plane's built-in policy covers in the current control state (read-only
+          diagnostics, reports; ``operator.notify`` only for high/critical recommendations). Everything else is
+          classified ``approval_required`` (still proposable by the operator) or ``informational`` (no mapping).
+        * Each (recommendation, action) runs at most once (persisted ledger), and the same action + payload at most
+          once per ``AUTO_BRIDGE_COOLDOWN_HOURS`` across recommendations, so repeated findings cannot loop.
+        * Execution goes through ``ControlPlane.submit`` (every gate, signed policy approval, handler verification,
+          audit); the outcome or the exact blocked reason is stored in the ledger.
+        """
+        cs = self.cp.control_state()
+        out: Dict[str, Any] = {"control_state": cs["state"], "executed": 0, "blocked": 0, "skipped_duplicate": 0,
+                               "approval_required": 0, "informational": 0, "results": []}
+        if cs["state"] == EMERGENCY_STOP:
+            out["reason"] = cs["reason"]
+            return out
+        cfg, _err = self.cp._safe_config()
+        self._ensure_bridge_ledger()
+        recs = self.recs().overview(status="open", limit=100).get("recommendations") or []
+        now = self.cp._ts(self.cp._now())
+        cutoff = self.cp._ts(self.cp._now() - timedelta(hours=AUTO_BRIDGE_COOLDOWN_HOURS))
+        for rec in recs:
+            if rec.get("status") not in BRIDGEABLE_STATUSES:
+                continue
+            options = bridge_options(rec)
+            if not options:
+                out["informational"] += 1
+                continue
+            for opt in options:
+                a = opt["action_type"]
+                if a == "operator.notify" and rec.get("severity") not in ("high", "critical"):
+                    continue                     # routine findings are shown in the dashboard, not pushed to the inbox
+                ok, why = self.cp.policy_allows(a, cfg, cs["state"])
+                if not ok:
+                    out["approval_required"] += 1
+                    continue
+                if out["executed"] + out["blocked"] >= limit:
+                    return out
+                p_hash = payload_hash(a, opt["payload"])
+                with self.cp._tx() as conn:
+                    recent = conn.execute("SELECT 1 FROM autonomy_auto_bridge WHERE action_type=? AND payload_hash=? "
+                                          "AND at_utc>=? LIMIT 1", (a, p_hash, cutoff)).fetchone()
+                    cur = conn.execute("INSERT OR IGNORE INTO autonomy_auto_bridge (rec_id, action_type, payload_hash, "
+                                       "outcome, reason, at_utc) VALUES (?,?,?,?,?,?)",
+                                       (rec["id"], a, p_hash, "CLAIMED" if not recent else "SKIPPED_COOLDOWN",
+                                        "" if not recent else "same action and payload ran recently", now))
+                if cur.rowcount != 1 or recent:
+                    out["skipped_duplicate"] += 1
+                    continue
+                try:
+                    res = self.cp.submit(a, opt["payload"],
+                                         reason=_clip(f"Automatic follow-up of recommendation {rec['id']} "
+                                                      f"({rec.get('rule_id')}): {rec.get('title')}", 480),
+                                         evidence={"recommendation_id": rec["id"], "rule_id": rec.get("rule_id"),
+                                                   "bridge": "automatic policy follow-up"},
+                                         proposed_by=BRIDGE_ACTOR)
+                    ex = res.get("execution") or {}
+                    outcome = "EXECUTED" if ex.get("executed") else ("BLOCKED" if ex else "NOT_EXECUTED")
+                    reason = ex.get("reason") or ex.get("status") or res["proposal"]["request"]["status"]
+                    request_id = res["proposal"]["request"]["id"]
+                except ControlPlaneError as exc:
+                    outcome, reason, request_id = "BLOCKED", str(exc)[:300], None
+                with self.cp._tx() as conn:
+                    conn.execute("UPDATE autonomy_auto_bridge SET outcome=?, reason=?, request_id=? WHERE rec_id=? "
+                                 "AND action_type=?", (outcome, str(reason)[:300], request_id, rec["id"], a))
+                out["executed" if outcome == "EXECUTED" else "blocked"] += 1
+                out["results"].append({"recommendation_id": rec["id"], "action_type": a, "outcome": outcome,
+                                       "reason": str(reason)[:200], "request_id": request_id})
+        return out
+
+    def _ensure_bridge_ledger(self) -> None:
+        with self.cp._tx() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS autonomy_auto_bridge (rec_id TEXT NOT NULL, action_type TEXT NOT NULL, "
+                         "payload_hash TEXT NOT NULL, request_id TEXT, outcome TEXT NOT NULL, reason TEXT, "
+                         "at_utc TEXT NOT NULL, PRIMARY KEY (rec_id, action_type))")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_auto_bridge_action ON autonomy_auto_bridge (action_type, payload_hash, at_utc)")
+
+    def auto_bridge_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        try:
+            self._ensure_bridge_ledger()
+            with self.cp._read() as conn:
+                return [dict(r) for r in conn.execute("SELECT * FROM autonomy_auto_bridge ORDER BY at_utc DESC LIMIT ?",
+                                                      (int(limit),)).fetchall()]
+        except Exception:
+            return []
+
     # -- overview -------------------------------------------------------------------------------------------
     def overview(self) -> Dict[str, Any]:
         """Everything the Autopilot view shows, read from persisted state only (no action, no write except the
@@ -132,6 +225,7 @@ class Autopilot:
         cfg, cfg_err = self.cp._safe_config()
         ks = self.cp.kill_switches(cfg, cfg_err)
         global_level = Level.parse(cfg.get("global_level", "OFF")).name if not cfg_err else "OFF"
+        state = ks.get("control_state")
         categories = {}
         for cat in registry.CATEGORIES:
             eff = self.cp._effective(cfg, cat)
@@ -140,10 +234,13 @@ class Autopilot:
                 blocked.append("kill switch active: " + ", ".join(ks["active"]))
             if eff < Level.APPROVED_EXECUTION:
                 blocked.append(f"effective level {eff.name} (execution needs APPROVED_EXECUTION)")
+            automatic = [a for a, s in registry.REGISTRY.items() if not s.prohibited and s.category == cat and state
+                         and not cfg_err and self.cp.policy_allows(a, cfg, state)[0]]
             categories[cat] = {"level": Level.parse(cfg.get("category_levels", {}).get(cat, "OFF")).name,
                                "effective": eff.name, "can_observe": eff >= Level.OBSERVE,
                                "can_recommend": eff >= Level.RECOMMEND,
                                "can_execute": eff >= Level.APPROVED_EXECUTION and not ks["any_active"],
+                               "automatic_actions": automatic,      # run under the built-in policy despite `blocked`
                                "blocked_reasons": blocked}
         pending = self.cp.list_requests("PENDING", 50)
         approved = self.cp.list_requests("APPROVED", 50)
@@ -157,7 +254,13 @@ class Autopilot:
         mode = global_level
         mode_note = (f"execution blocked by kill switch: {', '.join(ks['active'])}" if ks["any_active"] and global_level != "OFF"
                      else ("autonomy is off" if global_level == "OFF" else ""))
+        try:
+            control = self.cp.control_state(cfg, cfg_err)
+            control.pop("kill_switches", None)
+        except Exception as exc:  # noqa: BLE001
+            control = {"state": EMERGENCY_STOP, "reason": f"control state unavailable ({type(exc).__name__})"}
         out = {
+            "control_state": control, "automatic_follow_ups": self.auto_bridge_history(30),
             "mode": mode, "mode_note": mode_note, "global_level": global_level, "configuration_error": cfg_err,
             "execution_possible": any(c["can_execute"] for c in categories.values()),
             "kill_switches": ks, "categories": categories, "standing_approvals": perms.get("standing_approvals", {}),

@@ -193,10 +193,17 @@ class CrazzyDocsMasterOrchestrator:
         if identity_registry is not None:
             accept = lambda ranked: identity_registry.filter_fresh(ranked, job_id=job_id)  # noqa: E731
         try:
+            if identity_registry is not None:   # Remediation WS3: same pre-enrichment identity check as discovery
+                engine.identity_precheck = lambda title, _r=identity_registry, _j=job_id: _r.topic_conflict(title, exclude_job=_j)
             return list(engine.recover_from_exhaustion(accept, deadline_utc=deadline, reserve_seconds=reserve) or [])
         except Exception as exc:   # recovery problems must never mask the original failure
             logger.warning("Topic exhaustion recovery failed: %s", type(exc).__name__)
             return []
+        finally:
+            try:
+                engine.identity_precheck = None
+            except Exception:
+                pass
 
     def _exhaustion_suffix(self) -> str:
         report = getattr(getattr(self, "topic_engine", None), "last_recovery_report", None) or {}
@@ -527,16 +534,30 @@ class CrazzyDocsMasterOrchestrator:
                     filter_dups = (force_topic_id is None)
 
                 creative_policy = get_creative_production_policy(execution_context)
-                if is_full_live:
-                    _begin = getattr(self.topic_engine, "begin_run", None)
-                    if callable(_begin):
-                        _begin(job_id)                      # Stage 3.31A ledger run id (no-op while off)
-                    ranked = self.topic_engine.discover_and_rank_live_topics(
-                        filter_duplicates=filter_dups,
-                        preferred_category=preferred_category,
-                    )
-                else:
-                    ranked = self.topic_engine.discover_and_rank_topics(filter_duplicates=filter_dups)
+                # Remediation WS3: drop subjects another job already selected before enrichment (same rule as the
+                # integrity gate below, which still runs unchanged).
+                if identity_registry is not None and filter_dups:
+                    try:
+                        self.topic_engine.identity_precheck = (
+                            lambda title, _r=identity_registry, _j=job_id: _r.topic_conflict(title, exclude_job=_j))
+                    except Exception:
+                        pass
+                try:
+                    if is_full_live:
+                        _begin = getattr(self.topic_engine, "begin_run", None)
+                        if callable(_begin):
+                            _begin(job_id)                      # Stage 3.31A ledger run id (no-op while off)
+                        ranked = self.topic_engine.discover_and_rank_live_topics(
+                            filter_duplicates=filter_dups,
+                            preferred_category=preferred_category,
+                        )
+                    else:
+                        ranked = self.topic_engine.discover_and_rank_topics(filter_duplicates=filter_dups)
+                finally:
+                    try:
+                        self.topic_engine.identity_precheck = None
+                    except Exception:
+                        pass
 
                 if not ranked:
                     ranked = self._topic_exhaustion_recovery(job_id, identity_registry, is_full_live)

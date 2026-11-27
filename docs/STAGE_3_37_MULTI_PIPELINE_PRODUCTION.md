@@ -1,6 +1,6 @@
 # Stage 3.37: Multi-pipeline production and resource orchestration
 
-**Status:** implemented and tested. Long-form production is **OFF** by default. No long-form executor is installed, because the long-form pipeline itself is not part of this stage. Shorts production, the 24-cycle schedule, the retry policy, publishing and Autopilot (3.36) are unchanged.
+**Status:** implemented, tested, committed (`13e846b`) and deployed 2026-11-27 04:34 IST. Long-form production is **OFF** by default. No long-form executor is installed, because the long-form pipeline itself is not part of this stage. Shorts production, the 24-cycle schedule, the retry policy, publishing and Autopilot (3.36) are unchanged.
 
 ## 1. Architecture
 

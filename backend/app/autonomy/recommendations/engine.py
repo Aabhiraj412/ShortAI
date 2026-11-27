@@ -102,8 +102,8 @@ class RecommendationEngine:
             permitted = False
         if not permitted:
             mode, reason = "BLOCKED", f"{ACTION_TYPE} is not a permitted action type"
-        elif ks["any_active"]:
-            mode, reason = "BLOCKED", f"kill switch active: {', '.join(ks['active'])}"
+        elif ks.get("emergency_stop", ks["any_active"]):      # Remediation WS2/WS5: only an emergency stop blocks analysis
+            mode, reason = "BLOCKED", f"emergency stop: kill switch active: {', '.join(ks['active'])}"
         elif level == Level.OFF:
             mode, reason = "OFF", "the recommendations autonomy level is OFF"
         elif level == Level.OBSERVE:

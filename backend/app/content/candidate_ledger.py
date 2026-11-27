@@ -463,10 +463,21 @@ class CandidateLedger:
             if old_status != new_status:
                 self._event(conn, run_id, {"candidate_id": row["candidate_id"], "stage": "ledger", "status": "TRANSITION_IGNORED",
                                            "reason": None, "detail": {"from": old_status, "to": new_status}}, now)
+        # Remediation WS3: a re-sighting rejected before enrichment/classification carries no summary, category,
+        # entities, score breakdown or v2 prediction. It used to overwrite the stored values with empties (3.31
+        # report 9.10 item 1). Empty values now keep what is stored; each run's v2 prediction is also kept as an event.
+        if row.get("category_v2"):
+            self._event(conn, run_id, {"candidate_id": row["candidate_id"], "stage": "classification", "status": "PREDICTED",
+                                       "reason": None, "detail": {"category_v2": row["category_v2"]}}, now)
         conn.execute(
-            """UPDATE topic_candidate_ledger SET title=?, summary=?, category=?, category_code=?, category_v2_json=?,
-                   source_url=COALESCE(NULLIF(?, ''), source_url), sources_json=?, last_discovered_at=?, times_seen=times_seen+?,
-                   entities_json=?, score=COALESCE(?, score), score_breakdown_json=?, duplicate_result=COALESCE(?, duplicate_result),
+            """UPDATE topic_candidate_ledger SET title=COALESCE(NULLIF(?, ''), title), summary=COALESCE(NULLIF(?, ''), summary),
+                   category=COALESCE(NULLIF(?, ''), category), category_code=COALESCE(NULLIF(?, ''), category_code),
+                   category_v2_json=COALESCE(NULLIF(NULLIF(?, '{}'), 'null'), category_v2_json),
+                   source_url=COALESCE(NULLIF(?, ''), source_url),
+                   sources_json=COALESCE(NULLIF(?, '[]'), sources_json), last_discovered_at=?, times_seen=times_seen+?,
+                   entities_json=COALESCE(NULLIF(?, '[]'), entities_json), score=COALESCE(?, score),
+                   score_breakdown_json=COALESCE(NULLIF(NULLIF(?, '{}'), 'null'), score_breakdown_json),
+                   duplicate_result=COALESCE(?, duplicate_result),
                    duplicate_match=COALESCE(?, duplicate_match), verification_status=?, last_run_id=?, updated_at=?
                WHERE candidate_id=?""",
             (row["title"], row["summary"], row["category"], row["category_code"],
