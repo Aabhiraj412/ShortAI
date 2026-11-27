@@ -202,3 +202,32 @@ def test_observation_cycle_runs_auto_actions_step(tmp_path):
     from backend.app.autonomy import activation
     src = open(activation.__file__, encoding="utf-8").read()
     assert '"auto_actions"' in src and "auto_bridge()" in src
+
+
+# -- follow-up: recommendations are stored at OBSERVE when the policy covers recommendation.record -----------------
+
+def test_observe_with_policy_stores_recommendations_and_bridges_them(tmp_path):
+    from test_recommendation_engine_332c import make as make_rec
+    cp, eng, intel, clock = make_rec(tmp_path, level="OBSERVE", startup=False, policy=True)
+    st = eng.state()
+    assert st["mode"] == "RECOMMEND" and "stored automatically" in st["reason"]
+    out = eng.run(OP, force=True)
+    assert out["ran"] and out["mode"] == "RECOMMEND" and out["run"]["created"] >= 1
+    open_recs = eng.overview()["recommendations"]
+    assert open_recs
+    bridged = Autopilot(cp, recommendations=eng).auto_bridge()
+    assert bridged["control_state"] == RESTRICTED
+    assert bridged["executed"] + bridged["approval_required"] + bridged["informational"] + bridged["skipped_duplicate"] >= 1
+
+
+def test_observe_without_policy_still_only_observes(tmp_path):
+    from test_recommendation_engine_332c import make as make_rec
+    cp, eng, intel, clock = make_rec(tmp_path, level="OBSERVE", startup=False, policy=False)
+    assert eng.state()["mode"] == "OBSERVE"
+
+
+def test_emergency_stop_blocks_recommendation_storage(tmp_path):
+    from test_recommendation_engine_332c import make as make_rec
+    cp, eng, intel, clock = make_rec(tmp_path, level="OBSERVE", startup=False, policy=True)
+    cp.set_dashboard_kill_switch(True, OP, "stop")
+    assert eng.state()["mode"] == "BLOCKED"

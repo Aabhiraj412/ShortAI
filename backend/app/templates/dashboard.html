@@ -360,6 +360,7 @@
       <span class="pill" id="pillNextProd" title="Next scheduled production cycle">Next Prod: --</span>
       <span class="pill" id="pillNextPub" title="Target publish time of the next production cycle">Next Target Publish: --</span>
       <span class="pill" id="pillStartup" title="Dashboard auto-start status (logon task, health wait, browser once per boot)">Startup: --</span>
+      <span class="pill" id="pillAttention" title="Genuine interventions only (credentials, approvals outside the automatic policy, decisions, failed recoveries). Click to open." style="cursor:pointer;" onclick="openAttention()">Needs you: --</span>
       <span class="pill" id="pillRefresh" title="Last dashboard sync time">Sync: --</span>
       <button class="btn sm primary" id="btnRefreshAll" onclick="refreshAll()">Refresh All</button>
     </div>
@@ -960,7 +961,7 @@
   <section id="tab-recs" class="tab-panel">
     <div class="card" style="padding:12px 16px;">
       <div class="card-head" style="margin-bottom:6px;"><div><h2 class="card-title">Recommendation Center</h2>
-        <p class="card-desc"><strong>Advice only.</strong> Findings come from the Operations data with deterministic rules. Approving a recommendation records your agreement; <strong>nothing is executed</strong>. Executable approval requests live in Autonomy Control.</p></div>
+        <p class="card-desc">Findings come from the Operations data with deterministic rules. Routine follow-ups (read-only diagnostics, reports) run automatically under the current control state; anything that needs you is listed once in <a href="#" onclick="openAttention();return false;">Needs your attention</a>. Approving a recommendation here only records your agreement.</p></div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
           <label for="recOperator" style="font-size:12px;color:var(--muted);">Operator</label>
           <input id="recOperator" maxlength="64" placeholder="your name" style="width:130px;" />
@@ -1219,7 +1220,7 @@
     </div>
     <div class="card"><div class="card-head"><div><h2 class="card-title">Recommendations &rarr; approval requests</h2><p class="card-desc">An open recommendation can become an approval request only for its fixed, rule-mapped follow-up actions. AI wording never chooses an action or writes a payload. Proposing needs RECOMMEND for that category and creates a <em>pending</em> request; it never executes.</p></div></div><div id="apRecs" style="font-size:12px;">--</div></div>
     <div class="grid-2">
-      <div class="card"><div class="card-head"><div><h2 class="card-title">Pending and approved requests</h2><p class="card-desc">Approve, reject or execute them in Autonomy Control.</p></div></div><div id="apRequests" style="font-size:12px;overflow-x:auto;">--</div></div>
+      <div class="card"><div class="card-head"><div><h2 class="card-title">Pending and approved requests</h2><p class="card-desc">Only actions outside the automatic policy wait here; they also appear in Needs your attention.</p></div></div><div id="apRequests" style="font-size:12px;overflow-x:auto;">--</div></div>
       <div class="card"><div class="card-head"><div><h2 class="card-title">Executions and recovery</h2><p class="card-desc">Attempts with their verified outcome, leases and circuit breakers. Interrupted executions are reconciled, never re-run.</p></div></div><div id="apExecs" style="font-size:12px;overflow-x:auto;">--</div></div>
     </div>
     <div class="card"><div class="card-head"><div><h2 class="card-title">Recent decisions</h2><p class="card-desc">From the hash-chained, append-only autonomy audit trail. Refused and blocked actions are highlighted.</p></div></div><div id="apDecisions" style="font-size:12px;overflow-x:auto;">--</div></div>
@@ -3077,7 +3078,7 @@ async function refreshRecommendations(force = false) {
     document.getElementById("recMode").innerHTML = st.mode === "RECOMMEND" ? `<span class="auto-on">ACTIVE</span>` : st.mode === "OBSERVE" ? "OBSERVE" : `<span class="auto-off">${escHtml(st.mode || "--")}</span>`;
     document.getElementById("recModeSub").textContent = st.reason || "";
     meta.innerHTML = `${escHtml(ov.note || "")} · Last analysis: ${lr ? `${autoTime(lr.started_at)} (${escHtml(lr.findings)} findings, ${escHtml(lr.window_days)}-day window)` : "never"}`
-      + (st.mode !== "RECOMMEND" ? ` · <span style="color:#fcd34d;">Engine ${escHtml(st.mode)}: ${escHtml(st.reason)}. Levels and kill switches are managed in Autonomy Control.</span>` : "")
+      + (st.mode !== "RECOMMEND" ? ` · <span style="color:#fcd34d;">Engine ${escHtml(st.mode)}: ${escHtml(st.reason)}.</span>` : "")
       + (ov.database_available === false ? ` · <span class="auto-kill">database unavailable</span>` : "");
     const conf = sm.by_confidence || {}, cats = sm.by_category || {};
     document.getElementById("recBreakdown").innerHTML = Object.keys(cats).length
@@ -3261,7 +3262,7 @@ async function refreshSelfHealing(force = false) {
     document.getElementById("healMode").innerHTML = live ? `<span class="auto-on">${escHtml(st.mode === "APPROVED_EXECUTION" ? "EXECUTION" : st.mode)}</span>` : st.mode === "OBSERVE" ? "OBSERVE" : `<span class="auto-off">${escHtml(st.mode || "--")}</span>`;
     document.getElementById("healModeSub").textContent = st.reason || "";
     meta.innerHTML = `${escHtml(ov.note || "")} · Last scan: ${ls ? `${autoTime(ls.started_at_utc)} (${escHtml(ls.mode)})` : "never"}`
-      + (!st.enabled ? ` · <span style="color:#fcd34d;">Self-healing ${escHtml(st.mode)}: ${escHtml(st.reason)}. Levels, standing approvals and kill switches are managed in Autonomy Control.</span>` : "")
+      + (!st.enabled ? ` · <span style="color:#fcd34d;">Self-healing ${escHtml(st.mode)}: ${escHtml(st.reason)}.</span>` : "")
       + (ov.database_available === false ? ` · <span class="auto-kill">database unavailable</span>` : "");
     document.getElementById("healClasses").innerHTML = Object.keys(cls).length
       ? opsKV(Object.entries(cls).map(([k, v]) => [k, escHtml(v)])) : `<div style="color:var(--muted)">No open incidents.</div>`;
@@ -4132,7 +4133,7 @@ async function refreshAutopilot(force = false) {
     const leasesN = (s.leases || []).length;
     document.getElementById("apSafety").innerHTML = brk.length || leasesN ? `<span style="color:#fcd34d">${brk.length} breaker(s) · ${leasesN} lease(s)</span>` : `<span class="auto-on">clear</span>`;
     document.getElementById("apSafetySub").textContent = `audit chain ${(a.audit_chain || {}).ok === false ? "BROKEN" : "verified"}`;
-    meta.textContent = "Autopilot never executes from this page. Levels, standing approvals and kill switches are managed in Autonomy Control.";
+    meta.textContent = "Read from stored backend state. Interventions that need you are listed once, in Needs your attention below.";
     const cats = a.categories || {};
     document.getElementById("apCats").innerHTML = apTable(["Category", "Level", "Effective", "Observe", "Recommend", "Execute", "Why blocked"],
       Object.entries(cats).map(([k, c]) => `<tr><td>${escHtml(k)}</td><td>${escHtml(c.level)}</td><td>${escHtml(c.effective)}</td><td>${c.can_observe ? "yes" : "no"}</td><td>${c.can_recommend ? "yes" : "no"}</td><td>${c.can_execute ? `<span class="auto-on">yes</span>` : "no"}</td><td>${escHtml((c.blocked_reasons || []).join("; "))}</td></tr>`));
@@ -4173,6 +4174,26 @@ async function refreshAutopilot(force = false) {
   refreshProductionQueues(force);
   refreshOperatorAttention(force);
 }
+
+// -- Remediation follow-up: one global badge for genuine interventions; routine work never prompts. --
+async function refreshAttentionBadge() {
+  const pill = document.getElementById("pillAttention");
+  if (!pill) return;
+  try {
+    const a = await apiJson("/api/operations/attention");
+    const n = (a.needs_you || []).length, high = (a.needs_you || []).filter(x => x.severity === "high").length;
+    pill.textContent = `Needs you: ${n}`;
+    pill.className = "pill " + (high ? "err" : (n ? "warn" : "ok"));
+    pill.title = n ? (a.needs_you || []).map(x => `${x.severity}: ${x.title}`).join("\n") : "Nothing needs you right now.";
+  } catch (err) { pill.textContent = "Needs you: ?"; }
+}
+function openAttention() {
+  switchTab("autopilot", document.querySelector('.tab-btn[data-tab="autopilot"]'));
+  const card = document.getElementById("attnCard");
+  if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+setTimeout(refreshAttentionBadge, 3000);
+setInterval(refreshAttentionBadge, 120000);
 
 // -- Remediation: the single operator-attention feed. --
 const ATTN_STATE_COLOR = { NORMAL: "#86efac", RESTRICTED: "#93c5fd", EMERGENCY_STOP: "#fca5a5" };

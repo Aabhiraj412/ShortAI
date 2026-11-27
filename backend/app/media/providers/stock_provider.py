@@ -99,6 +99,23 @@ _pixabay_lock = threading.Lock()
 _pixabay_cooldown_until = [0.0]
 
 
+PIXABAY_MAX_QUERY = 100   # the API rejects a longer q with HTTP 400
+
+
+def pixabay_query(text: str) -> str:
+    """Remediation: Pixabay answers HTTP 400 to a q over 100 characters (production sent whole headlines such as
+    'How much CO₂ will stay? New study estim...'). Keep letters, digits, spaces and hyphens (NFKD, so CO₂ -> CO2),
+    collapse whitespace and cut on a word boundary."""
+    import re as _re
+    import unicodedata as _ud
+    t = _ud.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii")
+    t = _re.sub(r"[^A-Za-z0-9\- ]+", " ", t)
+    t = _re.sub(r"\s+", " ", t).strip()
+    if len(t) > PIXABAY_MAX_QUERY:
+        t = t[:PIXABAY_MAX_QUERY].rsplit(" ", 1)[0].strip() or t[:PIXABAY_MAX_QUERY]
+    return t
+
+
 def _pixabay_cache_dir() -> Path:
     from backend.app.core.paths import PROJECT_ROOT
     return Path(PROJECT_ROOT) / "backend" / "data" / "cache" / "pixabay"
@@ -155,13 +172,19 @@ class PixabayProvider(BaseMediaProvider):
         if not self._rate_ok():
             self.last_status, self.last_error_category = "rate_limited (local guard)", "rate_limited"
             return None
+        if "q" in params:
+            params = dict(params, q=pixabay_query(params["q"]))
         base = "https://pixabay.com/api/videos/" if kind == "videos" else "https://pixabay.com/api/"
         url = base + "?" + urllib.parse.urlencode({"key": self.api_key, **params})
         try:
             data = fetch_json(url, provider=self.provider_name, retries=1, timeout=self.timeout_sec)
         except ProviderError as err:
-            if err.status in (400, 401, 403):
-                cat = "invalid_key"            # Pixabay answers 400 "Invalid or missing API key"
+            if err.status in (401, 403):
+                cat = "invalid_key"
+            elif err.status == 400:
+                # Pixabay uses 400 both for a bad key and for a rejected query. Once this key has worked, a 400 is
+                # the query (production evidence: 400s seconds before successful downloads with the same key).
+                cat = "bad_query" if getattr(self, "_key_verified", False) else "invalid_key_or_query"
             elif err.status == 429:
                 cat = "rate_limited"
                 with _pixabay_lock:
@@ -179,6 +202,7 @@ class PixabayProvider(BaseMediaProvider):
         except OSError:
             pass
         self.last_status, self.last_error_category = "ok", None
+        self._key_verified = True
         return data
 
     def _sync_fetch(self, query: str, limit: int) -> List[MediaAsset]:

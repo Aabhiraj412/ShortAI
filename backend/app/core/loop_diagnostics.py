@@ -29,6 +29,11 @@ _lock = threading.Lock()
 _lags: Deque[Tuple[float, float]] = collections.deque(maxlen=WINDOW)   # (epoch, lag seconds)
 _stacks: "collections.Counter[str]" = collections.Counter()
 _stack_window: Deque[str] = collections.deque(maxlen=WINDOW)
+# Remediation follow-up: worker threads too (bursts of CPU after requests happen outside the event loop).
+_worker_stacks: "collections.Counter[str]" = collections.Counter()
+_worker_window: Deque[str] = collections.deque(maxlen=WINDOW * 4)
+WAITING_MARKERS = ("threading.py:wait", "queue.py:get", "selectors.py:", "windows_events.py:", "socket.py:",
+                   "ssl.py:", "_base.py:result", "thread.py:_worker", "loop_diagnostics.py:")
 _state: Dict[str, Any] = {"started": False, "loop_thread_id": None, "loop_class": None, "started_at": None}
 
 
@@ -50,9 +55,50 @@ def _signature(frame) -> str:
     return " < ".join(chosen)
 
 
+def _innermost(frame, n: int = 4) -> str:
+    parts = []
+    f = frame
+    while f is not None and len(parts) < n:
+        co = f.f_code
+        parts.append(f"{co.co_filename.replace(chr(92), '/').rsplit('/', 1)[-1]}:{co.co_name}")
+        f = f.f_back
+    return " < ".join(parts)
+
+
+def _parked(frame) -> bool:
+    """A worker blocked in a wait/queue/socket/sleep with no application frame on its stack."""
+    inner = _innermost(frame, 3)
+    has_app = "/backend/app/" in _signature(frame) and "loop_diagnostics" not in _signature(frame)
+    return not has_app and any(m in inner for m in WAITING_MARKERS)
+
+
+def _sample_workers(loop_thread: int) -> None:
+    names = {t.ident: t.name for t in threading.enumerate()}
+    for ident, frame in sys._current_frames().items():
+        if ident in (loop_thread, threading.get_ident()) or _parked(frame):
+            continue
+        sig = f"[{names.get(ident, ident)}] {_signature(frame)}"
+        with _lock:
+            if len(_worker_window) == _worker_window.maxlen:
+                old = _worker_window[0]
+                _worker_stacks[old] -= 1
+                if _worker_stacks[old] <= 0:
+                    del _worker_stacks[old]
+            _worker_window.append(sig)
+            if sig in _worker_stacks or len(_worker_stacks) < MAX_SIGNATURES:
+                _worker_stacks[sig] += 1
+
+
 def _sampler(thread_id: int) -> None:
+    tick = 0
     while True:
         time.sleep(SAMPLE_INTERVAL)
+        tick += 1
+        if tick % 2 == 0:
+            try:
+                _sample_workers(thread_id)
+            except Exception:
+                pass
         frame = sys._current_frames().get(thread_id)
         if frame is None:
             return
@@ -105,6 +151,11 @@ def snapshot(window_seconds: float = 300.0) -> Dict[str, Any]:
     out["loop_thread_samples"] = total
     out["loop_thread_busy_share_top12"] = round(busy / total, 3) if total else None
     out["loop_thread_top_stacks"] = [{"stack": s, "share": round(c / total, 3)} for s, c in stacks] if total else []
+    with _lock:
+        wtop = _worker_stacks.most_common(12)
+        wtotal = len(_worker_window)
+    out["worker_busy_samples"] = wtotal
+    out["worker_top_stacks"] = [{"stack": s, "samples": c} for s, c in wtop]
     return out
 
 
@@ -113,4 +164,6 @@ def reset_for_tests() -> None:
         _lags.clear()
         _stacks.clear()
         _stack_window.clear()
+        _worker_stacks.clear()
+        _worker_window.clear()
     _state.update(started=False, loop_thread_id=None, loop_class=None, started_at=None)

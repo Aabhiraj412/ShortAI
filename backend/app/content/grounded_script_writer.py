@@ -352,7 +352,14 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
                 if not api_unavailable:
                     exhausted_transient = False
                     break   # drafts failed validation, or a non-transient API error: another model is not the fix
-            if round_no == 1 and exhausted_transient and DEFERRED_RETRY_SEC > 0:
+            # Live evidence (cycle_7_20261127_0600): 12 calls, all HTTP 429, 150 s apart -> the free-tier daily quota,
+            # which a short wait cannot fix. The deferred round therefore runs only when round 1 saw an overload or
+            # timeout (5xx / 408 / no status), the case a few minutes' wait can actually recover.
+            round1 = [c for a in attempts if a.get("round") == 1 for c in (a.get("calls") or [])]
+            overload_seen = any(c.get("http_status") != 429 for c in round1 if c.get("transient"))
+            if round_no == 1 and exhausted_transient and DEFERRED_RETRY_SEC > 0 and not overload_seen:
+                attempts.append({"deferred_retry_skipped": "every transient failure was HTTP 429 (quota); waiting cannot help"})
+            if round_no == 1 and exhausted_transient and DEFERRED_RETRY_SEC > 0 and overload_seen:
                 attempts.append({"deferred_retry_after_sec": DEFERRED_RETRY_SEC,
                                  "reason": "every model failed with transient errors (rate limit / overload)"})
                 logger.info("Script writer: all models unavailable (transient); one deferred retry in %.0f s",

@@ -187,3 +187,29 @@ Existing page controls are kept. Removing every per-page instruction is left to 
   2. Measure the effect of the topic-supply flags, active since 05:45 IST.
   3. Gemini free-tier limits remain external. The deferred retry's effect is measured, not assumed.
   4. The long-form executor and the concurrency benchmark (Stage 3.37) are still open.
+
+## 11. Follow-up: operational acceptance (2026-11-27, 06:00-07:00 IST)
+
+**Live evidence after `9e5abf1`:**
+
+| Item | Evidence |
+|---|---|
+| Topic flags | Both ON in the config (preserved; previous file backed up). `cycle_7` discovery recorded `production_query_rotation: on` and `exhaustion_recovery: on`. Rotated queries; the rotation table has 7 rows (it was empty). 12 eligible topics (0–1 in the evening before); 7 recently-used rejections (17–27 per run before). This is one cycle, not yet a verdict; see the handover for later cycles. |
+| Self-healing (RESTRICTED) | First observation cycle on the new code (00:41 UTC): **11** `selfheal.diagnostic.run`, approved as `policy:RESTRICTED`, executed and SUCCEEDED with verified recovery records. The cycle before the deploy was BLOCKED. |
+| Recommendation Center | It ran (12 findings), but the bridge executed **0**. This was **no eligible action, not a broken path**: at level OBSERVE the 3.32C engine records findings as one audit observation and stores no recommendation. **Fixed:** when the policy covers `recommendation.record` (RESTRICTED and NORMAL at OBSERVE or higher), recommendations are stored, so their automatic follow-ups run. No level was raised. |
+| Gemini deferred retry | `cycle_7`: the deferred round fired (rounds 1 and 2, 12 calls), and all 12 returned HTTP 429. It cost 150 s with no gain. The 429s run from about 01:00 IST until the free-tier daily reset (13:30 IST), so they are quota exhaustion, which waiting cannot fix. **Fixed:** the round now runs only if round 1 saw an overload or timeout (5xx/408). An all-429 failure falls back at once and records `deferred_retry_skipped`. Improvement is not yet demonstrated (0 of 1). |
+| Pixabay | HTTP 400 was reported as `invalid_key`, yet the same key downloaded successfully seconds later. The failing queries were whole headlines (`How much CO₂ will stay? …`), and Pixabay rejects `q` longer than 100 characters. **Fixed:** queries are normalised (NFKD, ASCII, at most 100 characters, cut at a word boundary). 401/403 → `invalid_key`. 400 → `bad_query` once the key has worked, otherwise `invalid_key_or_query`. Degraded providers now show `ok/failed; last error <code> (HTTP n): <next step>`. |
+| Pexels | `KEY_MISSING` in the provider audit and listed once under *Needs you* with `PEXELS_API_KEY`. No key was invented and nothing was disabled. |
+| Shorts, ownership, publishing, OAuth | 24 cycles, schedule revision `ccf0bd04f159` (active = loaded). Autopilot OFF, scheduler owns production. `automatic_private_scheduled`, no public auto-release. OAuth CONNECTED. `cycle_6` and `cycle_7` both took and released the shared render slot, completed, and were uploaded private and scheduled. |
+| Dashboard health since deploy | 90/90 probes HEALTHY, 100 % availability, liveness p50 5.8 ms, p95 50 ms. Loop lag p95 16 ms, loop thread idle. Day before: 79.9 %, p50 567 ms. |
+| Dashboard CPU | A **burst every 60 s** of about 10 CPU-seconds (56–112 % of a core for about 10 s), in short-lived worker threads after the page's poll batch, not in the event loop. The cause is not yet identified. The diagnostic sampler now also records busy worker-thread stacks (`/api/health/loop` → `worker_top_stacks`) so the next deploy names the code. |
+| Daemon | 0.2 % of a core, 38 MB. |
+
+**Dashboard (operator experience):**
+- A single header badge, *Needs you: N*, colour-coded by severity, opens the *Needs your attention* feed.
+- The Recommendation Center intro no longer says "nothing is executed".
+- The repeated "Levels, standing approvals and kill switches are managed in Autonomy Control" tails are gone from the Recommendations, Self-Healing and Autopilot status lines.
+- The "Approve, reject or execute them in Autonomy Control" prompt is replaced.
+- All controls are kept. Genuine confirmations for operator-initiated actions (approve, propose, start/stop) remain, as they are not routine prompts.
+
+**Creative QC vs infrastructure:** `/api/creative-intel/feedback` keeps them apart (7 days: creative `CHECK_A_TOPIC_NARRATION` 9; infrastructure `RECOVERY_WINDOW_EXPIRED` 12). The retry policy still classifies `QCBlocked` as deterministic, so it is never retried as an infrastructure failure.

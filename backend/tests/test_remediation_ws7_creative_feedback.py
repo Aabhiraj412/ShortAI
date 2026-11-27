@@ -134,3 +134,12 @@ def test_api_route_is_local_only():
     from backend.app import main
     remote = TestClient(main.app, base_url="http://example.com", client=("10.1.2.3", 5000))
     assert remote.get("/api/creative-intel/feedback").status_code in (400, 403)
+
+
+def test_no_deferred_round_when_every_failure_is_quota_429(monkeypatch):
+    """Live evidence: cycle_7_20261127_0600 deferred 150 s and made 12 calls, all HTTP 429 (daily quota)."""
+    quota = [ServerError(429, "RESOURCE_EXHAUSTED")] * 3
+    c = ScriptedClient({"primary": list(quota), "backup": list(quota)})
+    out, sleeps = _write(c, monkeypatch)
+    assert out["script_source"] == "extractive_fallback" and sleeps == [] and len(c.calls) == 6
+    assert any("deferred_retry_skipped" in a for a in out["writer_attempts"])

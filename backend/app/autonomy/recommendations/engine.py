@@ -108,6 +108,16 @@ class RecommendationEngine:
             mode, reason = "OFF", "the recommendations autonomy level is OFF"
         elif level == Level.OBSERVE:
             mode, reason = "OBSERVE", "observations only (level OBSERVE)"
+            # Remediation follow-up: storing a recommendation IS the policy-automatic action recommendation.record.
+            # When the control plane's built-in policy covers it in the current control state, analysis stores its
+            # recommendations (so their automatic follow-ups can run); no level is raised.
+            try:
+                state_name = ks.get("control_state")
+                ok, why = self.cp.policy_allows(ACTION_TYPE, cfg, state_name) if state_name and not err else (False, "")
+            except Exception:
+                ok, why = False, ""
+            if ok:
+                mode, reason = "RECOMMEND", f"recommendations stored automatically: {why}"
         else:
             mode, reason = "RECOMMEND", "recommendations enabled"
         return {"mode": mode, "reason": reason, "level": level.name, "kill_switches": ks["active"],

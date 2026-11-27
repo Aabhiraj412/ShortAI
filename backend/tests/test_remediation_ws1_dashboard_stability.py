@@ -167,3 +167,34 @@ def test_write_status_survives_an_unwritable_directory(tmp_path, monkeypatch):
 def test_run_dashboard_logs_unhandled_exceptions():
     src = (ROOT / "backend" / "scripts" / "run_dashboard.py").read_text(encoding="utf-8")
     assert "exited on an unhandled exception" in src
+
+
+def test_worker_thread_sampler_finds_busy_app_code(monkeypatch):
+    """Follow-up: CPU bursts after requests ran outside the event loop; the sampler now names busy worker threads."""
+    import threading as _th
+    import time as _t
+    from backend.app.core import loop_diagnostics as ld
+    ld.reset_for_tests()
+    monkeypatch.setattr(ld, "SAMPLE_INTERVAL", 0.01)
+    stop = _th.Event()
+
+    def busy_app_work():                       # this file lives under backend/tests, so fake an app frame name
+        code = compile("while not stop.is_set():\n    sum(range(500))\n", "D:/x/backend/app/services/hot.py", "exec")
+        exec(code, {"stop": stop})
+
+    t = _th.Thread(target=busy_app_work, name="hot-worker", daemon=True)
+    t.start()
+
+    async def go():
+        ld.start()
+        await asyncio.sleep(0.4)
+        return ld.snapshot()
+
+    try:
+        snap = asyncio.run(go())
+    finally:
+        stop.set()
+        t.join(2)
+    assert snap["worker_busy_samples"] > 0
+    assert any("hot-worker" in w["stack"] and "hot.py" in w["stack"] for w in snap["worker_top_stacks"])
+    ld.reset_for_tests()

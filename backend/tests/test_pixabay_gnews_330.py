@@ -53,7 +53,10 @@ def test_pixabay_missing_key_makes_no_request(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("err, category", [
-    (ProviderError("Pixabay", "http", status=400), "invalid_key"),
+    # Remediation follow-up: Pixabay uses 400 for a bad key AND a rejected query (production 400s came from
+    # overlong queries with a working key), so a 400 before any success is reported as ambiguous.
+    (ProviderError("Pixabay", "http", status=400), "invalid_key_or_query"),
+    (ProviderError("Pixabay", "http", status=401), "invalid_key"),
     (ProviderError("Pixabay", "http", status=429), "rate_limited"),
     (ProviderError("Pixabay", "timeout", "timed out"), "timeout"),
 ])

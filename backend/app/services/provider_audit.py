@@ -458,6 +458,18 @@ def state_with_evidence(row: Dict[str, Any], ev: Dict[str, Any], rendered: Optio
             return "DEGRADED", f"{disc['errors']} errors and no candidates in the last {disc['runs']} discovery runs"
         return "HEALTHY", (f"{disc['candidates_created']} candidates, {disc['accepted']} accepted in the last "
                            f"{disc['runs']} discovery runs")
+    if base in ("DEGRADED", "RATE_LIMITED"):
+        h = row.get("recent_health") or {}
+        err = h.get("last_error") or {}
+        code = row.get("error_category") or err.get("kind") or "error"
+        status = err.get("status")
+        hint = {"bad_query": "the request was rejected (query); queries are now sanitised to the provider limits",
+                "invalid_key": "check the API key", "invalid_key_or_query": "check the API key or the query",
+                "rate_limited": "the provider's rate limit; requests back off automatically",
+                "timeout": "slow responses; retried automatically", "connection": "network or provider outage"
+                }.get(code, "see the dashboard log for the request")
+        return base, (f"{h.get('ok', 0)} ok / {h.get('failed', 0)} failed recently; last error {code}"
+                      f"{f' (HTTP {status})' if status else ''}: {hint}")
     if base == "NOT_USED":
         ok = (row.get("recent_health") or {}).get("ok", 0)
         return "AVAILABLE_NOT_SELECTED", (f"{ok} successful requests, but none of its assets was selected in the last "

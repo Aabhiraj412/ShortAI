@@ -145,7 +145,10 @@ class FakeIntelligence:
 RECOVERY = {f"cycle_{i}": 45 for i in range(1, 25)}
 
 
-def make(tmp_path, *, level="RECOMMEND", startup=True, intel=None, clock=None, environ=None, explainer=None, name="studio.db"):
+def make(tmp_path, *, level="RECOMMEND", startup=True, intel=None, clock=None, environ=None, explainer=None, name="studio.db",
+         policy=False):
+    """policy=False keeps the original 3.32C level semantics under test; the Remediation built-in automatic policy is
+    covered (enabled) in test_remediation_ws2_autonomy_control_states.py."""
     data = tmp_path / "data"
     data.mkdir(exist_ok=True)
     db = tmp_path / name
@@ -155,7 +158,8 @@ def make(tmp_path, *, level="RECOMMEND", startup=True, intel=None, clock=None, e
         (data / "autonomy_startup.json").write_text('{"autonomy_execution": "enabled"}', encoding="utf-8")
     intel = intel or FakeIntelligence()
     clock = clock or Clock()
-    cp = ControlPlane(str(db), str(data), environ={}, intelligence=lambda: intel, clock=clock)
+    cp = ControlPlane(str(db), str(data), environ={}, intelligence=lambda: intel, clock=clock,
+                      automatic_policy=None if policy else {})
     if level:
         cp.set_level("global", level, OP, "test")
         cp.set_level("recommendations", level, OP, "test")
@@ -630,7 +634,9 @@ def test_dashboard_recommendation_center():
     for el in ("recActive", "recCritical", "recHigh", "recNew", "recMode", "recBreakdown", "recTrend", "recList", "recInsufficient",
                "recFilter", "recCategory", "recOperator"):
         assert f'id="{el}"' in sec, el
-    assert "nothing is executed" in sec and "Autonomy Control" in sec
+    # Remediation follow-up: routine follow-ups now run automatically, so the page states that and points to the one
+    # central intervention feed instead of repeating "nothing is executed / approve in Autonomy Control".
+    assert "run automatically under the current control state" in sec and "openAttention()" in sec
     js = "\n".join(re.findall(r"<script>([\s\S]*?)</script>", html))
     names = re.findall(r"^\s*(?:async\s+)?function\s+(\w+)", js, flags=re.M)
     assert len(names) == len(set(names))
