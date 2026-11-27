@@ -163,3 +163,6 @@ backend/data/AUTONOMY_DISABLED
 # Stage 3.32E Community drafts: generated images and the local kill-switch file (runtime data, never committed)
 backend/data/community/
 backend/data/COMMUNITY_DRAFTS_DISABLED
+
+# Stage 4.01: per-channel OAuth tokens (never commit)
+backend/channel_tokens/

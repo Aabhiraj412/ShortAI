@@ -179,10 +179,24 @@ class ProductionObservabilityStore:
                     pass
 
     def reload_from_disk(self) -> None:
-        """Reloads persisted JSON state from disk (verifying restart durability)."""
+        """Reloads persisted JSON state from disk (verifying restart durability).
+
+        Remediation follow-up: the dashboard called this on every poll and re-parsed the 1.3 MB production store
+        each time. A file is now re-read only when its modification time or size changed since the last read."""
         with self._lock:
-            self._prod_state = self._load_file(self.store_path)
-            self._test_state = self._load_file(self.test_store_path)
+            sigs = getattr(self, "_file_sigs", None)
+            if sigs is None:
+                sigs = self._file_sigs = {}
+            for path, attr in ((self.store_path, "_prod_state"), (self.test_store_path, "_test_state")):
+                try:
+                    st = os.stat(path)
+                    sig = (st.st_mtime_ns, st.st_size)
+                except OSError:
+                    sig = None
+                if sig is not None and sigs.get(path) == sig:
+                    continue
+                setattr(self, attr, self._load_file(path))
+                sigs[path] = sig
 
     def _select_store(
         self, production_id: str, execution_context: Optional[str] = None

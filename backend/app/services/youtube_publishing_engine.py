@@ -782,10 +782,18 @@ class YouTubeOAuthManager:
         client_secrets_file: str = DEFAULT_CLIENT_SECRETS,
         token_file: str = DEFAULT_TOKEN_FILE,
         scopes: Optional[List[str]] = None,
+        record_connection_events: bool = True,
     ):
         self.client_secrets_file = client_secrets_file
         self.token_file = token_file
         self.scopes = scopes or YOUTUBE_SCOPES
+        # Stage 4.01: the connection history belongs to the English (master) channel. A manager for another
+        # channel's token passes False so its verification/refresh/connect events never land in that history.
+        self.record_connection_events = record_connection_events
+
+    def _record_event(self, kind: str, **fields) -> None:
+        if getattr(self, "record_connection_events", True):   # instances built without __init__ keep the old behaviour
+            _record_connection_event(kind, **fields)
 
     def install_client_secrets(self, source_path_or_json: str) -> Tuple[bool, str]:
         invalidate_auth_status_cache()
@@ -992,7 +1000,7 @@ class YouTubeOAuthManager:
             "status": auth_problem or ("connected" if channel_info else "not_connected"),
             "error_detail": error_detail,
         }
-        _record_connection_event("verification", status=result["status"],
+        self._record_event("verification", status=result["status"],
                                  channel_connected=result["channel_connected"],
                                  channel_title=(channel_info or {}).get("title"),
                                  error_detail=error_detail)
@@ -1056,10 +1064,10 @@ class YouTubeOAuthManager:
             auth_status = self.get_auth_status()
             if auth_status.get("channel_connected"):
                 self.last_connect_error_code = None
-                _record_connection_event("connect", ok=True, code="CONNECTED")
+                self._record_event("connect", ok=True, code="CONNECTED")
                 return True, auth_status.get("channel_info"), None
             self.last_connect_error_code = "CHANNEL_VERIFICATION_FAILED"
-            _record_connection_event("connect", ok=True, code="CHANNEL_VERIFICATION_FAILED",
+            self._record_event("connect", ok=True, code="CHANNEL_VERIFICATION_FAILED",
                                      message="Authorized, but the YouTube channel could not be verified.")
             return True, None, "Authorized, but could not retrieve channel details."
         except Exception as exc:
@@ -1067,7 +1075,7 @@ class YouTubeOAuthManager:
             code, message = _classify_connect_error(exc)
             self.last_connect_error_code = code
             logger.warning("OAuth authorization did not complete (%s, %s).", code, type(exc).__name__)
-            _record_connection_event("connect", ok=False, code=code, message=message)
+            self._record_event("connect", ok=False, code=code, message=message)
             return False, None, message
 
     def get_authenticated_service(self):
@@ -1111,7 +1119,7 @@ class YouTubeOAuthManager:
             write_protected_file(self.token_file, json.dumps(data).encode("utf-8"))
         logger.info("Saved protected OAuth credentials (%s).", event)
         if event in ("refresh", "connect"):
-            _record_connection_event("token_saved", event=event)
+            self._record_event("token_saved", event=event)
 
     def record_granted_scope(self, scope: str) -> bool:
         """Adds a scope that Google has just confirmed as granted (e.g. a successful analytics refresh) to the stored

@@ -2583,6 +2583,73 @@ async def api_autopilot_controller_stop(req: AutopilotControllerRequest, _: None
     return await _autonomy_call(lambda: _production_controller().request_stop(req.operator, req.reason))
 
 
+# -- Stage 4.01: channel registry (English master, Hindi localized) -------------------------------------------
+class ChannelChangeRequest(_AutonomyBody):
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+async def _channel_call(fn):
+    from backend.app.channels.registry import ChannelError
+    try:
+        return await asyncio.to_thread(fn)
+    except ChannelError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc)[:300])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Channel registry request failed")
+        raise HTTPException(status_code=503, detail="Channel registry unavailable; English production is unaffected.")
+
+
+def _channel_key(key: str) -> str:
+    if not re.fullmatch(r"[a-z]{2,8}", key or ""):
+        raise HTTPException(status_code=400, detail="invalid channel key")
+    return key
+
+
+@app.get("/api/channels")
+def api_channels(_: None = Depends(require_local_control)):
+    """Channel identities, verification, OAuth/credential state, publishing, analytics and active processes."""
+    from backend.app.channels.status import channels_status
+    return channels_status()
+
+
+@app.post("/api/channels/{key}/verify")
+async def api_channel_verify(key: str, _: None = Depends(require_local_control), __: None = Depends(require_same_origin)):
+    from backend.app.channels.registry import get_registry
+    k = _channel_key(key)
+    return await _channel_call(lambda: get_registry().verify(k, actor="operator", force=True))
+
+
+@app.post("/api/channels/{key}/connect")
+async def api_channel_connect(key: str, req: YouTubeConnectRequest, _: None = Depends(require_local_control),
+                              __: None = Depends(require_same_origin)):
+    """Opens Google's consent page for a NON-master channel; the result goes only to that channel's token file."""
+    from backend.app.channels.registry import get_registry
+    if req.confirm is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required.")
+    k = _channel_key(key)
+    return await _channel_call(lambda: get_registry().connect(k, actor="operator"))
+
+
+@app.post("/api/channels/{key}/activate")
+async def api_channel_activate(key: str, req: ChannelChangeRequest, _: None = Depends(require_local_control),
+                               __: None = Depends(require_autonomy_write)):
+    from backend.app.channels.registry import get_registry
+    _require_confirm(req.confirm)
+    k = _channel_key(key)
+    return await _channel_call(lambda: get_registry().activate(k, req.operator, req.reason))
+
+
+@app.post("/api/channels/{key}/deactivate")
+async def api_channel_deactivate(key: str, req: ChannelChangeRequest, _: None = Depends(require_local_control),
+                                 __: None = Depends(require_autonomy_write)):
+    from backend.app.channels.registry import get_registry
+    _require_confirm(req.confirm)
+    k = _channel_key(key)
+    return await _channel_call(lambda: get_registry().deactivate(k, req.operator, req.reason))
+
+
 # -- Stage 3.37: production queues and resource coordinator ------------------------------------------------------
 # Read: both logical queues, renderer occupancy, resources, recovery. Writes are operator-only (local origin, CSRF,
 # explicit confirmation) and limited to the long-form queue: Shorts production stays governed by the schedule.

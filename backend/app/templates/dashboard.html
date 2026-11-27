@@ -804,6 +804,13 @@
 
   <!-- TAB 5: PUBLISHING QUEUE -->
   <section id="tab-queue" class="tab-panel">
+    <!-- STAGE 4.01: channels (English master, Hindi localized) -->
+    <div class="card" id="chCard"><div class="card-head"><div><h2 class="card-title">Channels</h2>
+      <p class="card-desc">Each channel's identity is verified with YouTube <code>channels.list?mine=true</code>, never from its name. English is the master channel and owns the existing production. Hindi localizes completed English Shorts with its own authorization (never the English one) and stays pending until its own channel is verified.</p></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><label for="chOperator" style="font-size:12px;color:var(--muted);">Operator</label><input id="chOperator" maxlength="64" placeholder="your name" style="width:120px;" /><input id="chReason" maxlength="500" placeholder="reason (activate/deactivate)" style="width:200px;" /><button class="btn sm" onclick="refreshChannels()">Refresh</button></div></div>
+      <div id="chList" style="font-size:12px;overflow-x:auto;">--</div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Channel history</h3><div id="chEvents" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
     <div class="card">
       <div class="card-head">
         <div>
@@ -1456,7 +1463,7 @@ function switchTab(tabId, btn) {
   document.getElementById("tab-" + tabId).classList.add("active");
   if (btn) btn.classList.add("active");
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
-  if (tabId === "queue") { refreshPublishing(); }
+  if (tabId === "queue") { refreshPublishing(); refreshChannels(); }
   if (tabId === "ops") { refreshOps(); }
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
@@ -4173,6 +4180,69 @@ async function refreshAutopilot(force = false) {
   refreshAutopilotController(force);
   refreshProductionQueues(force);
   refreshOperatorAttention(force);
+}
+
+// -- Stage 4.01 channels: identity, verification, credentials, publishing, analytics, processes. --
+const CH_COLOR = { ACTIVE: "#86efac", VERIFIED: "#93c5fd", PENDING_VERIFICATION: "#fcd34d", AUTH_REQUIRED: "#fca5a5", BLOCKED: "#fca5a5", INACTIVE: "var(--muted)" };
+async function channelAct(key, action) {
+  try {
+    if (action === "verify") { await apiJson(`/api/channels/${encodeURIComponent(key)}/verify`, { method: "POST", body: "{}" }); }
+    else if (action === "connect") {
+      if (!(await askConfirm("Connect this channel?", "Google's consent page opens in this computer's browser. Sign in with the Hindi channel's Google account, NOT the English one. The result is saved only to this channel's own token file; the English authorization is never read, changed or revoked."))) return;
+      await apiJson(`/api/channels/${encodeURIComponent(key)}/connect`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+    } else {
+      const reason = ((document.getElementById("chReason") || {}).value || "").trim();
+      if (!reason) { showToast("Enter a reason first.", true); return; }
+      if (!(await askConfirm(action === "activate" ? "Activate this channel?" : "Deactivate this channel?", "The change is recorded in the channel history."))) return;
+      const op = ((document.getElementById("chOperator") || {}).value || "").trim();
+      const ao = document.getElementById("autoOperator"); if (op && ao) ao.value = op;
+      await autoWrite(`/api/channels/${encodeURIComponent(key)}/${action}`, "POST", { reason, confirm: true });
+    }
+    showToast(`Channel ${key}: ${action} done`);
+  } catch (err) { showToast(err.message || String(err), true); }
+  refreshChannels();
+}
+
+function channelRow(c) {
+  const pub = c.publishing || {}, an = c.analytics || {}, oa = c.oauth || {}, id = c.identity || {};
+  const pubTxt = pub.queue === "publishing_ledger"
+    ? "last 7 days: " + (Object.entries(pub.last_7_days || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none")
+    : "localizations: " + (Object.entries(pub.by_status || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "none") + (pub.enabled ? "" : " (not enabled)");
+  const procs = (c.processes || []).map(p => escHtml(`${p.job_id} · ${p.stage || p.status}`)).join("<br>") || "none";
+  const k = escHtml(c.channel_key);
+  let btns = `<button class="btn sm" data-k="${k}" onclick="channelAct(this.dataset.k,'verify')">Verify</button>`;
+  if (c.role !== "MASTER") {
+    btns += ` <button class="btn sm" data-k="${k}" onclick="channelAct(this.dataset.k,'connect')">Connect</button>`;
+    btns += c.active ? ` <button class="btn sm" data-k="${k}" onclick="channelAct(this.dataset.k,'deactivate')">Deactivate</button>`
+                     : ` <button class="btn sm" data-k="${k}" onclick="channelAct(this.dataset.k,'activate')">Activate</button>`;
+  }
+  const idTxt = id.youtube_channel_id
+    ? `${escHtml(id.verified_title || "")}<div style="color:var(--muted)">${escHtml(id.youtube_channel_id)} · ${autoTime(id.verified_at_utc)}</div>`
+    : `<span style="color:#fcd34d">not verified</span>`;
+  const notChecked = (c.unavailable || []).length ? `<div style="color:var(--muted)">not checked: ${escHtml(c.unavailable.join("; "))}</div>` : "";
+  return `<tr><td><strong>${escHtml(c.name)}</strong><div style="color:var(--muted)">${escHtml(c.language)} · ${escHtml(c.role.toLowerCase())}${c.source_channel_key ? " of " + escHtml(c.source_channel_key) : ""}</div></td>`
+    + `<td style="color:${CH_COLOR[c.status] || "inherit"}">${escHtml(c.status)}<div style="color:var(--muted);max-width:220px;overflow-wrap:anywhere;">${escHtml(c.status_reason || "")}</div></td>`
+    + `<td>${idTxt}</td>`
+    + `<td>${escHtml(oa.status || "--")}<div style="color:var(--muted);max-width:200px;overflow-wrap:anywhere;">${escHtml(oa.message || "")}${c.credential && c.credential.present ? "" : " · no token file"}</div></td>`
+    + `<td style="max-width:200px;overflow-wrap:anywhere;">${escHtml(pubTxt)}</td>`
+    + `<td>${escHtml(an.state || "--")}${an.action ? `<div style="color:var(--muted);max-width:200px;">${escHtml(an.action)}</div>` : ""}</td>`
+    + `<td>${procs}</td>`
+    + `<td style="max-width:260px;overflow-wrap:anywhere;">${(c.actions || []).map(a => escHtml(a)).join("<br>") || "--"}${notChecked}</td>`
+    + `<td>${btns}</td></tr>`;
+}
+
+async function refreshChannels() {
+  const el = document.getElementById("chList");
+  if (!el) return;
+  try {
+    const d = await apiJson("/api/channels");
+    el.innerHTML = apTable(["Channel", "Status", "Identity", "OAuth / credential", "Publishing", "Analytics", "Active processes", "What to do", ""],
+      (d.channels || []).map(channelRow));
+    const ev = d.events || [];
+    document.getElementById("chEvents").innerHTML = ev.length ? apTable(["When", "Channel", "Event", "Status", "Actor"], ev.map(e =>
+      `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.channel_key)}</td><td>${escHtml(e.event)}</td><td>${escHtml((e.previous_status || "") + " → " + (e.new_status || ""))}</td><td>${escHtml(e.actor)}</td></tr>`))
+      : `<div style="color:var(--muted)">No channel events yet.</div>`;
+  } catch (err) { el.innerHTML = `<span class="auto-kill">channels unavailable: ${escHtml(err.message || String(err))}</span>`; }
 }
 
 // -- Remediation follow-up: one global badge for genuine interventions; routine work never prompts. --
