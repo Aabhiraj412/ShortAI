@@ -1047,8 +1047,10 @@ class ProductionCoordinator:
             "config": p["config"],
             "decisions": p["decisions"],
             "events": events,
-            "safety": "Operator-enqueued work only. No publishing, schedule, configuration, restart, deletion or "
-                      "Autopilot action. Shorts proceeds unchanged if the coordinator is unavailable.",
+            "safety": "Operator-enqueued work, plus automatic Hinglish localization of completed English Shorts "
+                      "(one at a time, at most localization_auto_daily_max a day). No publishing, schedule, "
+                      "configuration, restart, deletion or Autopilot action. Shorts proceeds unchanged if the "
+                      "coordinator is unavailable.",
         }
 
 
