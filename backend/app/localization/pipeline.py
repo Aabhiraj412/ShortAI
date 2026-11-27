@@ -20,7 +20,7 @@ import os
 import secrets
 import shutil
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -388,3 +388,62 @@ def enqueue(source_job_id: str, *, operator: str, coordinator=None, localizer: O
                         steps=COORDINATOR_STEPS, requested_by=operator, priority=40, job_id=job_id,
                         queue=LOCALIZATION, checkpoint={"localization_id": row["id"]})
     return {"localization": row, "queued": not res["duplicate"], "coordinator_job": res["job"]["id"]}
+
+
+AUTO_ACTOR = "localization-policy"
+AUTO_SOURCE_MAX_AGE_HOURS = 26
+
+
+def auto_enqueue_next(*, coordinator=None, localizer: Optional[HindiLocalizer] = None,
+                      now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Bounded autonomous Hinglish localization (remediation closure; local, zero cost, reversible: files only under
+    media/localizations, never published). Enqueues the newest completed English Short that has no localization yet,
+    only when the LOCALIZATION queue is enabled and idle and fewer than ``localization_auto_daily_max`` were
+    auto-enqueued this IST day. Rendering still waits for the shared slot in Shorts gaps; QC, duplicate mapping and
+    the publishing block are unchanged."""
+    from backend.app.scheduler.production_coordinator import LOCALIZATION, QUEUED, RUNNING, get_coordinator
+    coord = coordinator or get_coordinator()
+    cfg = coord.config()
+    cap = int(cfg.get("localization_auto_daily_max") or 0)
+    if not cfg.get("localization_enabled") or cap <= 0:
+        return {"queued": False, "reason": "automatic localization is off (localization_enabled / daily max 0)"}
+    jobs = coord.list_jobs(limit=200)
+    if any(j["queue"] == LOCALIZATION and j["state"] in (QUEUED, RUNNING) for j in jobs):
+        return {"queued": False, "reason": "a localization is already queued or running"}
+    now = now or datetime.now(timezone.utc)
+    ist_day = (now + timedelta(hours=5, minutes=30)).date().isoformat()
+    today = [j for j in jobs if j["queue"] == LOCALIZATION and j.get("requested_by") == AUTO_ACTOR
+             and _ist_date(j.get("enqueued_at_utc")) == ist_day]
+    if len(today) >= cap:
+        return {"queued": False, "reason": f"daily automatic localization limit reached ({cap})"}
+    loc = localizer or HindiLocalizer()
+    with sqlite3.connect(Path(loc.reg.db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=10) as c:
+        since = (now - timedelta(hours=AUTO_SOURCE_MAX_AGE_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = c.execute("SELECT id FROM persistent_jobs WHERE status='COMPLETED' AND created_at >= ? "
+                         "ORDER BY created_at DESC LIMIT 30", (since,)).fetchall()
+        try:
+            done = {r[0] for r in c.execute("SELECT source_job_id FROM content_localizations WHERE target_channel_key=?",
+                                            (loc.target,))}
+        except sqlite3.OperationalError:
+            done = set()
+    for (job_id,) in rows:
+        if job_id in done or str(job_id).startswith(("test_", "mock_")):
+            continue
+        src = loc.media_dir / "productions" / job_id
+        if not (src / "pop_info_film" / "plan.json").is_file() or not (src / "scripts" / f"script_{job_id}.json").is_file():
+            continue
+        res = enqueue(job_id, operator=AUTO_ACTOR, coordinator=coord, localizer=loc)
+        return dict(res, source_job_id=job_id)
+    return {"queued": False, "reason": "no completed English Short without a localization"}
+
+
+def _ist_date(ts: Optional[str]) -> Optional[str]:
+    if not ts:
+        return None
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return (d + timedelta(hours=5, minutes=30)).date().isoformat()

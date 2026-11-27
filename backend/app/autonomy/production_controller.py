@@ -184,7 +184,8 @@ class ProductionController:
                  dispatch_scheduled: Optional[Callable[..., Any]] = None,
                  dispatch_recovery: Optional[Callable[..., Any]] = None,
                  replay: Optional[Callable[..., Any]] = None,
-                 job_state: Optional[Callable[[str], Dict[str, Any]]] = None):
+                 job_state: Optional[Callable[[str], Dict[str, Any]]] = None,
+                 daemon_pid: Optional[Callable[[], Optional[int]]] = None):
         if cp is None:
             from backend.app.autonomy.control_plane import get_control_plane
             cp = get_control_plane()
@@ -199,6 +200,7 @@ class ProductionController:
         self._dispatch_recovery = dispatch_recovery or _default_dispatch_recovery
         self._replay = replay or _default_replay
         self._job_state = job_state or _default_job_state
+        self._daemon_pid = daemon_pid or _registered_daemon_pid
         self._schema_ready = False
         self._off_heartbeat_at = float("-inf")
         self._schema_lock = threading.Lock()
@@ -815,6 +817,41 @@ class ProductionController:
                     self.cp._audit_now("AUTOPILOT_OCCURRENCE_EXPIRED", ACTOR, reason=f"{c['job_id']}: {c.get('reason')}")
                     record_event("AUTOPILOT_OCCURRENCE_EXPIRED", {"reason": c.get("reason")}, job_id=c["job_id"])
 
+    def controller_health(self, row: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+        """Controller liveness from evidence, not from heartbeat age alone (remediation closure): the heartbeat must be
+        fresh, the recorded process must be alive, and it must be the registered scheduler daemon. A dead process with
+        a recent row (stale record) or a live process that is not the daemon (PID reuse after a restart) is reported
+        as not responding with the exact reason."""
+        hb = _parse(row.get("heartbeat_at_utc"))
+        age = (now - hb).total_seconds() if hb else None
+        pid = row.get("controller_pid")
+        try:
+            pid_alive = bool(pid) and self._alive(int(pid))
+        except (TypeError, ValueError):
+            pid_alive = False
+        try:
+            daemon = self._daemon_pid()
+        except Exception:  # noqa: BLE001 - identity unknown, never assumed
+            daemon = None
+        identity = ("unknown" if not pid else "scheduler daemon" if daemon and int(pid) == int(daemon) else
+                    "unregistered" if daemon is None else "not the registered daemon")
+        fresh = age is not None and age <= CONTROLLER_STALE.total_seconds()
+        if hb is None:
+            note = "no controller tick recorded yet"
+        elif not fresh:
+            note = (f"no controller tick for {int(age)} s (more than {int(CONTROLLER_STALE.total_seconds())} s): "
+                    "the scheduler daemon is down or not running the controller")
+        elif not pid_alive:
+            note = f"heartbeat is recent but process {pid} is not running (stale record)"
+        elif identity == "not the registered daemon":
+            note = (f"process {pid} is alive but the registered scheduler daemon is {daemon} "
+                    "(possible PID reuse); not counted as healthy")
+        else:
+            note = "fresh"
+        responding = fresh and pid_alive and identity in ("scheduler daemon", "unregistered")
+        return {"responding": responding, "heartbeat_age_sec": None if age is None else round(age, 1),
+                "pid_alive": pid_alive, "daemon_pid": daemon, "identity": identity, "note": note}
+
     # -- status (dashboard) ---------------------------------------------------------------------------------------
     def status(self, *, include_live: bool = True) -> Dict[str, Any]:
         row = self.load()
@@ -822,7 +859,8 @@ class ProductionController:
         own_row = self.ownership.read()
         eff = self.ownership.effective(own_row)
         hb = _parse(row.get("heartbeat_at_utc"))
-        responding = hb is not None and now - hb <= CONTROLLER_STALE
+        health = self.controller_health(row, now)
+        responding = health["responding"]
         mr = self.mode_and_role()
         perms = self.cp.permissions()
         with self._rd() as conn:
@@ -859,12 +897,10 @@ class ProductionController:
             "startup_config": mr["kill_switches"].get("startup_config"),
             "missing_standing_approvals": mr["missing_standing_approvals"], "open_breakers": mr["open_breakers"],
             "controller": {"pid": row.get("controller_pid"), "heartbeat_at_utc": row.get("heartbeat_at_utc"),
-                           "responding": responding,
+                           "responding": responding, **{k: health[k] for k in ("heartbeat_age_sec", "pid_alive",
+                                                                                "daemon_pid", "identity")},
                            "note": (("controller idle and responding (Autopilot OFF; the scheduler owns production)"
-                                     if st == OFF else "controller heartbeat fresh") if responding else
-                                    ("no controller tick yet" if hb is None else
-                                     "controller has not ticked for more than 3 minutes (scheduler daemon down or "
-                                     "running older code)"))},
+                                     if st == OFF else "controller heartbeat fresh") if responding else health["note"])},
             "ownership": {"owner": eff["owner"], "reason": eff["reason"], "owner_pid": own_row.get("owner_pid"),
                           "acquired_at_utc": own_row.get("acquired_at_utc"),
                           "heartbeat_at_utc": own_row.get("heartbeat_at_utc"),
@@ -905,6 +941,13 @@ def _default_scheduler_probe() -> Dict[str, Any]:
     prof = get_active_profile()
     gens = [j for j in scheduler.get_jobs() if str(j.id).startswith("gen_")] if scheduler.running else []
     return {"running": bool(scheduler.running), "cycles": len(prof.cycles), "generation_jobs": len(gens)}
+
+
+def _registered_daemon_pid() -> Optional[int]:
+    """The scheduler daemon's PID as registered at its start (deployment record), read from the database."""
+    from backend.app.services import deployment_diagnostics as dd
+    pid = (dd._read_json(dd.DAEMON_DEPLOYMENT_KEY) or {}).get("pid")
+    return int(pid) if pid else None
 
 
 def _default_job_state(job_id: str) -> Dict[str, Any]:

@@ -85,3 +85,27 @@ These are genuine; nothing local can resolve them.
 3. Optional: a Pexels key (Pixabay works without it).
 4. Optional: `autonomy_startup.json` and APPROVED_EXECUTION, only if the owner wants Autopilot to dispatch production. The scheduler already produces every cycle without it.
 5. Community API publishing: Google pilot access and the `youtube.force-ssl` scope (external).
+
+## 7. Remediation closure (2026-11-27, 20:20–21:30 IST)
+
+Builds on §1–§6 (deployed in `2c31dc8`). The live state before the closure work was verified, not assumed:
+- control state RESTRICTED (not an emergency stop);
+- needs-you held only the 3 creative decisions; Pexels was listed as optional;
+- 22 actions had run automatically; the controller was responding, as daemon PID 20704.
+
+| Item | Change | Evidence |
+|---|---|---|
+| **Controller health** | It used to count as "responding" on heartbeat age alone. Now `ProductionController.controller_health` requires three things: a fresh heartbeat (≤ 180 s), a **live process**, and that process being the **registered scheduler daemon** (the deployment record written at daemon start). Otherwise it reports the exact case: no tick, stale record (dead PID), or possible PID reuse (a live PID that is not the daemon). Status exposes `heartbeat_age_sec`, `pid_alive`, `daemon_pid` and `identity`. | Live, read-only: identity "scheduler daemon", PID 20704, heartbeat age 35–44 s. A dead PID gives "stale record"; another live PID gives "possible PID reuse". Tests cover three consecutive ticks while OFF. |
+| **Self-healing outcomes** | Six distinct facts per incident: diagnostic succeeded, recovery **approved** (policy / standing / explicit), recovery executed, recovery **verified**, issue resolved (verified with no recurrence), output completed (`resolved_by` credits the scheduler when its retry finished the job). The stages run in that order; the dashboard shows each count. | Tests: approved ≠ executed ≠ verified ≠ resolved; a rejection never counts as approved. |
+| **Readiness metric** | The Autopilot readiness availability check states its own window (the phase period), its denominator (probes) and its outage count. It is never silently compared with the health card's last 24 h, which also lists every outage. | Test |
+| **Attention groups** | Each request carries a `group`: security / approval, external authorization (credentials, Hindi publishing authorization), creative decision, or local operations. The feed returns counts per group, and the dashboard sorts and labels by group. | Test |
+| **Autonomous Hinglish localization** | Inside the existing coordinator tick, every 10 min: when the LOCALIZATION queue is enabled and idle, it enqueues the newest completed English Short (last 26 h, English artifacts present, no localization yet). The cap is `localization_auto_daily_max` per IST day (default **6**, 0–24, coordinator config; 0 turns it off). Renders still run only in Shorts gaps in the shared slot; QC, duplicate mapping and the publishing block are unchanged; operator enqueue still works. | Tests: newest first, test jobs and missing files skipped, one at a time, cap and switch, never runs with injected test executors. |
+
+**Not changed:** the 24-cycle schedule, the English pipeline, OAuth, channel identities, the publishing policy, autonomy levels, standing approvals and kill switches. No new scheduler, daemon or worker; no paid service.
+
+**Still requiring authorization (genuine):**
+- creative decisions (hook, storytelling, ending);
+- connecting the Hindi channel and authorizing Hindi publishing;
+- Autopilot production dispatch (`autonomy_startup.json`, APPROVED_EXECUTION, standing approvals);
+- Community API access (Google pilot and `force-ssl` scope);
+- any destructive, irreversible, spending or account-level action.

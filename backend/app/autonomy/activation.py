@@ -364,9 +364,15 @@ class ActivationManager:
                         f"no health-monitor evidence for the period ({summ.get('reason', 'unavailable')})")
             return
         pct = summ.get("availability_pct") or 0.0
+        # Remediation closure: the readiness figure states its own window and denominator (the phase period, not the
+        # health card's last 24 h), and every outage in it, so the two numbers are never silently compared.
+        win = summ.get("window") or {}
         self._check(checks, "dashboard_availability", pct >= MIN_AVAILABILITY_PCT and not summ.get("restarts"),
-                    f"liveness {pct}% over {summ.get('probes')} probes, {summ.get('restarts', 0)} restart(s); need "
-                    f">= {MIN_AVAILABILITY_PCT}% and no restarts", {k: summ.get(k) for k in ("availability_pct", "probes", "restarts")})
+                    f"liveness {pct}% over {summ.get('probes')} probes in the phase period "
+                    f"({win.get('start_utc', '?')} to {win.get('end_utc', '?')}), {summ.get('outage_count', 0)} "
+                    f"outage(s), {summ.get('restarts', 0)} monitor restart(s); need >= {MIN_AVAILABILITY_PCT}% and no "
+                    "monitor restarts",
+                    {k: summ.get(k) for k in ("availability_pct", "probes", "restarts", "window", "outage_count")})
 
     def _false_positive_check(self, checks, since: Optional[str]) -> None:
         try:

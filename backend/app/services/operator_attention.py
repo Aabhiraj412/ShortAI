@@ -19,6 +19,12 @@ import json
 from typing import Any, Callable, Dict, List, Optional
 
 
+GROUPS = ("security", "external_authorization", "creative_decision", "local_operational")
+GROUP_OF_KIND = {"emergency_stop": "security", "approval": "security", "credential": "external_authorization",
+                 "external_authorization": "external_authorization", "creative_decision": "creative_decision",
+                 "decision": "local_operational", "failed_recovery": "local_operational"}
+
+
 def _safe(name: str, fn: Callable[[], Any], unavailable: List[str]) -> Any:
     try:
         return fn()
@@ -116,7 +122,7 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
     if passed:
         reasons = (passed[0].get("publishing") or {}).get("reasons") or []
         if reasons:
-            needs.append({"kind": "decision", "severity": "low",
+            needs.append({"kind": "external_authorization", "severity": "low",
                           "title": f"{len(passed)} Hindi video(s) passed QC and wait for publishing authorization",
                           "why": "; ".join(reasons[:2]),
                           "action": "Verify the Hindi channel (Channels card); Hindi publishing is a separate milestone."})
@@ -139,8 +145,13 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
                                                             "RECOMMENDATION_RUN_BLOCKED")]
     order = {"high": 0, "medium": 1, "low": 2}
     needs.sort(key=lambda n: order.get(n["severity"], 3))
+    # Remediation closure: every request says which kind of matter it is, so external authorizations and creative
+    # (human-judgement) decisions are never mixed with local operational blockers.
+    for n in needs:
+        n["group"] = GROUP_OF_KIND.get(n["kind"], "local_operational")
+    groups = {g: sum(1 for n in needs if n["group"] == g) for g in GROUPS}
     return {"control_state": {k: control.get(k) for k in ("state", "reason")} if control else None,
-            "needs_you": needs, "optional_improvements": optional, "done_automatically": automatic[:30],
+            "needs_you": needs, "groups": groups, "optional_improvements": optional, "done_automatically": automatic[:30],
             "blocked": blocked[:30], "unavailable": unavailable,
             "rule": "You are asked only for credentials, approvals outside the automatic policy, human decisions and "
                     "recoveries that failed after their permitted attempts. Routine recoverable failures are handled "

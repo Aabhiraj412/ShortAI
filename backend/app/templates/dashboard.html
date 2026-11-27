@@ -813,7 +813,7 @@
     </div>
     <!-- STAGE 4.02: Hindi localization of completed English Shorts -->
     <div class="card" id="locCard"><div class="card-head"><div><h2 class="card-title">Hindi localization</h2>
-      <p class="card-desc">Completed English Shorts adapted into natural Hindi (script, voice, render, Hindi QC). It runs in the gaps between English Shorts and shares the one render slot. A Hindi video is never published automatically: publishing stays blocked until the Hindi channel is verified, active and Hindi publishing is explicitly authorized.</p></div>
+      <p class="card-desc">Completed English Shorts adapted into natural Hinglish (script, voice, render, QC); every on-screen text is English or Roman-script Hinglish. The system enqueues the newest completed Short automatically, one at a time, up to <code>localization_auto_daily_max</code> per day (coordinator config; 0 turns it off), and you can still localize any job here. It runs in the gaps between English Shorts and shares the one render slot. A Hindi video is never published automatically: publishing stays blocked until the Hindi channel is verified, active and Hindi publishing is explicitly authorized.</p></div>
       <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><input id="locSource" maxlength="80" placeholder="English job id, e.g. cycle_9_20261127_0800" style="width:280px;" /><button class="btn sm" onclick="locCreate()">Localize</button><button class="btn sm" onclick="refreshLocalizations()">Refresh</button></div></div>
       <div id="locList" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
@@ -3270,7 +3270,7 @@ async function refreshSelfHealing(force = false) {
     document.getElementById("healOpen").textContent = sm.current_incidents ?? sm.open_incidents ?? "--";
     const oc = sm.outcomes || {};
     document.getElementById("healOpenSub").textContent = sm.outcomes
-      ? `${sm.historical_incidents || 0} historical (not blocking) · ${oc.diagnostics_succeeded || 0} diagnosed · ${oc.recoveries_executed || 0} recovery executed · ${oc.issues_resolved || 0} resolved · ${oc.outputs_completed || 0} output completed`
+      ? `${sm.historical_incidents || 0} historical (not blocking) · ${oc.diagnostics_succeeded || 0} diagnosed · ${oc.recoveries_approved || 0} recovery approved · ${oc.recoveries_executed || 0} executed · ${oc.recoveries_verified || 0} verified · ${oc.issues_resolved || 0} resolved · ${oc.outputs_completed || 0} output completed`
       : (Object.entries(sm.incidents_by_status || {}).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(" · ") || "--");
     document.getElementById("healDet").textContent = cls.DETERMINISTIC ?? 0;
     document.getElementById("healAwait").textContent = sm.awaiting_approval ?? 0;
@@ -4336,7 +4336,8 @@ setInterval(refreshAttentionBadge, 120000);
 const ATTN_STATE_COLOR = { NORMAL: "#86efac", RESTRICTED: "#93c5fd", EMERGENCY_STOP: "#fca5a5" };
 const ATTN_SEV_COLOR = { high: "#fca5a5", medium: "#fcd34d", low: "var(--muted)" };
 const ATTN_KIND = { emergency_stop: "Emergency stop", credential: "External authorization", approval: "Approval", decision: "Decision",
-  creative_decision: "Creative decision (human judgement)", failed_recovery: "Recovery failed" };
+  creative_decision: "Creative decision (human judgement)", failed_recovery: "Recovery failed", external_authorization: "External authorization" };
+const ATTN_GROUP = { security: "Security / approval", external_authorization: "External authorization", creative_decision: "Creative decision", local_operational: "Local operations" };
 async function refreshOperatorAttention(force = false) {
   const panel = document.getElementById("tab-autopilot");
   if (!panel || (!force && !panel.classList.contains("active"))) return;
@@ -4346,8 +4347,10 @@ async function refreshOperatorAttention(force = false) {
     document.getElementById("attnState").innerHTML = `<span style="color:${ATTN_STATE_COLOR[cs.state] || "inherit"}">${escHtml(cs.state || "--")}</span>`;
     document.getElementById("attnStateSub").textContent = cs.reason || "";
     const n = a.needs_you || [];
-    document.getElementById("attnNeeds").innerHTML = n.length ? apTable(["", "Type", "What", "Why", "What to do"], n.map(x =>
-      `<tr><td style="color:${ATTN_SEV_COLOR[x.severity] || "inherit"}">${escHtml(x.severity)}</td><td>${escHtml(ATTN_KIND[x.kind] || x.kind || "")}</td><td>${escHtml(x.title)}</td><td style="max-width:380px;overflow-wrap:anywhere;">${escHtml(x.why || "")}</td><td style="max-width:320px;overflow-wrap:anywhere;">${escHtml(x.action || "")}</td></tr>`))
+    const gOrder = { security: 0, external_authorization: 1, creative_decision: 2, local_operational: 3 };
+    n.sort((a, b) => (gOrder[a.group] ?? 9) - (gOrder[b.group] ?? 9));
+    document.getElementById("attnNeeds").innerHTML = n.length ? apTable(["", "Area", "Type", "What", "Why", "What to do"], n.map(x =>
+      `<tr><td style="color:${ATTN_SEV_COLOR[x.severity] || "inherit"}">${escHtml(x.severity)}</td><td>${escHtml(ATTN_GROUP[x.group] || x.group || "")}</td><td>${escHtml(ATTN_KIND[x.kind] || x.kind || "")}</td><td>${escHtml(x.title)}</td><td style="max-width:380px;overflow-wrap:anywhere;">${escHtml(x.why || "")}</td><td style="max-width:320px;overflow-wrap:anywhere;">${escHtml(x.action || "")}</td></tr>`))
       : `<div class="auto-on">Nothing needs you right now.</div>`;
     const opt = a.optional_improvements || [];
     if (opt.length) document.getElementById("attnNeeds").innerHTML += `<div style="color:var(--muted);margin-top:6px;">Optional (nothing is blocked; a fallback is working): ${opt.map(x => escHtml(`${x.title}: ${x.action}`)).join("; ")}</div>`;

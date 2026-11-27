@@ -73,7 +73,10 @@ TS_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "long_form_enabled": False,           # operator switch; OFF by default
-    "localization_enabled": True,         # runs only operator-enqueued localizations, in Shorts gaps
+    "localization_enabled": True,         # the LOCALIZATION queue runs, in Shorts gaps only
+    # Remediation closure: Hinglish localization is an autonomous local operation. At most this many completed
+    # English Shorts are enqueued automatically per IST day, one at a time (0 disables; operator enqueue still works).
+    "localization_auto_daily_max": 6,
     "max_heavy_concurrency": 1,
     "max_light_concurrency": 1,
     "heavy_max_cpu_percent": 70.0,
@@ -95,6 +98,7 @@ _CONFIG_BOUNDS: Dict[str, Tuple[float, float]] = {
     "light_max_cpu_percent": (10, 98), "light_min_ram_available_gb": (0.5, 12), "light_min_disk_free_gb": (1, 500),
     "shorts_guard_minutes": (0, 60), "shorts_slot_wait_seconds": (0, 1800), "aging_minutes": (1, 1440),
     "starvation_alert_hours": (1, 168), "max_attempts": (1, 10), "retry_backoff_minutes": (0, 240),
+    "localization_auto_daily_max": (0, 24),
 }
 
 SCHEMA = """
@@ -291,6 +295,7 @@ class StepContext:
 
 Executor = Callable[[StepContext], Dict[str, Any]]
 _EXECUTORS: Dict[str, Executor] = {}
+AUTO_LOCALIZE_SECONDS = 600.0           # how often the daemon tick considers an automatic localization
 # The queue each executor kind serves (reporting only): any kind not listed here is a long-form kind.
 EXECUTOR_QUEUE: Dict[str, str] = {"hindi_short_localization": "LOCALIZATION"}
 
@@ -317,6 +322,7 @@ class ProductionCoordinator:
         self._lock = threading.Lock()
         self._held_tokens: Dict[str, str] = {}          # slot token -> job id, held by THIS process
         self._running: Dict[str, threading.Thread] = {}  # long-form job id -> step thread in THIS process
+        self._last_auto_localize = float("-inf")         # monotonic time of the last auto-localization check
         self._ensured = False
         self.last_decisions: List[Dict[str, Any]] = []
 
@@ -638,6 +644,24 @@ class ProductionCoordinator:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("[COORDINATOR] slot release failed for %s: %s", job_id, type(exc).__name__)
 
+    def _auto_localize(self) -> None:
+        """At most every AUTO_LOCALIZE_SECONDS, enqueue the next completed English Short for Hinglish localization
+        under the bounded policy (localization.pipeline.auto_enqueue_next). Production executor table only (tests
+        inject their own). Never raises: a failure is logged and the tick continues."""
+        if self.executors is not _EXECUTORS:
+            return
+        now = time.monotonic()
+        if now - self._last_auto_localize < AUTO_LOCALIZE_SECONDS:
+            return
+        self._last_auto_localize = now
+        try:
+            from backend.app.localization.pipeline import auto_enqueue_next
+            res = auto_enqueue_next(coordinator=self)
+            if res.get("queued"):
+                logger.info("[COORDINATOR] auto-localization queued %s", res.get("source_job_id"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[COORDINATOR] auto-localization skipped: %s", type(exc).__name__)
+
     def _register_builtin_executors(self) -> None:
         """Stage 4.02: the Hindi localization executor, registered lazily and only for the production executor
         table (tests inject their own)."""
@@ -904,6 +928,7 @@ class ProductionCoordinator:
         thread, so the loop never blocks), and persist a snapshot for the dashboard."""
         import asyncio
         recovered = await asyncio.to_thread(self.recover)
+        await asyncio.to_thread(self._auto_localize)
         open_jobs = await asyncio.to_thread(self.list_jobs, states=(QUEUED, RUNNING), limit=1)
         if open_jobs or self.config()["long_form_enabled"]:
             p = await asyncio.to_thread(self.plan)

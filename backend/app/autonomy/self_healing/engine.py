@@ -709,7 +709,8 @@ class SelfHealingEngine:
                 inc["outcome"] = outcomes.assess(inc, self.store.recoveries_for(inc["id"]), job_status(inc.get("job_id")), now)
             except Exception as exc:  # noqa: BLE001 - reporting never breaks the overview
                 inc["outcome"] = {"stage": "UNKNOWN", "current": True, "evidence": [f"outcome unavailable: {safe_error(exc)}"],
-                                  "diagnostic_succeeded": False, "recovery_executed": False, "issue_resolved": False,
+                                  "diagnostic_succeeded": False, "recovery_approved": False, "recovery_executed": False,
+                                  "recovery_verified": False, "issue_resolved": False,
                                   "output_completed": False, "resolved_by": None, "history_reason": None}
         return incidents
 
@@ -723,9 +724,9 @@ class SelfHealingEngine:
     def overview(self, limit: int = 50) -> Dict[str, Any]:
         out: Dict[str, Any] = {"state": self.state(), "database_available": True,
                                "note": "Self-healing diagnoses failures and runs only allow-listed, verified actions. "
-                                       "Each incident reports four separate facts: diagnostic succeeded, recovery "
-                                       "executed, issue resolved (verified, no recurrence) and production output "
-                                       "completed. A diagnostic is never counted as a recovery. Job retries stay with "
+                                       "Each incident reports six separate facts: diagnostic succeeded, recovery "
+                                       "approved, recovery executed, recovery verified, issue resolved (verified, no "
+                                       "recurrence) and production output completed. A diagnostic is never counted as a recovery. Job retries stay with "
                                        "the scheduler's retry policy; re-renders, restarts and configuration are never "
                                        "self-healing actions. Incidents with no recent occurrence are history, not "
                                        "current blockers."}

@@ -156,7 +156,8 @@ def test_recovery_counts_only_with_verified_evidence_and_no_recurrence():
     unverified = [{"action_type": "selfheal.asset.reacquire_staged", "status": "FAILED", "verification_result": "UNVERIFIED",
                    "started_at_utc": seen.isoformat()}]
     a = outcomes.assess(_inc(seen), unverified, "FAILED", NOW)
-    assert a["recovery_executed"] and not a["issue_resolved"] and a["stage"] == "ACTION_EXECUTED"
+    assert a["recovery_executed"] and not a["recovery_verified"] and not a["issue_resolved"]
+    assert a["stage"] == "RECOVERY_EXECUTED"
     verified_before_recurrence = [{"action_type": "selfheal.asset.reacquire_staged", "status": "RECOVERED",
                                    "verification_result": "VERIFIED", "finished_at_utc": (seen - timedelta(minutes=10)).isoformat()}]
     a = outcomes.assess(_inc(seen), verified_before_recurrence, None, NOW)
@@ -211,3 +212,82 @@ def test_dashboard_presents_the_separate_concepts():
     html = (Path(__file__).resolve().parents[1] / "app" / "templates" / "dashboard.html").read_text(encoding="utf-8")
     assert "Startup configuration (optional, not a kill switch)" in html and "EMERGENCY STOP" in html
     assert "Autonomy: BLOCKED (" not in html and "creative_decision" in html and "optional_improvements" in html
+
+
+# -- remediation closure ------------------------------------------------------------------------------------------------
+
+def _health(ctrl, pid, age_sec, daemon):
+    ctrl._daemon_pid = lambda: daemon
+    from backend.app.autonomy.production_controller import _ts
+    row = {"controller_pid": pid, "heartbeat_at_utc": _ts(ctrl._now() - timedelta(seconds=age_sec))}
+    return ctrl.controller_health(row, ctrl._now())
+
+
+def test_controller_health_needs_fresh_heartbeat_live_pid_and_daemon_identity(tmp_path):
+    from test_autopilot_controller_336 import ME, OTHER, World, build
+    ctrl = build(tmp_path, World(), level="OBSERVE", standing=False, alive=(ME,))
+    ok = _health(ctrl, ME, 30, ME)
+    assert ok["responding"] and ok["identity"] == "scheduler daemon" and ok["pid_alive"]
+    stale = _health(ctrl, ME, 600, ME)
+    assert not stale["responding"] and "no controller tick" in stale["note"]
+    dead = _health(ctrl, OTHER, 30, OTHER)                 # recent row, but the process is gone
+    assert not dead["responding"] and "stale record" in dead["note"]
+    ctrl._alive_set.add(OTHER)
+    reuse = _health(ctrl, OTHER, 30, ME)                   # alive, but not the registered daemon
+    assert not reuse["responding"] and "PID reuse" in reuse["note"]
+    unknown = _health(ctrl, ME, 30, None)                  # no registration record: liveness only, stated
+    assert unknown["responding"] and unknown["identity"] == "unregistered"
+
+
+def test_controller_health_over_multiple_ticks_while_off(tmp_path):
+    from test_autopilot_controller_336 import ME, World, build
+    ctrl = build(tmp_path, World(), level="OBSERVE", standing=False)
+    ctrl._daemon_pid = lambda: ME
+    for _ in range(3):
+        asyncio.run(ctrl.tick())
+        ctrl._off_heartbeat_at = float("-inf")             # each observation interval writes its heartbeat
+        st = ctrl.status(include_live=False)["controller"]
+        assert st["responding"] and st["identity"] == "scheduler daemon" and st["heartbeat_age_sec"] <= 1
+
+
+def test_six_outcome_states_are_distinct():
+    seen = NOW - timedelta(hours=1)
+    rec = {"action_type": "selfheal.asset.reacquire_staged", "approval_outcome": "POLICY", "status": "APPROVED"}
+    a = outcomes.assess(_inc(seen), [rec], None, NOW)
+    assert a["recovery_approved"] and not a["recovery_executed"] and a["stage"] == "RECOVERY_APPROVED"
+    done = dict(rec, status="RECOVERED", verification_result="VERIFIED", started_at_utc=seen.isoformat(),
+                finished_at_utc=(seen - timedelta(minutes=1)).isoformat())
+    a = outcomes.assess(_inc(seen), [done], None, NOW)       # verified, but the failure recurred afterwards
+    assert a["recovery_verified"] and not a["issue_resolved"] and a["stage"] == "RECOVERY_VERIFIED"
+    rejected = dict(rec, approval_outcome="REJECTED", status="CANCELLED")
+    assert not outcomes.assess(_inc(seen), [rejected], None, NOW)["recovery_approved"]
+    s = outcomes.summarize([a])
+    assert s["recoveries_approved"] == s["recoveries_executed"] == s["recoveries_verified"] == 1 and s["issues_resolved"] == 0
+
+
+def test_attention_items_are_grouped_by_kind_of_matter(tmp_path):
+    cp = make_cp(tmp_path, startup=True, policy=True)
+    set_all(cp, "RECOMMEND")
+    cp.propose("community.draft.prepare", {"text": "a draft"}, reason="t", proposed_by="autonomy-engine")
+    a = oa.attention(cp=cp, providers=lambda: {"providers": [{"name": "YouTube", "state": "AUTHENTICATION_REQUIRED",
+                                                               "production": True, "fallback": None}]},
+                     creative=lambda: {"proposals": [{"id": "weak_hook", "requires_operator": True}]},
+                     topic_supply=lambda: {}, localizations=lambda: {"localizations": [
+                         {"id": 1, "source_job_id": "a", "status": "QC_PASSED", "publishing": {"reasons": ["not verified"]}},
+                         {"id": 2, "source_job_id": "b", "status": "FAILED", "error": "render"}]})
+    groups = {n["title"].split(":")[0]: n["group"] for n in a["needs_you"]}
+    assert a["groups"] == {"security": 1, "external_authorization": 2, "creative_decision": 1, "local_operational": 1}
+    assert groups["Creative decision"] == "creative_decision" and groups["YouTube"] == "external_authorization"
+
+
+def test_readiness_availability_states_its_window_and_outages(tmp_path):
+    from backend.app.autonomy import activation as act
+    checks = []
+    fake = act.ActivationManager.__new__(act.ActivationManager)
+    fake.clock = lambda: NOW
+    fake.health_summary = lambda since: {"available": True, "availability_pct": 99.5, "probes": 400, "restarts": 0,
+                                         "outage_count": 2, "window": {"start_utc": "A", "end_utc": "B"}}
+    fake._check = lambda checks, name, ok, detail, data=None, blocking=True: checks.append((name, ok, detail))
+    fake._availability_check(checks, NOW - timedelta(days=2))
+    name, ok, detail = checks[0]
+    assert "400 probes in the phase period (A to B)" in detail and "2 outage(s)" in detail

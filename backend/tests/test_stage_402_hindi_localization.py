@@ -724,3 +724,50 @@ def test_english_production_paths_do_not_depend_on_localization():
     from backend.app.rendering.pop_info import film_builder, pipeline as pop
     for mod in (scheduler, mo, film_builder, pop):
         assert "backend.app.localization" not in inspect.getsource(mod)
+
+
+# -- remediation closure: bounded autonomous Hinglish localization ---------------------------------------------------
+
+def test_auto_localization_enqueues_the_newest_completed_short_once(world, tmp_path):
+    from backend.app.localization.pipeline import AUTO_ACTOR, auto_enqueue_next
+    from backend.app.scheduler import production_coordinator as pc
+    from test_production_coordinator_337 import make
+    c = sqlite3.connect(world.db)
+    c.execute("INSERT INTO persistent_jobs VALUES ('test_x','COMPLETED','COMPLETED','t',NULL,datetime('now'))")
+    c.commit()
+    c.close()
+    coord, w, clock = make(tmp_path, executors={KIND: lambda ctx: {}}, db_name="auto.db")
+    res = auto_enqueue_next(coordinator=coord, localizer=world.loc)
+    assert res["queued"] is True and res["source_job_id"] == JOB          # test_ jobs and jobs without files skipped
+    job = coord.get_job(res["coordinator_job"])
+    assert job["queue"] == pc.LOCALIZATION and job["requested_by"] == AUTO_ACTOR
+    again = auto_enqueue_next(coordinator=coord, localizer=world.loc)
+    assert again["queued"] is False and "already queued" in again["reason"]   # one at a time
+    coord.cancel_job(job["id"], "op", "test") if hasattr(coord, "cancel_job") else None
+
+
+def test_auto_localization_respects_switch_cap_and_existing_mappings(world, tmp_path):
+    from backend.app.localization.pipeline import auto_enqueue_next
+    from test_production_coordinator_337 import make
+    coord, w, clock = make(tmp_path, executors={KIND: lambda ctx: {}}, db_name="auto2.db")
+    coord.set_config({"localization_auto_daily_max": 0}, "op", "off")
+    assert "off" in auto_enqueue_next(coordinator=coord, localizer=world.loc)["reason"]
+    coord.set_config({"localization_auto_daily_max": 6}, "op", "on")
+    world.loc.plan(JOB)                                                      # already localized (any status)
+    assert "no completed English Short" in auto_enqueue_next(coordinator=coord, localizer=world.loc)["reason"]
+
+
+def test_coordinator_tick_only_auto_localizes_with_the_production_executors(tmp_path):
+    from backend.app.scheduler import production_coordinator as pc
+    from test_production_coordinator_337 import make
+    coord, w, clock = make(tmp_path, executors={KIND: lambda ctx: {}}, db_name="auto3.db")
+    called = []
+    import backend.app.localization.pipeline as pl
+    orig = pl.auto_enqueue_next
+    pl.auto_enqueue_next = lambda **k: called.append(1) or {"queued": False}
+    try:
+        coord._auto_localize()                                               # injected executors (tests): never
+        assert called == []
+    finally:
+        pl.auto_enqueue_next = orig
+    assert pc.DEFAULT_CONFIG["localization_auto_daily_max"] == 6
