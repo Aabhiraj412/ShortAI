@@ -230,7 +230,35 @@ def describe_error(exc: BaseException) -> Dict[str, Any]:
     timeout = "timeout" in type(exc).__name__.lower() or "timed out" in str(exc).lower()
     return {"error_type": type(exc).__name__, "http_status": code,
             "status": str(getattr(exc, "status", "") or "")[:40] or None,
-            "transient": bool(timeout or code in _TRANSIENT_CODES)}
+            "transient": bool(timeout or code in _TRANSIENT_CODES or getattr(exc, "transient", False) is True)}
+
+
+def _is_quota(exc: BaseException, info: Dict[str, Any]) -> bool:
+    return info.get("http_status") == 429 or "RESOURCE_EXHAUSTED" in str(exc)
+
+
+def _record_failure(provider: str, model: str, exc: BaseException, info: Dict[str, Any]) -> None:
+    """Quota (429) -> cooldown until the provider's reset; overload/timeout -> bounded backoff; never raises."""
+    try:
+        from backend.app.services import llm_providers
+        status = info.get("http_status")
+        if _is_quota(exc, info):
+            retry_after = getattr(exc, "retry_after", None)
+            why = "rate limit / quota (HTTP 429)"
+            if provider == "gemini":
+                from backend.app.localization.translator import cooldown_for
+                retry_after, why = cooldown_for(exc, 429)
+            llm_providers.tracker().record_failure(provider, model, status=429, kind="quota", retry_after=retry_after,
+                                                   why=why, headers=getattr(exc, "headers", None))
+        elif info.get("transient"):
+            llm_providers.tracker().record_failure(provider, model, status=status, kind="overload",
+                                                   why=f"overload / timeout (HTTP {status or info.get('error_type')})",
+                                                   headers=getattr(exc, "headers", None))
+        else:
+            llm_providers.tracker().record_failure(provider, model, status=status, kind="error",
+                                                   why=str(info.get("error_type")))
+    except Exception:
+        logger.debug("LLM quota tracker unavailable")
 
 
 def _generate(client: Any, model: str, prompt: str, telemetry: Optional[Dict[str, Any]] = None) -> str:
@@ -249,25 +277,61 @@ def _generate(client: Any, model: str, prompt: str, telemetry: Optional[Dict[str
     return resp.text
 
 
-def _call_with_backoff(client: Any, model: str, prompt: str, sleep=None) -> Tuple[str, Dict[str, Any]]:
-    """One logical attempt: retries only transient API failures, with exponential backoff."""
+def _generate_on(provider: str, client: Any, model: str, prompt: str, tel: Dict[str, Any]) -> str:
+    if provider == "gemini":
+        return _generate(client, model, prompt, tel)
+    from backend.app.services import llm_providers
+    text, usage, headers = llm_providers.generate_openai_compat(provider, model, prompt)
+    tel.update(usage)
+    tel["_headers"] = headers
+    return text
+
+
+def _call_with_backoff(client: Any, model: str, prompt: str, sleep=None, provider: str = "gemini") -> Tuple[str, Dict[str, Any]]:
+    """One logical attempt. HTTP 429 (rate limit / quota) is never retried: the model cools down until the
+    provider's reset (quota tracker). Overloads and timeouts are retried with bounded exponential backoff."""
     calls: List[Dict[str, Any]] = []
     started = time.perf_counter()
     for n in range(TRANSIENT_RETRIES + 1):
         tel: Dict[str, Any] = {"call": n + 1}
+        if provider != "gemini":
+            tel["provider"] = provider
         t0 = time.perf_counter()
         try:
-            text = _generate(client, model, prompt, tel)
+            text = _generate_on(provider, client, model, prompt, tel)
+            headers = tel.pop("_headers", None)
             calls.append(tel)
+            try:
+                from backend.app.services import llm_providers
+                llm_providers.tracker().record_success(provider, model, tel.get("total_tokens"), headers,
+                                                       tel.get("latency_ms"))
+            except Exception:
+                logger.debug("LLM quota tracker unavailable")
             return text, {"calls": calls}
         except Exception as exc:
-            tel.update(latency_ms=round((time.perf_counter() - t0) * 1000), response_status="error", **describe_error(exc))
+            info = describe_error(exc)
+            tel.update(latency_ms=round((time.perf_counter() - t0) * 1000), response_status="error", **info)
             calls.append(tel)
-            if not tel["transient"] or n == TRANSIENT_RETRIES or time.perf_counter() - started > MODEL_BUDGET_SEC:
+            quota = _is_quota(exc, info)
+            if quota or not tel["transient"] or n == TRANSIENT_RETRIES or time.perf_counter() - started > MODEL_BUDGET_SEC:
+                if quota or tel["transient"]:
+                    _record_failure(provider, model, exc, info)
                 exc.calls = calls   # type: ignore[attr-defined]
                 raise
             (sleep or time.sleep)(BACKOFF_SEC[min(n, len(BACKOFF_SEC) - 1)])
     raise RuntimeError("unreachable")
+
+
+def _targets(client: Any, model: Optional[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """(usable, refused) provider:model targets: the Gemini chain (when a Gemini client exists) and the explicitly
+    configured free alternates (services.llm_providers). Never a paid model."""
+    gem = model_chain(model) if (client is not None and model) else []
+    try:
+        from backend.app.services import llm_providers
+        cands = llm_providers.candidates(gem)
+    except Exception:
+        cands = [{"provider": "gemini", "model": m, "usable": True, "why": None} for m in gem]
+    return [c for c in cands if c["usable"]], [c for c in cands if not c["usable"]]
 
 
 def _assemble(sections: Sequence[Dict[str, Any]], arc: Sequence[str], category: str,
@@ -307,20 +371,31 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
             logger.warning("Script writer: Gemini client unavailable (%s)", type(exc).__name__)
             client = None
     attempts: List[Dict[str, Any]] = []
-    if client is not None and model:
+    targets, refused = _targets(client, model)
+    for r in refused:
+        attempts.append({"model": r["model"], "provider": r["provider"], "not_used": r["why"]})
+    if targets:
+        from backend.app.services import llm_providers
         corpus = fact_corpus(topic)
         # Remediation WS7: when EVERY model failed with transient errors (HTTP 429 / 5xx / timeouts; the free tier is
         # often overloaded for minutes), one deferred round runs after DEFERRED_RETRY_SEC before falling back to the
         # extractive script, which measured 13 points lower overall (storytelling 25 vs 79, hook 24 vs 53).
         for round_no in (1, 2):
             exhausted_transient = True
-            for current in model_chain(model):
+            for target in targets:
+                current, provider = target["model"], target["provider"]
+                label = current if provider == "gemini" else f"{provider}:{current}"
+                ok, why = llm_providers.tracker().available(provider, current, ignore_overload=round_no == 2)
+                if not ok:      # quota exhausted / cooling down: no request is sent
+                    attempts.append({"model": label, "provider": provider, "skipped": why, "round": round_no})
+                    continue
                 feedback: List[str] = []
                 api_unavailable = False
                 for attempt in range(1, MAX_ATTEMPTS + 1):
                     calls: List[Dict[str, Any]] = []
                     try:
-                        raw, info = _call_with_backoff(client, current, build_prompt(topic, hook_type, hook_text, feedback))
+                        raw, info = _call_with_backoff(client, current, build_prompt(topic, hook_type, hook_text, feedback),
+                                                       provider=provider)
                         calls = info["calls"]
                         data = _parse(raw)
                         sections = data.get("sections") or []
@@ -328,7 +403,7 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
                     except Exception as exc:   # API, quota, timeout or malformed JSON: never fail the production
                         calls = calls or list(getattr(exc, "calls", []))
                         feedback = [f"{type(exc).__name__}"]
-                        attempts.append({"attempt": attempt, "model": current, "accepted": False,
+                        attempts.append({"attempt": attempt, "model": label, "accepted": False,
                                          "problems": feedback, "calls": calls, "round": round_no})
                         if not isinstance(exc, (ValueError, KeyError, TypeError)):
                             last = calls[-1] if calls else {}
@@ -337,13 +412,13 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
                             api_unavailable = bool(last.get("transient") or last.get("http_status") == 404)
                             break
                         continue
-                    attempts.append({"attempt": attempt, "model": current, "accepted": not feedback,
+                    attempts.append({"attempt": attempt, "model": label, "accepted": not feedback,
                                      "problems": feedback, "calls": calls, "draft": data if feedback else None,
                                      "round": round_no})
                     if not feedback:
                         policy_arc, category = _arc_and_category(topic, execution_context)
-                        out = _assemble(sections, policy_arc, category, script_source=f"llm:{current}",
-                                        model=current, configured_model=model,
+                        out = _assemble(sections, policy_arc, category, script_source=f"llm:{label}",
+                                        model=label, configured_model=model, provider=provider,
                                         hook_type=hook_type[0], angle=str(data.get("angle", ""))[:300],
                                         writer_attempts=attempts)
                         if experiment:

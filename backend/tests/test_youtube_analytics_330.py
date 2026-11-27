@@ -125,19 +125,7 @@ def test_insufficient_scope_is_recorded_not_converted_to_zero(tmp_path, monkeypa
 
 
 def test_authorization_is_incremental_on_the_same_client(monkeypatch):
-    seen = {}
+    """2026-11-28: the dashboard flow requests the existing scopes plus analytics (full contract in
+    test_analytics_authorization.py)."""
+    assert ya.REQUIRED_AUTH_SCOPES == YOUTUBE_SCOPES + [ya.ANALYTICS_SCOPE]
 
-    class FakeMgr:
-        def __init__(self, scopes=None):
-            seen["scopes"] = scopes
-            self.token_file, self.client_secrets_file = "tok", "cs"
-
-        def start_interactive_auth(self, open_browser=True, timeout_sec=300):
-            seen["browser"] = open_browser
-            return True, {"title": "CrazzyDocs"}, None
-    import backend.app.services.youtube_publishing_engine as ype
-    monkeypatch.setattr(ype, "YouTubeOAuthManager", FakeMgr)
-    monkeypatch.setattr(ya, "granted_scopes", lambda mgr: YOUTUBE_SCOPES + [ya.ANALYTICS_SCOPE])
-    res = ya.authorize_analytics(SimpleNamespace(token_file="tok", client_secrets_file="cs"), open_browser=False)
-    assert seen["scopes"] == YOUTUBE_SCOPES + [ya.ANALYTICS_SCOPE]
-    assert res["success"] and res["upload_scopes_preserved"]

@@ -141,5 +141,6 @@ def test_no_deferred_round_when_every_failure_is_quota_429(monkeypatch):
     quota = [ServerError(429, "RESOURCE_EXHAUSTED")] * 3
     c = ScriptedClient({"primary": list(quota), "backup": list(quota)})
     out, sleeps = _write(c, monkeypatch)
-    assert out["script_source"] == "extractive_fallback" and sleeps == [] and len(c.calls) == 6
+    # 2026-11-28: a 429 is never retried; each model cools down until the provider's reset (one call per model).
+    assert out["script_source"] == "extractive_fallback" and sleeps == [] and len(c.calls) == 2
     assert any("deferred_retry_skipped" in a for a in out["writer_attempts"])

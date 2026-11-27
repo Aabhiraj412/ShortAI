@@ -224,3 +224,15 @@ def isolate_test_media_cleanup():
         for item in os.listdir(prod_dir):
             if item.startswith("test_") or item.startswith("mock_"):
                 shutil.rmtree(os.path.join(prod_dir, item), ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def isolated_llm_quota_tracker(tmp_path, monkeypatch):
+    """LLM provider quota state (cooldowns, counts) is per test, never the real logs/llm_providers file; no
+    alternate provider is configured unless a test sets it."""
+    from backend.app.services import llm_providers
+    monkeypatch.delenv("CRAZZYDOCS_LLM_ALTERNATES", raising=False)
+    monkeypatch.delenv("CRAZZYDOCS_LLM_PRIMARY", raising=False)
+    llm_providers.set_tracker(llm_providers.QuotaTracker(tmp_path / "llm_quota_state.json"))
+    yield
+    llm_providers.set_tracker(None)

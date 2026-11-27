@@ -45,6 +45,9 @@ PROVIDERS: List[Dict[str, Any]] = [
     {"name": "YouTube Analytics API", "key": "youtube_analytics", "purpose": "performance metrics of published videos",
      "env": "OAuth scope yt-analytics.readonly", "implemented": True, "production": False, "oauth_scope": True,
      "fallback": "metrics recorded as unavailable (never zero)", "limits": "Analytics API quota (separate project quota)"},
+    {"name": "Groq (free plan)", "key": "groq", "purpose": "alternate script writer when Gemini's free quota is exhausted (only when CRAZZYDOCS_LLM_ALTERNATES names it)",
+     "env": "GROQ_API_KEY", "implemented": True, "production": False,
+     "fallback": "extractive script", "limits": "openai/gpt-oss-120b free plan: 30 RPM, 1,000 RPD, 8K TPM, 200K TPD"},
     {"name": "Pixabay", "key": "pixabay", "purpose": "licensed stock photos / video clips", "env": "PIXABAY_API_KEY",
      "implemented": True, "production": True, "health_key": "Pixabay",
      "fallback": "Wikimedia / Openverse / NASA / Internet Archive", "limits": "100 requests/60 s; 24 h response cache"},
@@ -129,9 +132,11 @@ def _youtube_status() -> Dict[str, Any]:
 
 def _analytics_scope_granted() -> Optional[bool]:
     try:
-        from backend.app.services.youtube_analytics import ANALYTICS_SCOPE, granted_scopes
+        # 2026-11-28: the same state model as the Analytics section (analytics_overview), not the token file's
+        # scope list alone, which a confirmed refresh does not always update.
+        from backend.app.services.youtube_analytics import analytics_overview
         from backend.app.services.youtube_publishing_engine import YouTubeOAuthManager
-        return ANALYTICS_SCOPE in granted_scopes(YouTubeOAuthManager())
+        return bool(analytics_overview(YouTubeOAuthManager())["oauth"]["authorized"])
     except Exception:
         return None
 

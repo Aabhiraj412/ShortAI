@@ -458,6 +458,7 @@
       <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>Provider</th><th>Status</th><th>Credential</th><th>Last success</th><th>Last failure</th><th>Production</th><th>Fallback</th></tr></thead>
       <tbody id="provBody"><tr><td colspan="7" style="color:var(--muted)">Loading…</td></tr></tbody></table></div>
       <div class="meta" style="margin-top:10px;font-size:12px;" id="anaMeta"></div>
+      <div class="meta" style="margin-top:10px;font-size:12px;" id="llmMeta"></div>
     </div>
 
     <div class="card" id="ceCard">
@@ -1402,14 +1403,16 @@
   <div class="modal-card" style="max-width:520px;width:100%;">
     <h3 class="card-title" id="cycleEditorTitle">Edit Cycle</h3>
     <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
-      <label>Cycle ID<input id="ceId" type="text" placeholder="cycle_1"></label>
-      <label>Name<input id="ceName" type="text" placeholder="Morning production"></label>
+      <label>Cycle ID<input id="ceId" type="text" readonly style="opacity:0.7;"></label>
+      <label>Cycle name<input id="ceName" type="text" placeholder="Morning production"></label>
       <label>Production start (IST)<input id="ceStart" type="time"></label>
       <label>Recovery duration
         <span style="display:flex;gap:6px;"><input id="ceRecH" type="number" min="0" max="24" style="width:70px;"> h <input id="ceRecM" type="number" min="0" max="59" step="5" style="width:70px;"> min</span>
       </label>
-      <label>Target publish time (IST)<input id="ceTarget" type="time"></label>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:22px;"><input id="ceEnabled" type="checkbox"> Enabled</label>
+      <label>English target publish time (IST)<input id="ceTarget" type="time" oninput="ceSyncHindi()"></label>
+      <label>Hindi target publish time (IST)<input id="ceHindi" type="time"></label>
+      <label style="display:flex;align-items:center;gap:8px;"><input id="ceSameEn" type="checkbox" onchange="ceSyncHindi()"> Same as English</label>
+      <label style="display:flex;align-items:center;gap:8px;"><input id="ceEnabled" type="checkbox"> Enabled</label>
     </div>
     <div style="margin-top:10px;">
       <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">Days</div>
@@ -1964,21 +1967,30 @@ function openScheduleCycleEditor(idx) {
     target_publish_time: "15:00", enabled: true, active_weekdays: [0, 1, 2, 3, 4, 5, 6],
   };
   document.getElementById("cycleEditorTitle").textContent = idx >= 0 ? "Edit Cycle" : "Add Cycle";
-  document.getElementById("ceId").value = c.cycle_id;
-  document.getElementById("ceId").disabled = idx >= 0;   // the id is the cycle's identity in history
+  document.getElementById("ceId").value = c.cycle_id;       // read-only: the id is the cycle's identity in history
   document.getElementById("ceName").value = c.name;
   document.getElementById("ceStart").value = c.start_time;
   document.getElementById("ceRecH").value = Math.floor(c.recovery_duration_minutes / 60);
   document.getElementById("ceRecM").value = c.recovery_duration_minutes % 60;
   document.getElementById("ceTarget").value = c.target_publish_time || "";
   document.getElementById("ceEnabled").checked = c.enabled !== false;
+  const hs = hiSetting(c.cycle_id);
+  schedState.editOriginal = { english: JSON.stringify(c), hindi: JSON.stringify(hs) };
+  document.getElementById("ceSameEn").checked = hs.same_as_english !== false;
+  document.getElementById("ceHindi").value = hs.same_as_english !== false ? (c.target_publish_time || "") : (hs.time || "");
+  ceSyncHindi();
   document.getElementById("ceDays").innerHTML = WEEKDAYS.map((d, i) =>
     `<label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="ceDay" value="${i}" ${(c.active_weekdays || []).includes(i) ? "checked" : ""}> ${d}</label>`).join("");
-  document.getElementById("ceHint").textContent = "If the target publish time is earlier than the start time, it is the next day.";
+  document.getElementById("ceHint").textContent = "A target time earlier than the production start is the next day (e.g. 23:00 start, 00:00 target = next-day midnight). Hindi times are saved to the Hindi channel's own settings immediately; English changes become a draft until you activate the schedule.";
   document.getElementById("cycleEditorModal").style.display = "flex";
 }
 function closeScheduleCycleEditor() { document.getElementById("cycleEditorModal").style.display = "none"; }
-function applyScheduleCycleEditor() {
+function ceSyncHindi() {
+  const same = document.getElementById("ceSameEn").checked, hi = document.getElementById("ceHindi");
+  hi.disabled = same;
+  if (same) hi.value = document.getElementById("ceTarget").value || "";
+}
+async function applyScheduleCycleEditor() {
   const id = document.getElementById("ceId").value.trim();
   const rec = Number(document.getElementById("ceRecH").value || 0) * 60 + Number(document.getElementById("ceRecM").value || 0);
   const c = {
@@ -1991,11 +2003,29 @@ function applyScheduleCycleEditor() {
     active_weekdays: [...document.querySelectorAll(".ceDay:checked")].map(x => Number(x.value)),
   };
   if (!c.cycle_id || !c.name || !c.start_time) { showToast("Cycle ID, name and start time are required.", true); return; }
+  if (!c.active_weekdays.length) { showToast("Choose at least one day.", true); return; }
   if (schedState.editIndex < 0 && schedState.cycles.some(x => x.cycle_id === c.cycle_id)) { showToast("That cycle ID is already used.", true); return; }
-  if (schedState.editIndex >= 0) schedState.cycles[schedState.editIndex] = c; else schedState.cycles.push(c);
-  schedState.cycles.sort((a, b) => hhmmMinutes(a.start_time) - hhmmMinutes(b.start_time));
+  const same = document.getElementById("ceSameEn").checked;
+  const hiTime = document.getElementById("ceHindi").value || null;
+  if (!same && !hiTime) { showToast("Choose a Hindi target publish time, or tick Same as English.", true); return; }
+  const hi = { same_as_english: same, time: same ? null : hiTime };
+  const orig = schedState.editOriginal || {};
+  const englishChanged = schedState.editIndex < 0 || orig.english !== JSON.stringify(c);
+  const hindiChanged = orig.hindi !== JSON.stringify(hi);
+  if (hindiChanged) {
+    // The Hindi setting lives in the Hindi channel's own per-cycle configuration (no English schedule revision).
+    try {
+      await dashWrite("/api/hindi-publishing/cycle-times", { cycles: { [c.cycle_id]: hi }, confirm: true });
+      hiTimes.cycles[c.cycle_id] = hi;
+      showToast(englishChanged ? "Hindi time saved. English changes are in the draft: activate the schedule to apply them." : "Hindi publish time saved.");
+    } catch (err) { showToast("Hindi time not saved: " + (err.message || err), true); return; }
+  }
+  if (englishChanged) {
+    if (schedState.editIndex >= 0) schedState.cycles[schedState.editIndex] = c; else schedState.cycles.push(c);
+    schedState.cycles.sort((a, b) => hhmmMinutes(a.start_time) - hhmmMinutes(b.start_time));
+  }
   closeScheduleCycleEditor();
-  markScheduleDirty();
+  if (englishChanged) markScheduleDirty(); else renderScheduleTable();
 }
 function toggleScheduleCycle(i) { schedState.cycles[i].enabled = !schedState.cycles[i].enabled; markScheduleDirty(); }
 async function deleteScheduleCycle(i) {
@@ -2794,31 +2824,76 @@ async function runProviderProbe(btn) {
 }
 async function refreshAnalytics() {
   const el = document.getElementById("anaMeta"); if (!el) return;
+  refreshLlmProviders();
   try {
     const a = await apiJson("/api/youtube/analytics/status");
-    if (!a.scope_granted) {
-      el.innerHTML = `<strong>YouTube Analytics:</strong> implemented; <span style="color:#fcd34d">authorization required</span> (read-only scope yt-analytics.readonly on the existing OAuth client; uploads are not affected). `
-        + `<button class="btn sm" onclick="authorizeAnalytics(this)">Authorize analytics</button>`;
-      return;
-    }
+    const o = a.overview || {}, oa = o.oauth || {}, api = o.api || {}, m = o.metrics || {}, la = o.last_authorization;
+    const authorized = !!oa.authorized;
+    const color = { OPERATIONAL: "#86efac", METRICS_PENDING: "#93c5fd", AUTHORIZED_UNTESTED: "#fcd34d", API_FAILING: "#fca5a5", AUTHORIZATION_REQUIRED: "#fca5a5" }[o.overall] || "inherit";
+    const t = v => v ? autoTime(v) : "never";
+    const rows = [
+      ["OAuth authorization", `${escHtml((oa.status || "unknown").replace(/_/g, " "))}${oa.reason ? ` <span style="color:var(--muted)">(${escHtml(oa.reason)})</span>` : ""}`],
+      ["Granted scopes", escHtml((o.granted_scopes || []).join(", ") || "none recorded") + ` <span style="color:var(--muted)">· required: ${escHtml((o.required_scopes || []).join(", "))}</span>`],
+      ["API connectivity", `${escHtml((api.status || "UNTESTED").replace(/_/g, " "))}${api.last_failure_category ? " · " + escHtml(api.last_failure_category) : ""}`],
+      ["Last successful API request", t(api.last_success_utc)],
+      ["Last successful metrics collection", t(m.last_collection_utc) + (m.running_since_utc ? ` · <strong>collection running</strong>` : "")],
+      ["Metrics", `${m.videos_with_metrics || 0} of ${m.videos_tracked || 0} videos populated · <span style="color:var(--muted)">${m.videos_pending || 0} pending (not zero; YouTube populates metrics with a delay)</span>`],
+      ["Schedule", escHtml(o.schedule || "daily 07:15 IST")],
+    ];
+    if (la) rows.push(["Last authorization attempt", `${t(la.at_utc)} · ${la.ok ? "succeeded" : `<span style="color:#fca5a5">${escHtml(la.message || la.code || "failed")}</span>`}`]);
     const v = a.videos || [];
-    const fmt = (r, m) => { const st = (r.metric_status || {})[m]; const val = (r.metrics || {})[m];
+    const fmt = (r, k) => { const st = (r.metric_status || {})[k]; const val = (r.metrics || {})[k];
       return st === "available" || st === "available_zero" ? val : `<span style="color:var(--muted)">${(st || "n/a").replace(/_/g, " ")}</span>`; };
-    el.innerHTML = `<strong>YouTube Analytics:</strong> authorized · ${v.length} videos with metrics (daily collection 07:15 IST).`
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><strong>YouTube Analytics:</strong> `
+      + `<span style="color:${color};font-weight:600;">${escHtml(o.label || "unknown")}</span>`
+      + `<button class="btn sm ${authorized ? "" : "primary"}" onclick="authorizeAnalytics(this)">${authorized ? "Reauthorize" : "Authorize Analytics"}</button>`
+      + (authorized ? `<button class="btn sm" onclick="testAnalytics(this)">Test Analytics Connection</button>`
+                    + `<button class="btn sm" onclick="collectAnalytics(this)">Collect metrics now</button>` : "")
+      + `</div>` + opsKV(rows)
       + (v.length ? `<div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;font-size:12px;"><thead><tr><th>Video</th><th>Views</th><th>Engaged</th><th>Avg view %</th><th>Likes</th><th>Collected</th></tr></thead><tbody>`
-        + v.slice(0, 10).map(r => `<tr><td title="${r.video_id}">${(r.topic || r.video_id).slice(0, 40)}</td><td>${fmt(r, "views")}</td><td>${fmt(r, "engagedViews")}</td><td>${fmt(r, "averageViewPercentage")}</td><td>${fmt(r, "likes")}</td><td>${r.collected_date}</td></tr>`).join("")
+        + v.slice(0, 10).map(r => `<tr><td title="${escHtml(r.video_id)}">${escHtml((r.topic || r.video_id).slice(0, 40))}</td><td>${fmt(r, "views")}</td><td>${fmt(r, "engagedViews")}</td><td>${fmt(r, "averageViewPercentage")}</td><td>${fmt(r, "likes")}</td><td>${escHtml(r.collected_date)}</td></tr>`).join("")
         + `</tbody></table></div>` : "");
   } catch (err) { el.textContent = "YouTube Analytics status unavailable."; }
 }
 async function authorizeAnalytics(btn) {
   const ok = await askConfirm("Authorize YouTube Analytics",
-    "Google's consent page opens in your browser for the existing CrazzyDocs OAuth client. It adds read-only analytics access (yt-analytics.readonly) and keeps the current upload permissions. Continue?");
+    "Google's consent page opens in this computer's browser for the existing CrazzyDocs OAuth client. Sign in and choose the ENGLISH channel. It asks for upload, channel reading and read-only Analytics. The current authorization stays in place until the new one is verified (permissions, channel and a test Analytics request); if anything fails, uploads keep working unchanged. Continue?");
   if (!ok) return;
-  btn.disabled = true; btn.textContent = "Waiting for consent…";
-  try { const r = await apiJson("/api/youtube/analytics/authorize", { method: "POST", body: JSON.stringify({ confirm: true }) });
-        showToast(r.success ? "Analytics authorized; upload scopes preserved." : ("Authorization not completed: " + (r.error || "unknown")), !r.success); }
+  btn.disabled = true; btn.textContent = "Waiting for Google consent…";
+  try { const r = await dashWrite("/api/youtube/analytics/authorize", { confirm: true, channel: "en" });
+        showToast(r.success ? "Analytics authorized and verified; upload permissions preserved." : ("Authorization not completed: " + (r.error || r.code || "unknown") + " Existing credentials unchanged."), !r.success); }
   catch (err) { showToast("Authorization failed: " + err.message, true); }
+  refreshAnalytics(); refreshProviders();
+}
+async function testAnalytics(btn) {
+  btn.disabled = true; btn.textContent = "Testing…";
+  try { const r = await dashWrite("/api/youtube/analytics/test", {});
+        showToast(r.ok ? "Analytics API answered a read-only request." : ("Analytics test failed: " + (r.error_category || r.error || r.stage)), !r.ok); }
+  catch (err) { showToast("Analytics test failed: " + err.message, true); }
   refreshAnalytics();
+}
+async function collectAnalytics(btn) {
+  const ok = await askConfirm("Collect Analytics metrics now?", "Runs the same bounded, idempotent collector as the daily 07:15 IST job (at most 120 Analytics requests). It does not change the schedule and does not run while another collection is running.");
+  if (!ok) return;
+  btn.disabled = true; btn.textContent = "Collecting…";
+  try { const r = await dashWrite("/api/youtube/analytics/collect", {});
+        showToast(r.state === "collected" ? `Collected ${r.collected} snapshots (${r.api_calls} requests).` : ("Collection: " + String(r.state).replace(/_/g, " ")), r.state === "auth_failed"); }
+  catch (err) { showToast("Collection failed: " + err.message, true); }
+  refreshAnalytics();
+}
+async function refreshLlmProviders() {
+  const el = document.getElementById("llmMeta"); if (!el) return;
+  try {
+    const d = await apiJson("/api/llm-providers/status");
+    const q = (d.quota || {}).models || {};
+    el.innerHTML = `<strong>AI script providers</strong> <span style="color:var(--muted)">(free tiers only, limits verified ${escHtml(d.verified_on)}; primary: ${escHtml(d.primary_provider)}; fallback: extractive script)</span>`
+      + apTable(["Order", "Provider:model", "Usable", "Now", "Requests today", "Cooldown"], (d.selection_order || []).map((c, i) => {
+          const k = `${c.provider}:${c.model}`, s = q[k] || {}, lim = (s.limits || {}).rpd;
+          return `<tr><td>${i + 1}</td><td>${escHtml(k)}</td><td>${c.usable ? "yes" : `<span style="color:var(--muted)">${escHtml(c.why || "no")}</span>`}</td>`
+            + `<td>${c.available_now ? "available" : `<span style="color:#fcd34d">${escHtml(c.quota_note || "unavailable")}</span>`}</td>`
+            + `<td>${s.requests_today ?? 0}${lim ? " / " + lim : ""}</td><td>${s.cooldown_until_utc ? autoTime(s.cooldown_until_utc) + " · " + escHtml(s.cooldown_why || "") : "--"}</td></tr>`; }))
+      + `<div style="color:var(--muted);font-size:11px;">Alternates are used only when named in CRAZZYDOCS_LLM_ALTERNATES with their key set (e.g. groq:openai/gpt-oss-120b + GROQ_API_KEY). Models outside the verified free lists are refused.</div>`;
+  } catch (err) { el.textContent = "AI provider status unavailable."; }
 }
 
 async function refreshDeployment() {
@@ -3025,11 +3100,11 @@ async function refreshIntel() {
       ["By hook type (craft score)", escHtml(Object.entries(s.by_hook_type || {}).map(([k, v]) => `${k.replace(/_/g, " ")} ${v.mean_craft_score} (n=${v.n})`).join(" · "))],
     ]) + apTable(["Job", "Video", "Hook", "Overall", "Plan", "Render", "Weakest"], (c.records || []).map(r => `<tr><td>${escHtml(r.job_id)}</td><td>${escHtml(r.youtube_video_id || "--")}</td><td>${escHtml(r.hook_type || "--")}</td><td>${r.overall_score ?? "--"}</td><td>${r.plan_score ?? "--"}</td><td>${r.render_score ?? "--"}</td><td>${escHtml((r.weakest || []).map(w => `${w.dimension} ${w.score}`).join(", "))}</td></tr>`));
   // Stage 3.35
-  const an = d.analytics || {}, au = an.auth || {}, sy = an.sync || {}, ln = an.learning || {};
+  const an = d.analytics || {}, au = an.auth || {}, sy = an.sync || {}, ln = an.learning || {}, aov = an.overview || {};
   const AUTH_COLOR = { CONNECTED: "#86efac", REFRESHING: "#93c5fd", EXPIRED: "#fcd34d", REVOKED: "#fca5a5", AUTHENTICATION_REQUIRED: "#fca5a5", ERROR: "#fca5a5" };
   const lnOverall = ln.overall || {};
   document.getElementById("intelAnalytics").innerHTML = opsKV([
-    ["Connection", `<strong style="color:${AUTH_COLOR[au.state] || "inherit"}">${escHtml(au.state || "unknown")}</strong> ${escHtml(au.reason || "")}${au.last_success_utc ? " · last success " + autoTime(au.last_success_utc) : ""}${au.action ? `<div style="color:#fcd34d">${escHtml(au.action)}</div>` : ""}`],
+    ["Connection", `<strong>${escHtml(aov.label || au.state || "unknown")}</strong> · OAuth ${escHtml(((aov.oauth || {}).status || au.state || "unknown").replace(/_/g, " "))} · API ${escHtml(((aov.api || {}).status || "UNTESTED").replace(/_/g, " "))}${(aov.api || {}).last_success_utc ? " (last success " + autoTime(aov.api.last_success_utc) + ")" : ""}<div style="color:var(--muted)">Authorize, test or collect from API Providers.</div>`],
     ["Last sync", sy.last_success_utc ? `${autoTime(sy.last_success_utc)} · ${escHtml(JSON.stringify(sy.last_counts || {}))}` : `<span class="ops-tag">not yet</span>`],
     ["Last sync error", escHtml(sy.last_error || "none")],
     ["Coverage", ln.videos != null ? escHtml(`${ln.videos} published videos tracked · ${ln.videos_with_data} with data · ${ln.videos_first_7_days} with first-7-days metrics`) : `<span class="ops-tag">no learning run yet</span>`],

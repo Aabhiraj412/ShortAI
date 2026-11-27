@@ -3109,7 +3109,9 @@ def _intelligence_view() -> Dict[str, Any]:
         import backend.app.services.youtube_analytics as ya
         from backend.app.services.youtube_publishing_engine import YouTubeOAuthManager
         from backend.app.creative_intel import learning
-        analytics = {"auth": ya.auth_status(YouTubeOAuthManager()), "sync": ya._read_state(ya.SYNC_STATE_KEY)}
+        _mgr = YouTubeOAuthManager()
+        analytics = {"auth": ya.auth_status(_mgr), "sync": ya._read_state(ya.SYNC_STATE_KEY),
+                     "overview": ya.analytics_overview(_mgr)}
         run = learning.latest_run()
         if run:
             a = run.get("analysis") or {}
@@ -3563,30 +3565,68 @@ async def api_youtube_analytics_status(_: None = Depends(require_local_control))
     """Analytics authorization state and latest stored metrics (Stage 3.30). Never returns tokens."""
     from backend.app.services.youtube_analytics import AnalyticsCollector
     def _build():
+        from backend.app.services.youtube_analytics import analytics_overview
         col = AnalyticsCollector()
         st = col.status()
         st.pop("granted_scopes", None)
-        return {**st, "videos": col.store.latest(25)}
+        # 2026-11-28: one state model (OAuth, scope names, API connectivity, collection, metrics) for every section.
+        return {**st, "overview": analytics_overview(col.oauth, col.store), "videos": col.store.latest(25)}
     return await asyncio.to_thread(_build)
 
 
+def _audit_dashboard_action(action: str, details: Dict[str, Any]) -> None:
+    """Records a dashboard action in the existing autonomy audit chain (no secrets; never raises)."""
+    try:
+        _autonomy()._audit_now("DASHBOARD_ACTION", DASHBOARD_ACTOR, action_type=action, reason=action, details=details)
+    except Exception:
+        logging.getLogger(__name__).debug("Audit of %s not recorded", action)
+
+
+class AnalyticsAuthorizeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    confirm: bool = False
+    channel: Literal["en"] = "en"
+
+
 @app.post("/api/youtube/analytics/authorize")
-async def api_youtube_analytics_authorize(payload: dict = Body(default={}), _: None = Depends(require_local_control)):
-    """Operator-started incremental consent (existing scopes + yt-analytics.readonly). Opens Google's consent page."""
-    if payload.get("confirm") is not True:
-        raise HTTPException(status_code=400, detail="Analytics authorization requires confirm=true.")
+async def api_youtube_analytics_authorize(req: AnalyticsAuthorizeRequest, _: None = Depends(require_local_control),
+                                          __: None = Depends(require_autonomy_write)):
+    """Dashboard-started (re)authorization: Google's consent page for youtube.upload + youtube.readonly +
+    yt-analytics.readonly. The English token is replaced only after the granted scopes, the channel identity and a
+    read-only Analytics request are verified; any failure leaves the existing credentials untouched."""
+    _require_confirm(req.confirm)
     from backend.app.services.youtube_analytics import authorize_analytics
     from backend.app.services.youtube_publishing_engine import invalidate_auth_status_cache
-    res = await asyncio.to_thread(authorize_analytics)
+    res = await asyncio.to_thread(lambda: authorize_analytics(channel=req.channel))
     invalidate_auth_status_cache()
-    res.pop("granted_scopes", None)
+    _audit_dashboard_action("youtube_analytics.authorize", {"channel": req.channel, "ok": bool(res.get("success")),
+                                                            "code": res.get("code")})
     return res
 
 
+@app.post("/api/youtube/analytics/test")
+async def api_youtube_analytics_test(_: None = Depends(require_local_control), __: None = Depends(require_autonomy_write)):
+    """One minimal read-only Analytics API request (channel views, last 7 days); records API connectivity."""
+    from backend.app.services.youtube_analytics import test_connection
+    from backend.app.services.youtube_publishing_engine import YouTubeOAuthManager
+    return await asyncio.to_thread(lambda: test_connection(YouTubeOAuthManager()))
+
+
 @app.post("/api/youtube/analytics/collect")
-async def api_youtube_analytics_collect(_: None = Depends(require_local_control)):
+async def api_youtube_analytics_collect(_: None = Depends(require_local_control), __: None = Depends(require_autonomy_write)):
+    """Manual collection (e.g. the first one after authorizing). The same idempotent, bounded collector as the daily
+    07:15 IST job; never runs while another collection is running."""
     from backend.app.services.youtube_analytics import AnalyticsCollector
-    return await asyncio.to_thread(lambda: AnalyticsCollector().collect())
+    res = await asyncio.to_thread(lambda: AnalyticsCollector().collect())
+    _audit_dashboard_action("youtube_analytics.collect", {"state": res.get("state"), "api_calls": res.get("api_calls")})
+    return res
+
+
+@app.get("/api/llm-providers/status")
+async def api_llm_providers_status(_: None = Depends(require_local_control)):
+    """Free LLM providers: verified free limits, configuration (never key values), selection order and quota state."""
+    from backend.app.services import llm_providers
+    return await asyncio.to_thread(llm_providers.status_view)
 
 
 @app.get("/api/junk-cleaner/status")

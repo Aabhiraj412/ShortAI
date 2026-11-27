@@ -60,6 +60,9 @@ CONNECTED, REFRESHING, EXPIRED, REVOKED, AUTH_REQUIRED, AUTH_ERROR = (
     "CONNECTED", "REFRESHING", "EXPIRED", "REVOKED", "AUTHENTICATION_REQUIRED", "ERROR")
 AUTH_STATE_KEY = "youtube_analytics_auth_state"
 SYNC_STATE_KEY = "youtube_analytics_sync_state"
+API_STATE_KEY = "youtube_analytics_api_state"          # last real Analytics API request: success / failure (2026-11-28)
+AUTHZ_STATE_KEY = "youtube_analytics_authorization"    # last dashboard-started authorization attempt (no secrets)
+COLLECT_STALE_SEC = 1800                               # a collection marked running longer than this is stale
 REFRESH_ATTEMPTS = 3
 _refresh_lock = __import__("threading").Lock()
 _cached: Dict[str, Any] = {"creds": None, "token_file": None}
@@ -396,6 +399,25 @@ class AnalyticsCollector:
         """Lifetime-to-date snapshot for due videos, plus the fixed first-7-days window (with retention and traffic
         sources) once per video aged 7+ days. Idempotent per day; bounded API calls; sync state persisted."""
         sync = _read_state(SYNC_STATE_KEY)
+        running = sync.get("running_since_utc")
+        if running:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.strptime(running, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc)).total_seconds()
+            except ValueError:
+                age = COLLECT_STALE_SEC + 1
+            if age < COLLECT_STALE_SEC:
+                return {"state": "already_running", "collected": 0, "api_calls": 0, "running_since_utc": running}
+        sync["running_since_utc"] = _now_iso()
+        _write_state(SYNC_STATE_KEY, sync)
+        try:
+            return self._collect(sync, max_calls)
+        finally:
+            cur = _read_state(SYNC_STATE_KEY)
+            cur.pop("running_since_utc", None)
+            _write_state(SYNC_STATE_KEY, cur)
+
+    def _collect(self, sync: Dict[str, Any], max_calls: int) -> Dict[str, Any]:
         sync["last_attempt_utc"] = _now_iso()
         videos = self.due_videos()
         d7_due = self.d7_due_videos()
@@ -430,10 +452,13 @@ class AnalyticsCollector:
         delay = 1.0
         for attempt in range(3):
             try:
-                return service.reports().query(ids="channel==MINE", **kw).execute()
+                res = service.reports().query(ids="channel==MINE", **kw).execute()
+                record_api_result(True)
+                return res
             except Exception as exc:
                 cat = classify_error(exc)
                 if cat not in ("quota_or_rate_limit", "server_error") or attempt == 2:
+                    record_api_result(False, cat)
                     raise
                 __import__("time").sleep(delay)
                 delay *= 2
@@ -541,14 +566,229 @@ class AnalyticsCollector:
         return {str(r[0]): r[1] for r in rows}, "available"
 
 
-def authorize_analytics(oauth_manager=None, *, open_browser: bool = True, timeout_sec: int = 300) -> Dict[str, Any]:
-    """Incremental consent: existing YouTube scopes + yt-analytics.readonly on the SAME OAuth client and channel.
-    Must be started by the operator (it opens Google's consent page in the local browser)."""
-    from backend.app.services.youtube_publishing_engine import YOUTUBE_SCOPES, YouTubeOAuthManager
-    mgr = YouTubeOAuthManager(scopes=list(YOUTUBE_SCOPES) + [ANALYTICS_SCOPE])
-    if oauth_manager is not None:
-        mgr.token_file, mgr.client_secrets_file = oauth_manager.token_file, oauth_manager.client_secrets_file
-    ok, channel, err = mgr.start_interactive_auth(open_browser=open_browser, timeout_sec=timeout_sec)
-    scopes = granted_scopes(mgr)
-    return {"success": bool(ok and ANALYTICS_SCOPE in scopes), "granted_scopes": scopes,
-            "upload_scopes_preserved": all(s in scopes for s in YOUTUBE_SCOPES), "error": err}
+def record_api_result(ok: bool, category: Optional[str] = None) -> None:
+    st = _read_state(API_STATE_KEY)
+    if ok:
+        st.update(last_success_utc=_now_iso(), consecutive_failures=0, last_result="ok")
+    else:
+        st.update(last_failure_utc=_now_iso(), last_failure_category=category, last_result="failed",
+                  consecutive_failures=int(st.get("consecutive_failures") or 0) + 1)
+    _write_state(API_STATE_KEY, st)
+
+
+def _short(scope: str) -> str:
+    return scope.rsplit("/", 1)[-1]
+
+
+def analytics_overview(oauth_manager, store: Optional["PerformanceStore"] = None) -> Dict[str, Any]:
+    """The single Analytics state model used by every dashboard section (2026-11-28). It keeps apart:
+    OAuth authorization, granted scopes (names only), API connectivity (a real Analytics request), the last
+    successful metrics collection and whether metrics are populated. "Operational" requires an Analytics API request
+    that actually succeeded; missing metrics are reported as pending, never as zero."""
+    st = _read_state(AUTH_STATE_KEY)
+    api = _read_state(API_STATE_KEY)
+    sync = _read_state(SYNC_STATE_KEY)
+    authz = _read_state(AUTHZ_STATE_KEY)
+    scopes = granted_scopes(oauth_manager)
+    recorded = ANALYTICS_SCOPE in scopes
+    auth_state = st.get("state")
+    # A refresh that requested yt-analytics.readonly succeeded (CONNECTED) or the token records the grant.
+    if auth_state in (REVOKED, AUTH_REQUIRED):
+        oauth = "REVOKED" if auth_state == REVOKED else "AUTHORIZATION_REQUIRED"
+    elif auth_state == CONNECTED or recorded:
+        oauth = "AUTHORIZED"
+    elif auth_state in (EXPIRED, AUTH_ERROR):
+        oauth = "REFRESH_FAILING"
+    else:
+        oauth = "AUTHORIZATION_REQUIRED"
+    granted = sorted({_short(x) for x in scopes} | ({_short(ANALYTICS_SCOPE)} if auth_state == CONNECTED else set()))
+    last_ok, last_fail = api.get("last_success_utc"), api.get("last_failure_utc")
+    if not last_ok and not last_fail:
+        api_status = "UNTESTED"
+    elif api.get("last_result") == "failed" or (not api.get("last_result") and not last_ok):
+        api_status = "FAILING"
+    else:
+        api_status = "CONNECTED"
+    videos = (store.latest(200) if store is not None else [])
+    populated = sum(1 for v in videos if any(s in ("available", "available_zero")
+                                             for s in (v.get("metric_status") or {}).values()))
+    pending = len(videos) - populated
+    if oauth != "AUTHORIZED":
+        overall, label = "AUTHORIZATION_REQUIRED", "Analytics authorization required"
+    elif api_status == "UNTESTED":
+        overall, label = "AUTHORIZED_UNTESTED", "Analytics connected (API not yet tested)"
+    elif api_status == "FAILING":
+        overall, label = "API_FAILING", "Analytics connected, API requests failing"
+    elif populated == 0:
+        overall, label = "METRICS_PENDING", "Analytics connected, metrics pending"
+    else:
+        overall, label = "OPERATIONAL", "Analytics connected"
+    return {
+        "overall": overall, "label": label,
+        "oauth": {"status": oauth, "authorized": oauth == "AUTHORIZED", "reason": st.get("reason"),
+                  "checked_at_utc": st.get("checked_at_utc"), "scope_recorded_in_token": recorded,
+                  "action": "Authorize Analytics" if oauth != "AUTHORIZED" else "Reauthorize"},
+        "granted_scopes": granted,
+        "required_scopes": [_short(x) for x in REQUIRED_AUTH_SCOPES],
+        "api": {"status": api_status, "last_success_utc": last_ok, "last_failure_utc": last_fail,
+                "last_failure_category": api.get("last_failure_category") if api_status == "FAILING" else None},
+        "metrics": {"last_collection_utc": sync.get("last_success_utc"), "last_attempt_utc": sync.get("last_attempt_utc"),
+                    "last_result": sync.get("last_result"), "running_since_utc": sync.get("running_since_utc"),
+                    "videos_tracked": len(videos), "videos_with_metrics": populated, "videos_pending": pending,
+                    "note": "Missing metrics are pending (YouTube populates them with a delay), never zero."},
+        "last_authorization": {k: authz.get(k) for k in ("at_utc", "ok", "code", "message", "channel")} if authz else None,
+        "schedule": "daily 07:15 IST (unchanged)",
+    }
+
+
+def test_connection(oauth_manager, service_factory: Optional[Callable[[Any], Any]] = None,
+                    today: Optional[date] = None) -> Dict[str, Any]:
+    """One minimal read-only Analytics request (channel views, last 7 days). Records the API result."""
+    today = today or datetime.now(timezone.utc).date()
+    try:
+        creds = analytics_credentials(oauth_manager, force=True)
+    except Exception as exc:
+        record_api_result(False, "auth")
+        return {"ok": False, "stage": "authorization", "error": type(exc).__name__,
+                "auth_state": _read_state(AUTH_STATE_KEY).get("state")}
+    try:
+        svc = (service_factory or AnalyticsCollector._build_service)(creds)
+        svc.reports().query(ids="channel==MINE", startDate=(today - timedelta(days=7)).isoformat(),
+                            endDate=today.isoformat(), metrics="views").execute()
+    except Exception as exc:
+        cat = classify_error(exc)
+        record_api_result(False, cat)
+        return {"ok": False, "stage": "api_request", "error_category": cat}
+    record_api_result(True)
+    return {"ok": True, "stage": "api_request", "message": "YouTube Analytics API answered a read-only request."}
+
+
+# ---- dashboard-started (re)authorization ----------------------------------------------------------------------------
+REQUIRED_AUTH_SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
+                        "https://www.googleapis.com/auth/youtube.readonly", ANALYTICS_SCOPE]
+_authz_lock = __import__("threading").Lock()
+
+
+class AuthorizationFailed(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _expected_channel_id(channel: str, oauth_manager) -> Optional[str]:
+    try:
+        from backend.app.channels.registry import get_registry
+        cid = (get_registry().get(channel) or {}).get("youtube_channel_id")
+        if cid:
+            return cid
+    except Exception:
+        pass
+    if channel == "en":
+        try:
+            info = (oauth_manager.get_auth_status() or {}).get("channel_info") or {}
+            return info.get("id") or info.get("channel_id")
+        except Exception:
+            return None
+    return None
+
+
+def _record_authz(**fields: Any) -> None:
+    _write_state(AUTHZ_STATE_KEY, dict(fields, at_utc=_now_iso()))
+
+
+def authorize_analytics(oauth_manager=None, *, channel: str = "en", open_browser: bool = True, timeout_sec: int = 300,
+                        flow_factory: Optional[Callable[..., Any]] = None,
+                        youtube_factory: Optional[Callable[[Any], Any]] = None,
+                        analytics_factory: Optional[Callable[[Any], Any]] = None,
+                        today: Optional[date] = None) -> Dict[str, Any]:
+    """Dashboard-started (re)authorization of the ENGLISH channel for Analytics (2026-11-28).
+
+    Google's normal consent screen (InstalledAppFlow, loopback redirect to localhost:8088, PKCE, a random ``state``
+    that the library validates on the callback, offline access, include_granted_scopes) for youtube.upload +
+    youtube.readonly + yt-analytics.readonly on the SAME OAuth client. The new credentials stay in memory until:
+      1. every required scope is in the granted set,
+      2. ``channels.list(mine=true)`` returns exactly the verified English channel (a consent given for another
+         channel, e.g. the Hindi brand channel, is rejected and never replaces the English token),
+      3. a minimal read-only Analytics request succeeds.
+    Only then is the English token saved (``save_credentials`` keeps the stored refresh token if Google omits it).
+    Any failure leaves the existing upload credentials exactly as they were. Hindi credentials are never touched:
+    Hindi Analytics collection does not exist, so only ``channel="en"`` is accepted."""
+    from backend.app.services.youtube_publishing_engine import YouTubeOAuthManager, invalidate_auth_status_cache
+    if channel != "en":
+        return {"success": False, "code": "CHANNEL_NOT_SUPPORTED",
+                "error": "Analytics is collected for the English channel only; Hindi credentials are not changed."}
+    if not _authz_lock.acquire(blocking=False):
+        return {"success": False, "code": "IN_PROGRESS", "error": "An Analytics authorization is already in progress."}
+    try:
+        mgr = oauth_manager or YouTubeOAuthManager()
+        expected = _expected_channel_id(channel, mgr)
+        if not expected:
+            raise AuthorizationFailed("CHANNEL_UNKNOWN", "The verified English channel id is unknown; connect YouTube first.")
+        import secrets
+        state = secrets.token_urlsafe(32)
+        if flow_factory is None:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+
+            def flow_factory(scopes, state):
+                return InstalledAppFlow.from_client_config(mgr._load_client_config(), scopes=scopes, state=state)
+        flow = flow_factory(list(REQUIRED_AUTH_SCOPES), state)
+        try:
+            creds = flow.run_local_server(host="localhost", port=8088, open_browser=open_browser,
+                                          timeout_seconds=timeout_sec, access_type="offline", prompt="consent",
+                                          include_granted_scopes="true",
+                                          authorization_prompt_message="Authorize CrazzyDocs Analytics: {url}",
+                                          success_message="Authorization received. You can close this tab and return to CrazzyDocs.")
+        except Exception as exc:                      # never log the text: it can carry the redirect URL / code
+            from backend.app.services.youtube_publishing_engine import _classify_connect_error
+            code, message = _classify_connect_error(exc)
+            if "state" in type(exc).__name__.lower() or "mismatchingstate" in str(exc).lower():
+                code, message = "STATE_MISMATCH", "The authorization response did not match this request; nothing was saved."
+            raise AuthorizationFailed(code, message)
+        if creds is None or not getattr(creds, "refresh_token", None) and not getattr(creds, "token", None):
+            raise AuthorizationFailed("NO_CREDENTIALS", "Google returned no credentials; nothing was saved.")
+        granted = set(getattr(creds, "granted_scopes", None) or getattr(creds, "scopes", None) or [])
+        missing = [_short(s) for s in REQUIRED_AUTH_SCOPES if s not in granted]
+        if missing:
+            raise AuthorizationFailed("SCOPES_NOT_GRANTED",
+                                      "Not all permissions were granted (missing: " + ", ".join(missing) +
+                                      "). Nothing was saved; uploads keep working with the existing authorization.")
+        try:
+            if youtube_factory is None:
+                from googleapiclient.discovery import build
+
+                def youtube_factory(c):
+                    return build("youtube", "v3", credentials=c, cache_discovery=False)
+            items = (youtube_factory(creds).channels().list(part="id", mine=True).execute() or {}).get("items") or []
+        except Exception as exc:
+            raise AuthorizationFailed("CHANNEL_VERIFICATION_FAILED",
+                                      f"Could not verify the channel ({type(exc).__name__}); nothing was saved.")
+        ids = [i.get("id") for i in items]
+        if ids != [expected]:
+            raise AuthorizationFailed("WRONG_CHANNEL",
+                                      "The consent was given for a different YouTube channel than the verified English "
+                                      "channel. Nothing was saved; choose the English channel on Google's screen.")
+        today = today or datetime.now(timezone.utc).date()
+        try:
+            svc = (analytics_factory or AnalyticsCollector._build_service)(creds)
+            svc.reports().query(ids="channel==MINE", startDate=(today - timedelta(days=7)).isoformat(),
+                                endDate=today.isoformat(), metrics="views").execute()
+        except Exception as exc:
+            cat = classify_error(exc)
+            record_api_result(False, cat)
+            raise AuthorizationFailed("ANALYTICS_VERIFICATION_FAILED",
+                                      f"The Analytics API request failed ({cat}); nothing was saved.")
+        mgr.save_credentials(creds, event="connect")       # only now: verified scopes, channel and Analytics access
+        record_api_result(True)
+        with _refresh_lock:
+            _cached.update(creds=None, token_file=None)
+        record_auth_state(CONNECTED, reason="authorized from the dashboard (scopes, channel and Analytics verified)", ok=True)
+        invalidate_auth_status_cache()
+        _record_authz(ok=True, code="AUTHORIZED", message="Analytics authorized and verified.", channel=channel)
+        return {"success": True, "code": "AUTHORIZED", "granted_scopes": sorted(_short(s) for s in granted),
+                "upload_scopes_preserved": True, "channel_verified": True, "analytics_verified": True, "error": None}
+    except AuthorizationFailed as exc:
+        _record_authz(ok=False, code=exc.code, message=str(exc), channel=channel)
+        logger.warning("Analytics authorization not completed (%s); existing credentials unchanged.", exc.code)
+        return {"success": False, "code": exc.code, "error": str(exc), "upload_scopes_preserved": True}
+    finally:
+        _authz_lock.release()
