@@ -2770,6 +2770,48 @@ async def api_hindi_publishing(_: None = Depends(require_local_control)):
     return await _hindi_call(lambda: get_publisher().queue())
 
 
+@app.get("/api/hindi-publishing/{pid}/thumbnail-preview")
+def api_hindi_thumbnail_preview(pid: int, _: None = Depends(require_local_control)):
+    """The Hindi row's thumbnail asset (read only), served only from the media folder."""
+    from backend.app.core.paths import MEDIA_DIR
+    from backend.app.localization.publishing import PublishingError, get_publisher
+    try:
+        thumb = get_publisher().get(pid).get("thumbnail_path")
+    except (PublishingError, KeyError):
+        raise HTTPException(status_code=404, detail="Hindi publication not found.")
+    try:
+        ok = bool(thumb) and os.path.isfile(thumb) and Path(MEDIA_DIR).resolve() in Path(thumb).resolve().parents
+    except OSError:
+        ok = False
+    if not ok:
+        raise HTTPException(status_code=404, detail="Thumbnail file not found.")
+    return FileResponse(thumb)
+
+
+@app.get("/api/publishing/unified")
+async def api_publishing_unified(channel: str = "all", _: None = Depends(require_local_control)):
+    """One YouTube publishing queue for the dashboard (English + Hindi rows, sorted by scheduled time). Display only:
+    every action goes to the video's own channel endpoint, which uses that channel's own OAuth token and gates."""
+    from backend.app.services.unified_publishing_queue import merge
+    if channel not in ("all", "en", "hi"):
+        raise HTTPException(status_code=400, detail="channel must be all, en or hi")
+    en = await api_list_publishing_queue(limit=100, _=None)
+    hi: Dict[str, Any] = {"items": [], "gates": {"can_publish": False, "reasons": ["Hindi queue unavailable"]}}
+    hi_error = None
+    try:
+        from backend.app.localization.publishing import get_publisher
+        hi = await asyncio.to_thread(lambda: get_publisher().queue())
+    except Exception as exc:  # noqa: BLE001 - English stays usable when the Hindi side is unavailable
+        hi_error = type(exc).__name__
+    rows = merge(en.get("items") or [], hi.get("items") or [], channel)
+    return {"items": rows, "count": len(rows), "channel": channel, "timezone": "Asia/Kolkata",
+            "english": {"raw": {str(i.get("id")): i for i in en.get("items") or []},
+                        "oauth_connected": bool((en.get("youtube_oauth") or {}).get("channel_connected")),
+                        "quota_used_today": en.get("quota_used_today"), "quota_daily_limit": en.get("quota_daily_limit")},
+            "hindi": {"raw": {str(i.get("id")): i for i in hi.get("items") or []}, "gates": hi.get("gates"),
+                      "error": hi_error}}
+
+
 @app.post("/api/hindi-publishing/schedule")
 async def api_hindi_schedule(req: HindiScheduleRequest, _: None = Depends(require_local_control),
                              __: None = Depends(require_autonomy_write)):

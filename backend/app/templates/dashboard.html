@@ -371,6 +371,7 @@
     <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview', this)">Overview</button>
     <button class="tab-btn" data-tab="schedule" onclick="switchTab('schedule', this)">Production Schedule</button>
     <button class="tab-btn" data-tab="queue" onclick="switchTab('queue', this)">Publishing Queue</button>
+    <button class="tab-btn" data-tab="channels" onclick="switchTab('channels', this)">Channels &amp; Localization</button>
     <button class="tab-btn" data-tab="ops" onclick="switchTab('ops', this)">Operations</button>
     <button class="tab-btn" data-tab="recs" onclick="switchTab('recs', this)">Recommendations</button>
     <button class="tab-btn" data-tab="heal" onclick="switchTab('heal', this)">Self-Healing</button>
@@ -816,78 +817,46 @@
 
   <!-- TAB 5: PUBLISHING QUEUE -->
   <section id="tab-queue" class="tab-panel">
-    <!-- STAGE 4.01: channels (English master, Hindi localized) -->
-    <div class="card" id="chCard"><div class="card-head"><div><h2 class="card-title">Channels</h2>
-      <p class="card-desc">Each channel's identity is verified with YouTube <code>channels.list?mine=true</code>, never from its name. English is the master channel and owns the existing production. Hindi localizes completed English Shorts with its own authorization (never the English one) and stays pending until its own channel is verified.</p></div>
-      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><button class="btn sm" onclick="refreshChannels()">Refresh</button></div></div>
-      <div id="chList" style="font-size:12px;overflow-x:auto;">--</div>
-      <h3 style="font-size:13px;margin:10px 0 4px;">Channel history</h3><div id="chEvents" style="font-size:12px;overflow-x:auto;">--</div>
-    </div>
-    <!-- STAGE 4.02: Hindi localization of completed English Shorts -->
-    <div class="card" id="locCard"><div class="card-head"><div><h2 class="card-title">Hindi localization</h2>
-      <p class="card-desc">Completed English Shorts adapted into natural Hinglish (script, voice, render, QC); every on-screen text is English or Roman-script Hinglish. The system enqueues the newest completed Short automatically, one at a time, up to <code>localization_auto_daily_max</code> per day (coordinator config; 0 turns it off), and you can still localize any job here. It runs in the gaps between English Shorts and shares the one render slot. A Hindi video is never published automatically: publishing stays blocked until the Hindi channel is verified, active and Hindi publishing is explicitly authorized.</p></div>
-      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><input id="locSource" maxlength="80" placeholder="English job id, e.g. cycle_9_20261127_0800" style="width:280px;" /><button class="btn sm" onclick="locCreate()">Localize</button><button class="btn sm" onclick="refreshLocalizations()">Refresh</button></div></div>
-      <div id="locList" style="font-size:12px;overflow-x:auto;">--</div>
-    </div>
-    <!-- Hindi publishing queue + the Hindi channel's own schedule (separate from the English queue) -->
-    <div class="card" id="hpCard"><div class="card-head"><div><h2 class="card-title">Hindi publishing queue</h2>
-      <p class="card-desc">Only Hindi videos that passed Hindi QC. Uploads use the Hindi channel's own authorization (never the English one) and happen only when the Hindi channel is active, Hindi publishing is authorized and this schedule is enabled. Times are Asia/Kolkata.</p></div>
-      <div class="btn-row"><button class="btn sm" onclick="refreshHindiPublishing()">Refresh</button></div></div>
-      <div id="hpGates" style="font-size:12px;margin-bottom:6px;">--</div>
-      <div class="btn-row" style="flex-wrap:wrap;gap:6px;font-size:12px;">
-        <label><input type="checkbox" id="hpEnabled" /> Schedule enabled</label>
-        <span>Strategy: Manual · times per cycle in Production Schedule → Hindi Target Publish Time</span>
-        <label>Daily limit <input id="hpLimit" type="number" min="1" max="24" style="width:52px;" /></label>
-        <label>Max attempts <input id="hpAttempts" type="number" min="1" max="5" style="width:52px;" /></label>
-        <button class="btn sm" onclick="hpSaveSchedule()">Save schedule</button></div>
-      <div id="hpList" style="font-size:12px;overflow-x:auto;margin-top:8px;">--</div>
-      <h3 style="font-size:13px;margin:10px 0 4px;">Hindi publication history</h3><div id="hpEvents" style="font-size:12px;overflow-x:auto;">--</div>
-    </div>
-    <!-- Shorts thumbnails (portrait-safe) -->
-    <div class="card" id="thCard"><div class="card-head"><div><h2 class="card-title">Shorts thumbnails</h2>
-      <p class="card-desc">Shorts get a 1280x720 thumbnail whose centre 9:16 column is the portrait design, set after YouTube finished processing; YouTube then lists a 9:16 (shortsAspectRatio) thumbnail, which is verified against the portrait. The Shorts-feed frame itself is chosen by YouTube and cannot be set through the API.</p></div>
-      <div class="btn-row"><button class="btn sm" onclick="refreshThumbnails()">Refresh</button></div></div>
-      <div id="thSummary" style="font-size:12px;">--</div>
-    </div>
-    <div class="card">
+    <div class="card" id="uqCard">
       <div class="card-head">
         <div>
-          <h2 class="card-title">English publishing queue (YouTube)</h2>
-          <p class="card-desc">User-controlled scheduled publishing. QC-approved videos wait here until you edit metadata, thumbnail, and set an Asia/Kolkata publication date &amp; time.</p>
+          <h2 class="card-title">YouTube Publishing Queue</h2>
+          <p class="card-desc">Every English and Hindi video, one row each, by scheduled publication time (Asia/Kolkata). Each action runs through that video's own channel: its own YouTube authorization, identity check and publishing rules. Hindi videos appear only after passing Hindi QC; channel setup and Hindi localization are under <a href="#" onclick="switchTab('channels', document.querySelector('.tab-btn[data-tab=channels]'));return false;">Channels &amp; Localization</a>.</p>
         </div>
         <div class="btn-row">
-          <select id="queueFilterState" style="width:210px;" onchange="renderQueueTable()">
-            <option value="ALL">All States</option>
-            <option value="Awaiting Review">Awaiting Review</option>
-            <option value="Ready to Schedule">Ready to Schedule</option>
-            <option value="Uploading">Uploading</option>
-            <option value="Scheduled">Scheduled</option>
-            <option value="Publishing">Publishing</option>
-            <option value="Published">Published</option>
-            <option value="Failed">Failed</option>
-          </select>
-          <button class="btn primary sm" onclick="verifyScheduledNow()">Verify YouTube Status</button>
-          <button class="btn sm" onclick="fetchQueue()">Refresh</button>
+          <span id="uqFilters" style="display:inline-flex;gap:4px;">
+            <button class="btn sm primary" data-ch="all" onclick="uqSetFilter('all')">All</button>
+            <button class="btn sm" data-ch="en" onclick="uqSetFilter('en')">English</button>
+            <button class="btn sm" data-ch="hi" onclick="uqSetFilter('hi')">Hindi</button>
+          </span>
+          <button class="btn sm" onclick="verifyScheduledNow()">Verify YouTube Status</button>
+          <button class="btn sm" onclick="refreshPublishing()">Refresh</button>
         </div>
       </div>
+      <div id="uqNotes" style="font-size:12px;margin-bottom:6px;"></div>
       <div class="table-wrap">
         <table>
-          <thead>
-            <tr>
-              <th>Video</th>
-              <th>Production Status</th>
-              <th>Metadata</th>
-              <th>Thumbnail</th>
-              <th>Scheduled Time</th>
-              <th>YouTube Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="queueTableBody">
-            <tr><td colspan="7" style="color:var(--muted)">Loading publishing queue...</td></tr>
-          </tbody>
+          <thead><tr><th>Video</th><th>Channel</th><th>QC Status</th><th>Thumbnail</th><th>Scheduled Time</th><th>YouTube Status</th><th>Actions</th></tr></thead>
+          <tbody id="queueTableBody"><tr><td colspan="7" style="color:var(--muted)">Loading publishing queue...</td></tr></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- HINDI SCHEDULE MODAL (Hindi channel's own rules: >= 20 min ahead, daily limit, gates) -->
+    <div id="hiSchedModal" class="control-doc" style="display:none;margin-top:16px;border-color:var(--accent);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <strong id="hiSchedHeading">Schedule Hindi video</strong>
+        <button class="btn sm" onclick="closeHiSched()">Close</button>
+      </div>
+      <input type="hidden" id="hiSchedId" />
+      <label class="field-label">Publication Date &amp; Time (Asia/Kolkata IST), at least 20 minutes from now</label>
+      <input type="datetime-local" id="hiSchedIst" />
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn primary" onclick="hiSchedAt()">Schedule at this time</button>
+        <button class="btn" onclick="hiSchedPlanned()">Use the cycle's Hindi target time</button>
+        <button class="btn" onclick="closeHiSched()">Cancel</button>
+      </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:6px;">The Hindi channel uploads privately before this time and YouTube publishes it then, only while the Hindi channel is verified and active, Hindi publishing is authorized and its schedule is enabled.</div>
     </div>
 
     <!-- EDIT & SCHEDULE MODAL -->
@@ -928,6 +897,43 @@
         <button class="btn" onclick="submitPubMetadataOnly()">Save Metadata Only</button>
         <button class="btn" onclick="closePubEditModal()">Cancel</button>
       </div>
+    </div>
+  </section>
+
+  <!-- TAB: CHANNELS & LOCALIZATION (administration moved out of the publishing queue, 2026-11-28) -->
+  <section id="tab-channels" class="tab-panel">
+    <!-- STAGE 4.01: channels (English master, Hindi localized) -->
+    <div class="card" id="chCard"><div class="card-head"><div><h2 class="card-title">Channels</h2>
+      <p class="card-desc">Each channel's identity is verified with YouTube <code>channels.list?mine=true</code>, never from its name. English is the master channel and owns the existing production. Hindi localizes completed English Shorts with its own authorization (never the English one) and stays pending until its own channel is verified.</p></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><button class="btn sm" onclick="refreshChannels()">Refresh</button></div></div>
+      <div id="chList" style="font-size:12px;overflow-x:auto;">--</div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Channel history</h3><div id="chEvents" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
+    <!-- STAGE 4.02: Hindi localization of completed English Shorts -->
+    <div class="card" id="locCard"><div class="card-head"><div><h2 class="card-title">Hindi localization</h2>
+      <p class="card-desc">Completed English Shorts adapted into natural Hinglish (script, voice, render, QC); every on-screen text is English or Roman-script Hinglish. The system enqueues the newest completed Short automatically, one at a time, up to <code>localization_auto_daily_max</code> per day (coordinator config; 0 turns it off), and you can still localize any job here. It runs in the gaps between English Shorts and shares the one render slot. A Hindi video is never published automatically: publishing stays blocked until the Hindi channel is verified, active and Hindi publishing is explicitly authorized.</p></div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><input id="locSource" maxlength="80" placeholder="English job id, e.g. cycle_9_20261127_0800" style="width:280px;" /><button class="btn sm" onclick="locCreate()">Localize</button><button class="btn sm" onclick="refreshLocalizations()">Refresh</button></div></div>
+      <div id="locList" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
+    <!-- Hindi publishing queue + the Hindi channel's own schedule (separate from the English queue) -->
+    <div class="card" id="hpCard"><div class="card-head"><div><h2 class="card-title">Hindi publishing settings</h2>
+      <p class="card-desc">Only Hindi videos that passed Hindi QC. Uploads use the Hindi channel's own authorization (never the English one) and happen only when the Hindi channel is active, Hindi publishing is authorized and this schedule is enabled. Times are Asia/Kolkata.</p></div>
+      <div class="btn-row"><button class="btn sm" onclick="refreshHindiPublishing()">Refresh</button></div></div>
+      <div id="hpGates" style="font-size:12px;margin-bottom:6px;">--</div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;font-size:12px;">
+        <label><input type="checkbox" id="hpEnabled" /> Schedule enabled</label>
+        <span>Strategy: Manual · times per cycle in Production Schedule → Hindi Target Publish Time</span>
+        <label>Daily limit <input id="hpLimit" type="number" min="1" max="24" style="width:52px;" /></label>
+        <label>Max attempts <input id="hpAttempts" type="number" min="1" max="5" style="width:52px;" /></label>
+        <button class="btn sm" onclick="hpSaveSchedule()">Save schedule</button></div>
+      <div style="font-size:12px;margin-top:8px;color:var(--muted);">Hindi videos are managed in <a href="#" onclick="switchTab('queue', document.querySelector('.tab-btn[data-tab=queue]'));return false;">Publishing Queue</a> (filter: Hindi).</div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Hindi publication history</h3><div id="hpEvents" style="font-size:12px;overflow-x:auto;">--</div>
+    </div>
+    <!-- Shorts thumbnails (portrait-safe) -->
+    <div class="card" id="thCard"><div class="card-head"><div><h2 class="card-title">Shorts thumbnails</h2>
+      <p class="card-desc">Shorts get a 1280x720 thumbnail whose centre 9:16 column is the portrait design, set after YouTube finished processing; YouTube then lists a 9:16 (shortsAspectRatio) thumbnail, which is verified against the portrait. The Shorts-feed frame itself is chosen by YouTube and cannot be set through the API.</p></div>
+      <div class="btn-row"><button class="btn sm" onclick="refreshThumbnails()">Refresh</button></div></div>
+      <div id="thSummary" style="font-size:12px;">--</div>
     </div>
   </section>
 
@@ -1494,7 +1500,8 @@ function switchTab(tabId, btn) {
   document.getElementById("tab-" + tabId).classList.add("active");
   if (btn) btn.classList.add("active");
   if (tabId === "processes") { refreshProcesses(); refreshLogs(); }
-  if (tabId === "queue") { refreshPublishing(); refreshChannels(); refreshLocalizations(); refreshHindiPublishing(); refreshThumbnails(); }
+  if (tabId === "queue") { refreshPublishing(); }
+  if (tabId === "channels") { refreshChannels(); refreshLocalizations(); refreshHindiPublishing(); refreshThumbnails(); }
   if (tabId === "ops") { refreshOps(); }
   if (tabId === "schedule") { refreshScheduleProfiles(); }
   if (tabId === "autonomy") { refreshAutonomy(true); }
@@ -1613,10 +1620,15 @@ async function refreshPipeline() {
   } catch (_) {}
 }
 
+const uqState = { filter: "all", rows: [], hindiGates: null };
 async function refreshPublishing() {
   try {
-    const data = await apiJson("/api/publishing/queue");
-    stateCache.queueItems = data.items || data.uploads || (Array.isArray(data) ? data : []);
+    const data = await apiJson("/api/publishing/unified?channel=all");
+    stateCache.queueItems = Object.values((data.english || {}).raw || {});      // English edit modal data
+    hpItems = {}; Object.values((data.hindi || {}).raw || {}).forEach(i => { hpItems[i.id] = i; });
+    uqState.rows = data.items || [];
+    uqState.hindiGates = (data.hindi || {}).gates || null;
+    uqState.hindiError = (data.hindi || {}).error || null;
     renderQueueTable();
   } catch (err) {
     showToast("Queue fetch failed: " + err.message, true);
@@ -1627,55 +1639,99 @@ async function fetchQueue() {
   return refreshPublishing();
 }
 
+function uqSetFilter(ch) {
+  uqState.filter = ch;
+  document.querySelectorAll("#uqFilters button").forEach(b => b.classList.toggle("primary", b.dataset.ch === ch));
+  renderQueueTable();
+}
+
+function uqFilterRows(rows, ch) { return ch === "all" ? rows : rows.filter(r => r.channel === ch); }
+
+function uqActionButtons(r) {
+  const id = escHtml(String(r.id)), a = r.actions || [], b = [];
+  if (r.channel === "en") {
+    if (a.includes("edit")) b.push(`<button class="btn primary sm" data-i="${id}" onclick="openPubEditModal(Number(this.dataset.i))">${r.scheduled_at_utc ? "EDIT / RESCHEDULE" : "EDIT &amp; SCHEDULE"}</button>`);
+    if (a.includes("unschedule")) b.push(`<button class="btn danger sm" data-i="${id}" onclick="cancelQueueItemSchedule(Number(this.dataset.i))">UNSCHEDULE</button>`);
+    if (a.includes("publish_now")) b.push(`<button class="btn ok sm" data-i="${id}" onclick="publishQueueItemNow(Number(this.dataset.i))">PUBLISH NOW</button>`);
+    if (a.includes("retry")) b.push(`<button class="btn sm" data-i="${id}" onclick="openPubEditModal(Number(this.dataset.i))">RETRY</button>`);
+  } else {
+    if (a.includes("edit")) b.push(`<button class="btn primary sm" data-i="${id}" onclick="hpEdit(this.dataset.i)">EDIT METADATA</button>`);
+    if (a.includes("schedule")) b.push(`<button class="btn sm" data-i="${id}" onclick="openHiSched(this.dataset.i)">${r.scheduled_at_utc ? "RESCHEDULE" : "SCHEDULE"}</button>`);
+    if (a.includes("unschedule")) b.push(`<button class="btn danger sm" data-i="${id}" onclick="hpAct(this.dataset.i,'unschedule')">UNSCHEDULE</button>`);
+    if (a.includes("publish_now")) b.push(`<button class="btn ok sm" data-i="${id}" onclick="hiPublishSoon(this.dataset.i)">PUBLISH NOW</button>`);
+    if (a.includes("retry")) b.push(`<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'retry')">RETRY</button>`);
+  }
+  if (a.includes("view") && r.youtube_url) b.push(`<a href="${escHtml(r.youtube_url)}" target="_blank" rel="noopener" class="btn sm">VIEW ON YOUTUBE</a>`);
+  return b.join("") || `<span style="color:var(--muted)">--</span>`;
+}
+
 function renderQueueTable() {
-  const filter = document.getElementById("queueFilterState").value;
-  const items = stateCache.queueItems.filter(it => {
-    const st = it.ui_status || it.lifecycle_state || "";
-    return filter === "ALL" || st === filter;
-  });
+  const rows = uqFilterRows(uqState.rows, uqState.filter);
+  const g = uqState.hindiGates;
+  const notes = document.getElementById("uqNotes");
+  if (notes) notes.innerHTML = (uqState.filter !== "en" && g && !g.can_publish)
+    ? `<span style="color:#fcd34d">Hindi uploads are off:</span> ${escHtml((g.reasons || []).join("; "))}. Hindi videos can still be edited and scheduled; nothing uploads until these are resolved.`
+    : (uqState.hindiError ? `<span style="color:#fca5a5">Hindi queue unavailable (${escHtml(uqState.hindiError)}); English is unaffected.</span>` : "");
   const tbody = document.getElementById("queueTableBody");
-  if (!items.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">No queue items matching filter '${filter}'.</td></tr>`;
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">${uqState.filter === "hi" ? "No Hindi video has passed Hindi QC yet." : "No videos in the queue."}</td></tr>`;
     return;
   }
-  tbody.innerHTML = items.map(it => {
-    const uiSt = it.ui_status || "Ready to Schedule";
-    const cls = uiSt === "Published" ? "completed" : (uiSt === "Failed" ? "failed" : (uiSt === "Scheduled" || uiSt === "Uploading" || uiSt === "Publishing" ? "running" : ""));
-    const tags = Array.isArray(it.tags) ? it.tags.slice(0, 4).join(", ") : "";
-    const thumbHtml = it.thumbnail_path
-      ? `<img src="/api/publishing/queue/${it.id}/thumbnail-preview?t=${encodeURIComponent(it.upload_timestamp || it.id)}" alt="thumb" style="width:48px;height:84px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" onerror="this.style.display='none'" />`
-      : `<span style="color:var(--muted);font-size:11px;">No thumbnail</span>`;
-    const tReady = it.thumbnail_ready || "";
-    const tCol = tReady === "ready" ? "#86efac" : (tReady.startsWith("NOT READY") ? "#fca5a5" : "var(--muted)");
-    const thumbState = tReady ? `<div style="font-size:10px;color:${tCol};margin-top:3px;max-width:110px;" title="${(it.thumbnail_state && it.thumbnail_state.last_error) || ""}">Thumb: ${tReady}</div>` : "";
-    const schedDisplay = it.scheduled_ist_display && it.scheduled_ist_display !== "Not Scheduled"
-      ? `<strong>${it.scheduled_ist_display}</strong><br><span style="color:var(--muted);font-size:11px;">UTC: ${it.scheduled_utc_publish_at || "--"}</span>`
-      : `<span style="color:var(--muted);">Not Scheduled</span>`;
-    const ytLink = it.youtube_video_id
-      ? `<a href="${it.youtube_url || ('https://youtu.be/' + it.youtube_video_id)}" target="_blank" class="btn sm">VIEW ON YOUTUBE</a>`
-      : "";
-    const cancelBtn = (uiSt === "Scheduled")
-      ? `<button class="btn danger sm" onclick="cancelQueueItemSchedule(${it.id})">CANCEL SCHEDULE</button>`
-      : "";
-    const pubNowBtn = (uiSt !== "Published" && uiSt !== "Publishing")
-      ? `<button class="btn ok sm" onclick="publishQueueItemNow(${it.id})">PUBLISH NOW</button>`
-      : "";
-    const editBtn = (uiSt !== "Published")
-      ? `<button class="btn primary sm" onclick="openPubEditModal(${it.id})">EDIT &amp; SCHEDULE</button>`
-      : "";
-    const errHtml = it.error ? `<div style="color:#f87171;font-size:11px;margin-top:4px;">${it.error}</div>` : "";
-    return `
-      <tr>
-        <td><strong>#${it.id}</strong><br><span style="color:var(--muted);font-size:11px;">${it.topic_title || "--"}</span></td>
-        <td><span class="chip ${it.production_cycle_id ? 'completed' : ''}">QC Passed</span><br><span style="color:var(--muted);font-size:11px;">${it.production_cycle_id || "Manual/Imported"}</span></td>
-        <td><strong>${it.title || "--"}</strong><br><span style="color:var(--muted);font-size:11px;">${(it.description || "").slice(0, 70)}${(it.description || "").length > 70 ? "..." : ""}</span><br><span style="color:var(--muted);font-size:11px;">Tags: ${tags || "--"}</span></td>
-        <td>${thumbHtml}${thumbState}</td>
-        <td>${schedDisplay}</td>
-        <td><span class="chip ${cls}">${uiSt}</span><br><span style="color:var(--muted);font-size:11px;">Privacy: ${it.youtube_privacy_status || it.visibility || "private"}</span>${errHtml}</td>
-        <td><div style="display:flex;flex-direction:column;gap:4px;">${editBtn}${pubNowBtn}${cancelBtn}${ytLink}</div></td>
-      </tr>
-    `;
+  const badge = ch => ch === "hi"
+    ? `<span class="chip" style="background:rgba(251,146,60,0.18);color:#fdba74;border-color:rgba(251,146,60,0.45);">HINDI</span>`
+    : `<span class="chip" style="background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.45);">ENGLISH</span>`;
+  tbody.innerHTML = rows.map(r => {
+    const st = r.youtube_status || "";
+    const cls = /Published|Uploaded/.test(st) ? "completed" : (/Failed|Needs check/.test(st) ? "failed" : (/Scheduled|Uploading|Publishing/.test(st) ? "running" : ""));
+    const th = r.thumbnail || {};
+    const img = th.preview_url ? `<img src="${escHtml(th.preview_url)}" alt="thumb" style="width:48px;height:84px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" onerror="this.style.display='none'" />` : "";
+    return `<tr data-key="${escHtml(r.key)}">
+      <td><strong>${escHtml(r.title)}</strong><br><span style="color:var(--muted);font-size:11px;">${escHtml(r.subtitle || "")} · #${escHtml(String(r.id))}</span></td>
+      <td>${badge(r.channel)}</td>
+      <td><span class="chip ${r.qc_passed ? "completed" : "failed"}">${escHtml(r.qc_status)}</span></td>
+      <td>${img}<div style="font-size:10px;color:var(--muted);max-width:120px;">${escHtml(th.status || "")}${th.editable ? "" : (r.channel === "hi" ? " · uses the English thumbnail" : "")}</div></td>
+      <td>${r.scheduled_ist ? `<strong>${escHtml(r.scheduled_ist)}</strong>` : `<span style="color:var(--muted)">Not scheduled</span>`}</td>
+      <td><span class="chip ${cls}">${escHtml(st)}</span><br><span style="color:var(--muted);font-size:11px;">${escHtml(r.privacy || "")}</span>${r.error ? `<div style="color:#f87171;font-size:11px;margin-top:4px;max-width:240px;overflow-wrap:anywhere;">${escHtml(r.error)}</div>` : ""}</td>
+      <td><div style="display:flex;flex-direction:column;gap:4px;">${uqActionButtons(r)}</div></td></tr>`;
   }).join("");
+}
+
+function openHiSched(id) {
+  const i = hpItems[id]; if (!i) return;
+  document.getElementById("hiSchedId").value = String(id);
+  document.getElementById("hiSchedHeading").textContent = `Schedule Hindi video #${id}: ${i.title || i.source_job_id}`;
+  let v = "";
+  if (i.scheduled_at_utc) { const d = new Date(new Date(i.scheduled_at_utc).getTime() + 330 * 60000); v = d.toISOString().slice(0, 16); }
+  document.getElementById("hiSchedIst").value = v;
+  document.getElementById("hiSchedModal").style.display = "block";
+}
+function closeHiSched() { document.getElementById("hiSchedModal").style.display = "none"; }
+function istInputToUtc(v) {          // "YYYY-MM-DDTHH:MM" in Asia/Kolkata -> ISO UTC
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(v || ""); if (!m) return null;
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - 330 * 60000;
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+async function hiSchedAt() {
+  const id = document.getElementById("hiSchedId").value, at = istInputToUtc(document.getElementById("hiSchedIst").value);
+  if (!at) { showToast("Choose a date and time (IST).", true); return; }
+  try { await dashWrite(`/api/hindi-publishing/${encodeURIComponent(id)}/schedule`, { confirm: true, at_utc: at }); showToast("Hindi video scheduled."); closeHiSched(); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshPublishing();
+}
+async function hiSchedPlanned() {
+  const id = document.getElementById("hiSchedId").value;
+  try { await dashWrite(`/api/hindi-publishing/${encodeURIComponent(id)}/schedule`, { confirm: true }); showToast("Scheduled at the cycle's Hindi target time."); closeHiSched(); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshPublishing();
+}
+async function hiPublishSoon(id) {
+  const ok = await askConfirm("Publish this Hindi video as soon as allowed?",
+    "The Hindi channel's rules need a publish time at least 20 minutes ahead, so it is scheduled 21 minutes from now. It uploads with the Hindi channel's own authorization, and only if the Hindi channel is verified and active, Hindi publishing is authorized and its schedule is enabled.");
+  if (!ok) return;
+  const at = new Date(Date.now() + 21 * 60000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  try { await dashWrite(`/api/hindi-publishing/${encodeURIComponent(id)}/schedule`, { confirm: true, at_utc: at }); showToast("Scheduled 21 minutes from now (Hindi rules)."); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshPublishing();
 }
 
 function openPubEditModal(ledgerId) {
@@ -4456,27 +4512,10 @@ function locRow(l) {
     + `<td style="max-width:240px;overflow-wrap:anywhere;">${pub.eligible ? "eligible" : (pub.reasons || []).map(r => escHtml(r)).join("<br>")}</td>`
     + `<td style="max-width:260px;overflow-wrap:anywhere;">${why || "--"}</td><td>${act}</td></tr>`;
 }
-const HP_STATE_COLOR = { UPLOADED: "#86efac", SCHEDULED: "#93c5fd", FAILED: "#fca5a5", NEEDS_CHECK: "#fcd34d", UPLOADING: "#93c5fd" };
 let hpItems = {};
 
-function hpRow(i) {
-  const th = i.thumbnail || {};
-  const id = escHtml(String(i.id));
-  let btns = "";
-  if (["DRAFT", "SCHEDULED", "FAILED"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpEdit(this.dataset.i)">Edit</button> `;
-  if (["DRAFT", "FAILED"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'schedule')">Schedule</button> `;
-  if (["SCHEDULED", "FAILED"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'unschedule')">Unschedule</button> `;
-  if (["FAILED", "NEEDS_CHECK"].includes(i.state)) btns += `<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'retry')">Retry</button>`;
-  return `<tr><td>${escHtml(i.source_job_id)}</td><td>${escHtml(i.localization_status || "?")} · QC ${i.qc_passed ? "passed" : "no"}</td>`
-    + `<td style="max-width:260px;overflow-wrap:anywhere;"><strong>${escHtml(i.title)}</strong><div style="color:var(--muted)">${escHtml((i.tags || []).slice(0, 6).join(", "))}</div></td>`
-    + `<td>${i.thumbnail_asset ? "asset ready" : "<span style='color:#fcd34d'>no asset</span>"}${th.state ? `<div style="color:var(--muted)">${escHtml(th.state)}${th.error ? " · " + escHtml(th.error) : ""}</div>` : ""}</td>`
-    + `<td>${i.scheduled_at_utc ? autoTime(i.scheduled_at_utc) : "--"}</td>`
-    + `<td style="color:${HP_STATE_COLOR[i.state] || "inherit"}">${escHtml(i.state)}${i.youtube_video_id ? `<div>${escHtml(i.youtube_video_id)}</div>` : ""}${i.last_error ? `<div style="color:var(--muted);max-width:220px;overflow-wrap:anywhere;">${escHtml(i.last_error)}</div>` : ""}</td>`
-    + `<td>${btns || "--"}</td></tr>`;
-}
-
 async function refreshHindiPublishing() {
-  const el = document.getElementById("hpList");
+  const el = document.getElementById("hpGates");
   if (!el) return;
   try {
     const d = await apiJson("/api/hindi-publishing");
@@ -4488,8 +4527,6 @@ async function refreshHindiPublishing() {
     document.getElementById("hpLimit").value = sc.daily_limit || 1;
     document.getElementById("hpAttempts").value = sc.max_attempts || 3;
     hpItems = {}; (d.items || []).forEach(i => { hpItems[i.id] = i; });
-    el.innerHTML = (d.items || []).length ? apTable(["English source", "Localization / QC", "Metadata", "Thumbnail", "Scheduled", "YouTube", ""], d.items.map(hpRow))
-      : `<div style="color:var(--muted)">No Hindi video has passed Hindi QC yet.</div>`;
     const ev = d.events || [];
     document.getElementById("hpEvents").innerHTML = ev.length ? apTable(["When", "Item", "Event"], ev.map(e =>
       `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(String(e.publication_id))}</td><td>${escHtml(e.event)}</td></tr>`))
@@ -4517,13 +4554,13 @@ async function hpEdit(id) {
       tags: tags.split(",").map(t => t.trim()).filter(Boolean), confirm: true });
     showToast("Metadata saved");
   } catch (err) { showToast(err.message || String(err), true); }
-  refreshHindiPublishing();
+  refreshPublishing(); refreshHindiPublishing();
 }
 
 async function hpAct(id, action) {
   try { await dashWrite(`/api/hindi-publishing/${encodeURIComponent(id)}/${action}`, { confirm: true }); showToast(`Hindi item ${id}: ${action} done`); }
   catch (err) { showToast(err.message || String(err), true); }
-  refreshHindiPublishing();
+  refreshPublishing(); refreshHindiPublishing();
 }
 
 async function refreshThumbnails() {

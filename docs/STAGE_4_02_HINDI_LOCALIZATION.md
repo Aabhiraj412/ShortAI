@@ -294,3 +294,56 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 **Limits.**
 - Videos already planned keep their time when English times change later; only new or missed ones use the new times.
 - Up to `daily_limit` Hindi videos per IST day; beyond that, the next day.
+
+## 12. Status check and unified publishing queue (2026-11-28, about 04:00 IST)
+
+### 12.1 Actual status (production database, read-only)
+
+| Item | State |
+|---|---|
+| §7.2 / §7.3 acceptance runs | Passed Hindi QC, but in a **scratch database and scratch media**. They prove the pipeline end to end; they are not a production record. |
+| Production localizations (`content_localizations`) | #1–#4 (`cycle_22`, `cycle_21`, `cycle_20`, `cycle_23` of 2026-11-27): **FAILED**, "infrastructure failures exhausted the coordinator attempts". They ran before the quota-resilience fix (§10) and were kept unchanged. #5 (`cycle_24_20261127_2300`): **WAITING** (`PROVIDER_WAIT`), 0 attempts used. It waits for the Gemini free-tier reset (13:35 IST), when the coordinator resumes it automatically. |
+| Hindi videos that passed QC in production | **None yet**, so `hindi_publications` is empty. |
+| **Stage 4.02** | **Not complete.** The remaining acceptance condition is a production localization reaching QC_PASSED (and a visual check of its frames). Nothing was forced: no extra production cycle, no QC bypass. The four FAILED records stay as they are; retrying one needs only the existing Retry action once the quota is available. |
+| Stage 4.03 | **Not defined** anywhere in the repository (docs, code or git history). Nothing was started or labelled 4.03. The unified queue below is a 4.02 publishing follow-up. |
+
+### 12.2 One YouTube Publishing Queue
+
+The Publishing Queue tab now holds a single card:
+- **Filters:** All, English and Hindi; the default is All.
+- **Rows:** one per video, sorted by scheduled publication time (unscheduled last).
+- **Columns:** Video, Channel (ENGLISH or HINDI badge), QC Status, Thumbnail, Scheduled Time, YouTube Status, Actions.
+
+**Data source.** `GET /api/publishing/unified?channel=all|en|hi` (`services/unified_publishing_queue.py`) only merges the two existing queues; it uploads, schedules and authorizes nothing.
+
+**Actions on English rows** use the existing English endpoints (`/api/publishing/queue/{id}/…`, English token):
+- Edit and Schedule, or Reschedule. This is the existing modal, with title, description, tags, hashtags, an IST date and time, and a custom thumbnail upload.
+- Unschedule.
+- Publish now, with the existing confirmation.
+- Retry for a Failed row, which reopens the schedule modal.
+- View on YouTube.
+
+**Actions on Hindi rows** use `/api/hindi-publishing/{id}/…` (Hindi token, identity check, Hindi gates):
+- Edit metadata.
+- Schedule or Reschedule, either at a chosen IST time or at the cycle's Hindi target time.
+- Unschedule.
+- Retry.
+- View on YouTube.
+- **Publish now** schedules the video 21 minutes ahead. That is the Hindi minimum lead of 20 minutes; the video is never public immediately. It uploads only while the Hindi channel is verified and active, publishing is authorized and the schedule is enabled.
+- The thumbnail cannot be edited: it is the English Short's thumbnail, set after YouTube processing.
+
+**Hindi rows without a pass.** A Hindi row whose localization has not passed Hindi QC has no action. The backend also refuses: `sync()` adds only QC_PASSED localizations whose MP4 is under `media/localizations/hi`, and `schedule_item()` re-checks QC_PASSED.
+
+**New Channels & Localization tab.** It now holds:
+- Channels (verification and authorization, with history);
+- Hindi localization;
+- Hindi publishing settings (gates, the schedule switch, the daily limit, max attempts and the Hindi publication history);
+- Shorts thumbnail diagnostics.
+
+Nothing was removed.
+
+**Not changed:**
+- The English and Hindi OAuth tokens, upload clients, identity checks and publishing settings.
+- The duplicate-upload prevention (UNIQUE localization and video ids; claim-by-state).
+- Retry and recovery.
+- The 24-cycle schedule and every existing scheduled video.

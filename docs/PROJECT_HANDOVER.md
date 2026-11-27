@@ -122,6 +122,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | (remediation commit, see `git log`) | **Remediation WS1 (part 2) to WS7 and the operator-attention feed** |
 | `7b4f632` | **Remediation WS1**: dashboard event loop (deployed 2026-11-27 04:34 IST) |
 | `13e846b` | **3.37** Multi-pipeline production and resource coordinator (deployed; long-form OFF, no executor) |
+| (2026-11-28, queue) | One YouTube Publishing Queue (All / English / Hindi; `/api/publishing/unified`, display only); channel administration moved to a Channels & Localization tab |
 | (2026-11-28, this deploy) | Free AI provider layer (`services/llm_providers.py`, Groq integrated but disabled, `docs/AI_PROVIDERS.md`); dashboard Analytics (re)authorization with verify-before-save and one Analytics state model; complete Edit Cycle window (English + Hindi times) |
 | `fed2845` | **3.36** Autopilot continuous production controller (deployed; Autopilot OFF) |
 | `3596f5d`, `1db7e03`, `0361710` | 3.31 formal 48-hour shadow observation and its final report (`docs/STAGE_3_31_SHADOW_OBSERVATION.md` §9) |
@@ -232,7 +233,7 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 
 **Remediation is closed** (2026-11-27, `docs/OPERATOR_DEPENDENCY_REDUCTION.md` §7). Changes: evidence-based controller health (fresh heartbeat, live PID, registered daemon identity), six self-healing outcome states, readiness metrics that state their window, grouped attention, and bounded autonomous Hinglish localization (`localization_auto_daily_max`, default 6 a day). **Operator-dependency reduction** is implemented (`docs/OPERATOR_DEPENDENCY_REDUCTION.md`). The remaining operator items are genuine: creative decisions, the Hindi channel connection, optional Pexels key, Autopilot enablement (optional) and Community API access (external).
 
-**Stage 4.02 (Hindi localization)** is **accepted** (2026-11-27): a real English Short went through real translation, voice, rendering in the shared slot and Hindi QC, and the MP4 passed visual inspection (`docs/STAGE_4_02_HINDI_LOCALIZATION.md` §7.2). Operator actions: use the Queue tab → *Hindi localization* card to localize completed Shorts. Hindi publishing is a separate milestone; it needs the Hindi channel verified first (Channels card). See `docs/STAGE_4_02_HINDI_LOCALIZATION.md` §9.
+**Stage 4.02 (Hindi localization)** is **not complete in production** (status check 2026-11-28, `docs/STAGE_4_02_HINDI_LOCALIZATION.md` §12). The 2026-11-27 acceptance runs (§7.2, §7.3) passed Hindi QC in a scratch database. In production, localizations #1–#4 FAILED (before the quota fix) and #5 (`cycle_24_20261127_2300`) is WAITING for the Gemini reset at 13:35 IST. The remaining condition is one production localization reaching QC_PASSED, plus a frame check. Stage 4.03 is not defined in the repository. Operator actions: Channels & Localization tab → *Hindi localization* card. Hindi publishing is a separate milestone; it needs the Hindi channel verified first (Channels card). See `docs/STAGE_4_02_HINDI_LOCALIZATION.md` §9.
 
 **Remediation:** deploy the remediation commit once its full suite matches the baseline (same procedure, :15–:50 IST, no active job, new backup). Then:
 - verify `/api/operations/attention` and the control state RESTRICTED;
