@@ -154,7 +154,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | Junk cleaner | Daily dry-run at 03:30 IST; live quarantine only with an explicit operator confirmation and no active job (§4). |
 | Uncommitted user changes (keep them) | `backend/app/content/topic_history.json`, `backend/data/creative_policy_config.json`; untracked `backups/`, `backend/backups/`, `media/` |
 | Control state | RESTRICTED (no `autonomy_startup.json`; **not** an emergency stop). The automatic policy runs: reports, recommendation recording, read-only diagnostics, local notifications, self-healing diagnostics, read-only provider re-checks and (since the operator-dependency reduction) staged asset re-acquisition. Production dispatch, publishing, configuration and credentials stay outside it. |
-| Latest backup | `D:AgentsCrazzyDocs_backupspredeploy_closure_copyfix_20261127_212326` (DB integrity ok, restart_safe; the token file is not included) |
+| Latest backup | `D:\Agents\CrazzyDocs_backups\predeploy_closure_copyfix_20261127_212326` (DB integrity ok, restart_safe; the token file is not included) |
 
 ## 4. Outstanding bugs and risks
 
