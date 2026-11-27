@@ -481,6 +481,8 @@ def test_localization_queue_respects_its_own_switch_and_pause(tmp_path):
     from backend.app.scheduler import production_coordinator as pc
     from test_production_coordinator_337 import make
     coord, w, clock = make(tmp_path, executors={KIND: lambda ctx: {}}, db_name="c2.db")
+    queues = coord.status()["queues"]
+    assert queues[pc.LOCALIZATION]["executors"] == [KIND] and queues[pc.LONG_FORM]["executors"] == []
     coord.enqueue(kind=KIND, title="t", steps=COORDINATOR_STEPS, requested_by="op", queue=pc.LOCALIZATION)
     assert coord.config()["long_form_enabled"] is False and coord.config()["localization_enabled"] is True
     coord.set_queue_paused(pc.LOCALIZATION, True, "op", "busy")

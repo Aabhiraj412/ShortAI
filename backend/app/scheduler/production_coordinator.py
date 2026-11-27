@@ -291,6 +291,8 @@ class StepContext:
 
 Executor = Callable[[StepContext], Dict[str, Any]]
 _EXECUTORS: Dict[str, Executor] = {}
+# The queue each executor kind serves (reporting only): any kind not listed here is a long-form kind.
+EXECUTOR_QUEUE: Dict[str, str] = {"hindi_short_localization": "LOCALIZATION"}
 
 
 def register_executor(kind: str, fn: Executor) -> None:
@@ -988,7 +990,8 @@ class ProductionCoordinator:
                          "priority": "highest (always first for the renderer)",
                          "publishing_cadence": "separate: the publishing queue and policy are unchanged"},
                 **{q: {"enabled": bool(p["config"].get(QUEUE_FLAGS[q])), "paused": bool(p["paused"].get(q)),
-                       "executors": sorted(k for k in self.executors), "jobs": [j for j in lf_jobs if j["queue"] == q],
+                       "executors": sorted(k for k in self.executors if EXECUTOR_QUEUE.get(k, LONG_FORM) == q),
+                       "jobs": [j for j in lf_jobs if j["queue"] == q],
                        "waiting": sum(1 for j in lf_jobs if j["queue"] == q and j["state"] == QUEUED),
                        "running": sum(1 for j in lf_jobs if j["queue"] == q and j["state"] == RUNNING),
                        "starving": [d["job_id"] for d in p["decisions"] if d["starving"]
