@@ -158,6 +158,39 @@ def test_fixture_passes_and_each_rule_catches_its_problem():
         assert any(expect[name] in p for p in problems), (name, problems)
 
 
+def test_length_rule_accepts_what_the_fastest_natural_voice_rate_fits():
+    """4.02 acceptance finding: a 128-word adaptation speaks in ~56.6 s at +18 % and must not be rejected; 134 words
+    cannot fit even at +18 % and still are."""
+    req = request()
+
+    def words(n):
+        h = fixture_hindi()
+        base = sum(len(sc["narration_hi"].split()) for sc in h["scenes"])
+        h["scenes"][8]["narration_hi"] += " " + " ".join(["यह"] * (n - base))
+        return h
+    assert not any("estimated spoken length" in p for p in script_qc.validate(req, words(128)))
+    assert any("estimated spoken length" in p for p in script_qc.validate(req, words(134)))
+
+
+def test_roman_numerals_may_become_digits_but_lone_i_never_counts():
+    assert script_qc.roman_numbers("receptors of class II and phase IV; I think") == {"2", "4"}
+    req = request()
+    req["scenes"][0]["narration"] += " It binds class II receptors."
+    h = fixture_hindi()
+    h["scenes"][0]["narration_hi"] += " यह क्लास 2 रिसेप्टर से जुड़ता है।"
+    assert not any("not in the English" in p for p in script_qc.validate(req, h))
+
+
+def test_length_feedback_names_the_scenes_over_their_ceiling():
+    req = request()
+    assert all(s["max_words"] >= s["target_words"] for s in req["scenes"])
+    h = fixture_hindi()
+    h["scenes"][8]["narration_hi"] += " " + " ".join(["यह"] * 40)
+    msg = [p for p in script_qc.validate(req, h) if "estimated spoken length" in p][0]
+    assert "shorten:" in msg and "scene_09 has" in msg
+    assert "NEVER exceed max_words" in translator.build_prompt(req)
+
+
 def test_devanagari_digits_count_as_the_same_number():
     assert script_qc.numbers_in("साल १९६९ में") == {"1969"}
     assert script_qc.numbers_in("1,880 लोग") == {"1880"}

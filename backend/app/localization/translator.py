@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HINDI_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash", "gemma-4-31b-it", "gemma-4-26b-a4b-it")
 HINDI_WORDS_PER_SEC = 2.0          # measured 2026-11-27: edge-tts Swara speaks ~2.07 words/s at +8 %, 2.26 at +18 %
+MAX_HINDI_WORDS_PER_SEC = 2.2      # per-scene ceiling given to the model (just under the +18 % pace)
 TRANSIENT = {408, 429, 500, 502, 503, 504}
 
 
@@ -53,6 +54,8 @@ def build_request(*, topic: str, category: str, script: Dict[str, Any], plan: Di
         secs = round(float(sc["end_sec"]) - float(sc["start_sec"]), 2)
         scenes.append({"scene_id": sc["scene_id"], "stage": sc.get("stage"), "seconds": secs,
                        "target_words": max(3, round(secs * HINDI_WORDS_PER_SEC)),
+                       # hard ceiling: what the fastest natural voice rate (+18 %) fits into the scene's time
+                       "max_words": max(4, int(secs * MAX_HINDI_WORDS_PER_SEC)),
                        "narration": sc.get("narration") or "", "headline": sc.get("headline") or "",
                        "highlight": sc.get("highlight") or "", "labels": list(sc.get("labels") or []),
                        "number_units": [n.get("unit") for n in (sc.get("numbers") or []) if n.get("unit")]})
@@ -71,7 +74,9 @@ def build_prompt(req: Dict[str, Any], feedback: Sequence[str] = ()) -> str:
         "Adapt the hook, transitions, punchline and ending for Hindi audiences (a curiosity question or a surprising "
         "turn works well), keeping the same story arc and tone.",
         "narration_hi: spoken Hindi in Devanagari ONLY (write names and technical terms in Devanagari as they are "
-        "pronounced, e.g. 'बायोल्यूमिनेसेंस'). Aim for about target_words words per scene so the timing fits.",
+        "pronounced, e.g. 'बायोल्यूमिनेसेंस'). Aim for about target_words words per scene and NEVER exceed max_words for a "
+        "scene: the voice must fit each scene's seconds. Hindi tends to run longer than English, so when a scene is "
+        "dense, say it more simply and briefly; keep every fact and number, drop filler words.",
         "Write numbers as digits (e.g. 1880, 3) exactly as in the English.",
         "headline_hi: a short on-screen headline in Devanagari, at most 5 words, for the same idea as the English "
         "headline. highlight_hi: copy EXACTLY one word or phrase that appears inside headline_hi (or \"\" if the "

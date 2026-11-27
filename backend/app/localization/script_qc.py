@@ -21,6 +21,11 @@ DEV_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 MIN_DEVANAGARI_SHARE = 0.85
 MIN_SECONDS, MAX_SECONDS = 30.0, 58.0
 WORDS_PER_SEC = 2.1              # measured Hindi TTS pace (2.07 words/s at +8 %, 2.26 at +18 %)
+# The voice step speeds up to +18 % (2.26 words/s, still natural) when a Short would be too long, and it measures
+# the real audio (<= 57 s) before anything renders; the final QC enforces 30-58 s. So the script estimate rejects
+# only what even the fastest natural rate cannot fit (found in the 4.02 acceptance run: 128 words were rejected
+# although they speak in about 56.6 s at +18 %).
+FASTEST_NATURAL_WORDS_PER_SEC = 2.26
 STOP_CAPS = {"The", "A", "An", "In", "On", "At", "It", "Its", "This", "That", "These", "Those", "And", "But", "Or",
              "So", "When", "What", "Why", "How", "Who", "Where", "Which", "If", "As", "For", "From", "To", "Of", "By",
              "With", "Each", "Every", "Some", "Many", "Most", "Today", "Now", "Then", "There", "Here", "They", "We",
@@ -38,6 +43,16 @@ def numbers_in(text: str) -> Set[str]:
     t = (text or "").translate(DEV_DIGITS)
     t = re.sub(r"(?<=\d)[,٬](?=\d{3}\b)", "", t)
     return {n.lstrip("0") or "0" for n in re.findall(r"\d+(?:\.\d+)?", t)}
+
+
+ROMAN = {"II": "2", "III": "3", "IV": "4", "V": "5", "VI": "6", "VII": "7", "VIII": "8", "IX": "9", "X": "10",
+         "XI": "11", "XII": "12"}
+
+
+def roman_numbers(text: str) -> Set[str]:
+    """Uppercase Roman numerals II-XII written as words ("class II"); a lone "I" is the pronoun and never counts.
+    They may appear in Hindi as digits, so they are allowed there but not required (Hindi may say the number)."""
+    return {ROMAN[w] for w in re.findall(r"\b[IVX]{1,4}\b", text or "") if w in ROMAN}
 
 
 def proper_names(text: str) -> Set[str]:
@@ -102,7 +117,7 @@ def validate(req: Dict[str, Any], hindi: Dict[str, Any]) -> List[str]:
         hi_all += " " + nar + " " + head
         total_words += len(nar.split())
     missing = numbers_in(en_all) - numbers_in(hi_all)
-    extra = numbers_in(hi_all) - numbers_in(en_all)
+    extra = numbers_in(hi_all) - numbers_in(en_all) - roman_numbers(en_all)
     if missing:
         problems.append(f"numbers missing in Hindi: {', '.join(sorted(missing))}")
     if extra:
@@ -113,8 +128,14 @@ def validate(req: Dict[str, Any], hindi: Dict[str, Any]) -> List[str]:
     if uncovered:
         problems.append(f"names/terms not preserved or not in the term list: {', '.join(sorted(uncovered)[:8])}")
     est = total_words / WORDS_PER_SEC
-    if not MIN_SECONDS * 0.9 <= est <= MAX_SECONDS * 1.05:
+    est_fastest = total_words / FASTEST_NATURAL_WORDS_PER_SEC
+    if not (MIN_SECONDS * 0.9 <= est and est_fastest <= MAX_SECONDS):
+        by_id = {s.get("scene_id"): s for s in hindi.get("scenes") or []}
+        over = [f"{r['scene_id']} has {len(str(by_id.get(r['scene_id'], {}).get('narration_hi', '')).split())} words "
+                f"(max {r['max_words']})" for r in req["scenes"] if r.get("max_words")
+                and len(str(by_id.get(r["scene_id"], {}).get("narration_hi", "")).split()) > r["max_words"]]
         problems.append(f"estimated spoken length {round(est)} s is outside {int(MIN_SECONDS)}-{int(MAX_SECONDS)} s "
                         f"({total_words} words); aim for about "
-                        f"{round(float(req.get('total_seconds') or 50.0) * WORDS_PER_SEC)} words in total")
+                        f"{round(float(req.get('total_seconds') or 50.0) * WORDS_PER_SEC)} words in total"
+                        + (f"; shorten: {'; '.join(over[:6])}" if over else ""))
     return problems
