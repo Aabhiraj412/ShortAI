@@ -407,7 +407,18 @@ def enqueue(source_job_id: str, *, operator: str, coordinator=None, localizer: O
     if row["status"] in TERMINAL:
         return {"localization": row, "queued": False, "reason": f"localization is {row['status']}"}
     coord = coordinator or get_coordinator()
-    job_id = f"loc_{row['target_channel_key']}_{source_job_id}_a{int(row['attempts'])}"
+    from backend.app.scheduler.production_coordinator import TERMINAL as COORD_TERMINAL
+    base = f"loc_{row['target_channel_key']}_{source_job_id}_a{int(row['attempts'])}"
+    # 2026-11-28 fix: a reopened localization (e.g. retranslation after a creative rejection, which keeps attempts at
+    # 0) reused the id of its FINISHED coordinator job and was silently not queued. A finished job gets a new run id
+    # (_r1, _r2, ...); a queued or running job with the same id is still the idempotent duplicate.
+    job_id, n = base, 0
+    while True:
+        prev = coord.get_job(job_id)
+        if not prev or prev.get("state") not in COORD_TERMINAL:
+            break
+        n += 1
+        job_id = f"{base}_r{n}"
     res = coord.enqueue(kind=KIND, title=f"Hindi: {row.get('source_topic_title') or source_job_id}",
                         steps=COORDINATOR_STEPS, requested_by=operator, priority=40, job_id=job_id,
                         queue=LOCALIZATION, checkpoint={"localization_id": row["id"]})

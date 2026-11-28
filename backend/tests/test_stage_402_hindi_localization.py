@@ -888,3 +888,21 @@ def test_capitalised_word_after_a_colon_is_not_a_name():
     names = script_qc.proper_names(text)
     assert "Small" not in names
     assert {"Water", "Mars", "NASA", "Curiosity"} <= names           # real names and acronyms are still required
+
+
+def test_reopened_localization_gets_a_new_coordinator_run_when_the_old_one_finished(world, tmp_path):
+    """2026-11-28 production #5: retranslation after a creative rejection keeps attempts at 0, so it reused the id of
+    its COMPLETED coordinator job and was not queued ("queued": false)."""
+    import sqlite3
+    from backend.app.scheduler import production_coordinator as pc
+    from test_production_coordinator_337 import make
+    coord, w, clock = make(tmp_path, executors={KIND: lambda ctx: {}}, db_name="coord_r.db")
+    first = enqueue(JOB, operator="op", coordinator=coord, localizer=world.loc)
+    assert first["queued"] is True and first["coordinator_job"].endswith("_a0")
+    with sqlite3.connect(coord.db_path) as c:                       # the run finished (e.g. creative rejection)
+        c.execute("UPDATE production_queue_jobs SET state=? WHERE id=?", (pc.COMPLETED, first["coordinator_job"]))
+    second = enqueue(JOB, operator="op", coordinator=coord, localizer=world.loc)
+    assert second["queued"] is True and second["coordinator_job"] == first["coordinator_job"] + "_r1"
+    assert coord.get_job(first["coordinator_job"])["state"] == pc.COMPLETED          # history kept
+    third = enqueue(JOB, operator="op", coordinator=coord, localizer=world.loc)
+    assert third["queued"] is False and third["coordinator_job"] == second["coordinator_job"]   # still idempotent
