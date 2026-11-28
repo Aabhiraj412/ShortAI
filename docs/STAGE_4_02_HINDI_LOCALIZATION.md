@@ -304,8 +304,22 @@ The CPU and RAM profile of a render is the dry-run measurement above: render CPU
 | §7.2 / §7.3 acceptance runs | Passed Hindi QC, but in a **scratch database and scratch media**. They prove the pipeline end to end; they are not a production record. |
 | Production localizations (`content_localizations`) | #1–#4 (`cycle_22`, `cycle_21`, `cycle_20`, `cycle_23` of 2026-11-27): **FAILED**, "infrastructure failures exhausted the coordinator attempts". They ran before the quota-resilience fix (§10) and were kept unchanged. #5 (`cycle_24_20261127_2300`): **WAITING** (`PROVIDER_WAIT`), 0 attempts used. It waits for the Gemini free-tier reset (13:35 IST), when the coordinator resumes it automatically. |
 | Hindi videos that passed QC in production | **None yet**, so `hindi_publications` is empty. |
-| **Stage 4.02** | **Not complete.** The remaining acceptance condition is a production localization reaching QC_PASSED (and a visual check of its frames). Nothing was forced: no extra production cycle, no QC bypass. The four FAILED records stay as they are; retrying one needs only the existing Retry action once the quota is available. |
+| **Stage 4.02** | **Complete (production acceptance 2026-11-28 14:17 IST, §12.3).** At the time of this check it was not complete; the condition was a production localization reaching QC_PASSED plus a visual check of its frames. Nothing was forced. |
 | Stage 4.03 | **Not defined** anywhere in the repository (docs, code or git history). Nothing was started or labelled 4.03. The unified queue below is a 4.02 publishing follow-up. |
+
+### 12.3 Production acceptance (2026-11-28): complete
+
+**Record.** Production localization #5 (`cycle_24_20261127_2300`, "Water on Mars") waited in PROVIDER_WAIT (every Hindi model on free-tier quota) from the morning until the Gemini reset, then ran voice → render → QC and reached **QC_PASSED at 14:17 IST** with 0 coordinator attempts used. #6 (`cycle_10_20261128_0900`) also reached QC_PASSED. #1–#4 stay FAILED and were not retried. The re-run followed the fixes `a5b9710` (translator feedback / proper-name QC) and `c8bda38` (re-run id).
+
+**Hindi QC (`qc_json`):** passed, classification PASSED, no creative or technical problems; 49.96 s.
+
+**Independent verification (read-only, 14:20 IST):**
+- ffprobe: h264 1080×1920, 30/1 fps, 1498 frames, 49.93 s; AAC 48 kHz stereo, 49.96 s; 18.1 MB. Audio mean −16.9 dB, max −4.6 dB; no silent gap ≥ 1.5 s.
+- Voice: edge-tts `hi-IN-SwaraNeural`, 9 scene clips, 49.24 s; voice form in code-mixed Devanagari + Latin (internal, never shown), e.g. "Mars के surface पर थोड़ा liquid water कभी मिलता है,".
+- Subtitles: 14 ASS events in Roman-script Hinglish ("Mars ke surface par thoda liquid water kabhi milta hai,"), last event ends 49.34 s; **no Devanagari**.
+- Frames at 1, 8, 16, 26, 36 and 47 s, inspected: "Water on Mars" with the SPACE AND ASTRONOMY chip, "Traces of Moisture", "Underground Water" (THE SETUP), "Deep Subsurface Ice" (THE TWIST), "Earth-based Telescope" with the 1963 marker, and the "Subscribe to CrazzyDocs" outro. English on-screen text in the English engine's typography, as §0 requires; no Devanagari, no clipped or overlapping text, no blank frame.
+
+**Publishing.** The Hindi queue planned both videos (#5 publication 8 at 2026-11-29 00:00 IST, #6 publication 1 at 2026-11-29 10:00 IST) as SCHEDULED, but the gate reports `can_publish: false` ("Hindi publishing is not authorized"), so nothing uploads. Hindi publishing still needs separate operator authorization.
 
 ### 12.2 One YouTube Publishing Queue
 
