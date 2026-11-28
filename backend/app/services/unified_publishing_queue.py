@@ -83,9 +83,11 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
     at = _parse(it.get("scheduled_at_utc"))
     vid = it.get("youtube_video_id")
     actions: List[str] = []
+    # Hindi channel publishing authorization (from the shared guard); None when unknown (older callers)
+    authorized = ((it.get("eligibility") or {}).get("checks") or {}).get("publishing_authorized")
     if qc_ok:                                  # never an action on a video that has not passed Hindi QC
         if state in ("DRAFT", "SCHEDULED", "FAILED"):
-            actions += ["edit", "schedule", "publish_now"]
+            actions += ["edit", "schedule"] + ([] if authorized is False else ["publish_now"])
         if state in ("SCHEDULED", "FAILED"):
             actions.append("unschedule")
         if state in ("FAILED", "NEEDS_CHECK"):
@@ -104,7 +106,9 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
                       "status": th.get("state") or ("asset ready" if it.get("thumbnail_asset") else "no thumbnail asset"),
                       "editable": False, "note": "the English Short's thumbnail, set after YouTube processing"},
         "scheduled_at_utc": _utc(at), "scheduled_ist": _ist(at),
-        "youtube_status": HINDI_STATUS.get(state, state), "state": state, "privacy": "private until publish time",
+        "youtube_status": ("Scheduled internally (Hindi publishing not authorized; nothing is on YouTube)"
+                           if state == "SCHEDULED" and authorized is False else HINDI_STATUS.get(state, state)),
+        "state": state, "privacy": "private until publish time",
         "youtube_video_id": vid, "youtube_url": f"https://youtu.be/{vid}" if vid else None,
         "error": it.get("last_error"), "actions": actions,
         "approved": bool(it.get("approved")), "approved_by": it.get("approved_by"),

@@ -605,3 +605,48 @@ def test_metadata_edit_clears_auto_approval_and_it_is_not_reapplied(env):
     env.pub.update_metadata(1, title="Edited | Hinglish", description="d", tags=["a"])
     env.pub.sync()
     assert env.pub.get(1)["approved_at_utc"] is None       # an edit needs a manual re-approval
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Scheduling fixes: English metadata link, internal-only Scheduled label, operator times kept on re-plan
+# ---------------------------------------------------------------------------------------------------------------
+def test_hindi_row_takes_the_english_ledger_metadata_by_topic(env):
+    with sqlite3.connect(env.db) as c:
+        c.execute("CREATE TABLE persistent_jobs (id TEXT PRIMARY KEY, topic_title TEXT)")
+        c.execute("CREATE TABLE publishing_ledger (id INTEGER PRIMARY KEY, topic_title TEXT, metadata_json TEXT, "
+                  "thumbnail_path TEXT)")
+        c.execute("INSERT INTO persistent_jobs VALUES (?, 'Water on Mars')", (JOB,))
+        c.execute("INSERT INTO publishing_ledger VALUES (1, 'Water on Mars', ?, NULL)",
+                  (json.dumps({"title": "Water on Mars #Shorts", "description": "English description.",
+                               "tags": ["mars", "space"], "category_id": "28"}),))
+    env.pub.sync()
+    r = env.pub.get(1)
+    assert r["title"] == "Water on Mars #Shorts | Hinglish"
+    assert r["description"] == "Hinglish version. English description." and r["tags"][:2] == ["mars", "space"]
+    assert r["category_id"] == "28"
+
+
+def test_unauthorized_hindi_row_is_labelled_internal_and_has_no_publish_now(env):
+    from backend.app.services.unified_publishing_queue import hindi_row
+    with sqlite3.connect(env.db) as c:
+        c.execute("UPDATE content_localizations SET qc_json='{\"passed\": true}' WHERE id=1")
+    env.pub.sync()
+    env.pub.schedule_item(1)
+    row = hindi_row(env.pub.queue()["items"][0])
+    assert "publish_now" not in row["actions"] and "schedule" in row["actions"]
+    assert row["youtube_status"].startswith("Scheduled internally")
+    authorize(env)
+    row = hindi_row(env.pub.queue()["items"][0])
+    assert "publish_now" in row["actions"] and row["youtube_status"].startswith("Scheduled (uploads")
+
+
+def test_replan_keeps_an_operator_chosen_time_of_day(env):
+    env.pub.sync()
+    want = NOW + timedelta(hours=3, minutes=7)                       # 14:37 IST, not the cycle's 20:00
+    env.pub.schedule_item(1, want.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    env.clock.t = want + timedelta(minutes=5)                        # missed (not authorized)
+    env.pub.tick()
+    assert env.pub.get(1)["scheduled_at_utc"] == (want + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    env.clock.t = want + timedelta(days=1, minutes=5)                # missed again: still the operator's time
+    env.pub.tick()
+    assert env.pub.get(1)["scheduled_at_utc"] == (want + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")

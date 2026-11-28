@@ -63,6 +63,7 @@ PUBLISH_MIN_LEAD = timedelta(minutes=15)  # YouTube needs publishAt in the futur
 UPLOAD_LEAD = timedelta(hours=2)          # upload this long before the slot (YouTube publishes at publishAt)
 MIN_LEAD = timedelta(minutes=20)
 STALE_UPLOAD = timedelta(minutes=45)
+INDIVIDUAL_NEXT_DAY = "same time on the next day"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS hindi_publications (
@@ -345,9 +346,10 @@ class HindiPublisher:
     def _english_metadata(self, source_job_id: str) -> Dict[str, Any]:
         try:
             with sqlite3.connect(Path(self.db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=10) as c:
-                r = c.execute("SELECT l.metadata_json, l.thumbnail_path FROM publishing_ledger l "
-                              "JOIN persistent_jobs j ON j.publishing_ledger_id = l.id WHERE j.id=?",
-                              (source_job_id,)).fetchone()
+                # persistent_jobs has no ledger id column: the job and its ledger entry share the topic title
+                r = c.execute("SELECT l.metadata_json, l.thumbnail_path FROM persistent_jobs j "
+                              "JOIN publishing_ledger l ON l.topic_title = j.topic_title WHERE j.id=? "
+                              "ORDER BY l.id DESC LIMIT 1", (source_job_id,)).fetchone()
         except sqlite3.Error:
             r = None
         meta = json.loads(r[0] or "{}") if r else {}
@@ -660,17 +662,29 @@ class HindiPublisher:
                                                "scheduled_at_utc < ?", (_ts(now + PUBLISH_MIN_LEAD),))]
         n = 0
         for r in rows:
-            p = self.plan(r, exclude=r["id"])
-            if p["at"] is None:                                   # individual time without a plan: next day
+            # an operator-chosen (individual) time keeps its time of day; only a planned time follows the plan
+            p = {"at": None} if self._individual_time(r["id"]) else self.plan(r, exclude=r["id"])
+            if p["at"] is None:                                   # individual time (or no plan): next day
                 at = _parse(r["scheduled_at_utc"])
                 while at < now + MIN_LEAD:
                     at += timedelta(days=1)
-                p = {"at": at, "reason": "same time on the next day"}
+                p = {"at": at, "reason": INDIVIDUAL_NEXT_DAY}
             if self._update(r["id"], "REPLANNED", {"from": r["scheduled_at_utc"], "to": _ts(p["at"]),
                                                    "why": p["reason"]}, expect=(SCHEDULED,),
                             scheduled_at_utc=_ts(p["at"])):
                 n += 1
         return n
+
+    def _individual_time(self, pid: int) -> bool:
+        """True when the row's current time was chosen by the operator (its latest schedule event)."""
+        with self._connect() as c:
+            r = c.execute("SELECT detail FROM hindi_publication_events WHERE publication_id=? AND event IN "
+                          "('SCHEDULED','REPLANNED') ORDER BY id DESC LIMIT 1", (pid,)).fetchone()
+        try:
+            why = (json.loads(r[0]) or {}).get("why") if r and r[0] else None
+        except (ValueError, AttributeError):
+            why = None
+        return why in ("individual time", INDIVIDUAL_NEXT_DAY)
 
     def unschedule(self, pid: int) -> Dict[str, Any]:
         if not self._update(pid, "UNSCHEDULED", None, expect=(SCHEDULED, FAILED), state=DRAFT, scheduled_at_utc=None):
