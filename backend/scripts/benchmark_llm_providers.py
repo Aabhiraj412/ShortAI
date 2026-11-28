@@ -74,7 +74,7 @@ def run_target(provider: str, model: str, topic, gemini_client):
             feedback = ["the answer was not valid JSON"]
             continue
         sections = data.get("sections") or []
-        problems = gsw.validate_sections(sections, gsw.fact_corpus(topic))
+        problems = gsw.validate_sections(sections, gsw.fact_corpus(topic), getattr(topic, "title", "") or "")
         if not problems:
             break
         feedback = problems

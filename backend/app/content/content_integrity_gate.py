@@ -135,12 +135,20 @@ class ContentIntegrityGate:
         # Check topic entities in narration
         # words only: "Regulus (Turner)" must yield "turner", not "(turner)", which no narration can contain
         # (cycle_1_20261114 failed QC on exactly that while its narration named Turner)
-        topic_words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z]+)?", title_lower) if len(w) > 3]
-        matches = [w for w in topic_words if w in narr_lower]
-        if len(matches) < 2 and len(topic_words) >= 2:
-            report.add_result("CHECK_A_TOPIC_NARRATION", False, f"Narration lacks topic keywords (found {matches} out of {topic_words}).")
+        # The rule lives in content.topic_coverage, shared with the script writer so it catches what this rejects.
+        # Never stricter than the legacy verbatim rule; also accepts inflections, clippings and the title acronym,
+        # and does not require generic framing words (cycle_5_20261128_0400: "GPTs ... the transformer").
+        from backend.app.content import topic_coverage
+        cov = topic_coverage.check(topic_title, narration_text)
+        if not cov.passed:
+            report.add_result("CHECK_A_TOPIC_NARRATION", False,
+                              f"Narration lacks topic keywords (found {cov.legacy_matches} out of {cov.terms}; "
+                              f"essential concepts covered {cov.covered} of {cov.essential}, {cov.required} required).")
         else:
-            report.add_result("CHECK_A_TOPIC_NARRATION", True, f"Topic keywords verified in narration ({len(matches)} matched).")
+            how = "verbatim" if cov.legacy_passed else (f"acronym {cov.acronym.upper()}" if cov.acronym else "natural forms")
+            report.add_result("CHECK_A_TOPIC_NARRATION", True,
+                              f"Topic keywords verified in narration ({len(cov.legacy_matches)} matched verbatim; "
+                              f"essential concepts covered {cov.covered} via {how}).")
 
         # Cross-contamination check: Non-nuclear story cannot reference nuclear bombs in narration
         is_nuclear_topic = any(k in title_lower for k in ("atomic", "nuclear", "bomb", "yamaguchi", "plutonium", "hiroshima", "nagasaki"))

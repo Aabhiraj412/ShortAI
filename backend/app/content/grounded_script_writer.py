@@ -114,8 +114,9 @@ def fact_corpus(topic: Any) -> str:
     return "\n".join(str(p) for p in parts if p)
 
 
-def validate_sections(sections: Sequence[Dict[str, Any]], corpus: str) -> List[str]:
-    """Returns the list of problems; empty means the script is acceptable."""
+def validate_sections(sections: Sequence[Dict[str, Any]], corpus: str, title: str = "") -> List[str]:
+    """Returns the list of problems; empty means the script is acceptable. With ``title``, also the production QC
+    topic-coverage rule (content.topic_coverage, CHECK_A), so a draft QC would reject gets one revision instead."""
     problems: List[str] = []
     stages = [str(s.get("stage", "")).upper() for s in sections]
     if tuple(stages) != STAGES:
@@ -144,6 +145,11 @@ def validate_sections(sections: Sequence[Dict[str, Any]], corpus: str) -> List[s
               if " ".join(out[i:i + COPY_NGRAM]) in src_grams]
     if copied:
         problems.append(f"copied verbatim from the source, rewrite in your own words: \"{copied[0]}\"")
+    if title:
+        from backend.app.content import topic_coverage
+        cov = topic_coverage.check(title, full)
+        if not cov.passed:
+            problems.append(cov.feedback())
     return problems
 
 
@@ -169,6 +175,7 @@ def build_prompt(topic: Any, hook_type: Tuple[str, str], suggested_hook: str,
         f"- Do not copy any run of {COPY_NGRAM} or more words from the research. Rewrite.",
         "- No parentheses, no URLs, no stage directions, no 'subscribe' or 'in this video'.",
         "- Do not open with a dictionary definition of the topic.",
+        "- Name the topic itself in the narration: use its key title words (any natural form) or its usual acronym.",
         "",
         "Return JSON only:",
         '{"angle": "one sentence: the specific angle this script takes",',
@@ -413,7 +420,7 @@ def write_grounded_script(topic: Any, hook_text: str, *, job_id: str, execution_
                         calls = info["calls"]
                         data = _parse(raw)
                         sections = data.get("sections") or []
-                        feedback = validate_sections(sections, corpus)
+                        feedback = validate_sections(sections, corpus, getattr(topic, "title", "") or "")
                     except Exception as exc:   # API, quota, timeout or malformed JSON: never fail the production
                         calls = calls or list(getattr(exc, "calls", []))
                         feedback = [f"{type(exc).__name__}"]
