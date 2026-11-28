@@ -852,3 +852,39 @@ def test_provider_wait_keeps_attempts_and_defers_the_job(world, monkeypatch):
     with pytest.raises(pc.StepDeferred) as e:
         pl.executor(ctx)
     assert e.value.until == retry_at and world.loc.get(lid)["status"] == "WAITING"   # never FAILED for waiting
+
+
+# -- 2026-11-28 production localization #5 (cycle_24_20261127_2300): rejected after one draft ---------------------
+def _one_bad_draft():
+    bad = fixture_hindi()
+    bad["scenes"][0]["highlight"] = ""                              # the real draft's problem (scene highlight)
+    return bad
+
+
+def test_overload_on_the_feedback_attempt_is_a_wait_not_a_rejection():
+    c = FakeClient({"p5_a": [_one_bad_draft(), ApiError(503)]})
+    with pytest.raises(translator.ProviderUnavailable) as e:       # one answered draft is never a final rejection
+        translator.translate(request(), client=c, models=["p5_a"], validate=script_qc.validate)
+    assert e.value.retry_at is not None and not e.value.quota
+
+
+def test_next_model_continues_with_the_first_drafts_feedback():
+    c = FakeClient({"p5_b": [_one_bad_draft(), ApiError(503)], "p5_c": [fixture_hindi()]})
+    hindi, attempts = translator.translate(request(), client=c, models=["p5_b", "p5_c"], validate=script_qc.validate)
+    assert hindi["_model"] == "p5_c"
+    assert "previous answer had these problems" in c.prompts[2][1] and "highlight" in c.prompts[2][1]
+
+
+def test_two_answered_drafts_breaking_the_rules_are_still_rejected():
+    c = FakeClient({"p5_d": [_one_bad_draft(), _one_bad_draft()], "p5_e": [fixture_hindi()]})
+    with pytest.raises(translator.TranslationRejected):
+        translator.translate(request(), client=c, models=["p5_d", "p5_e"], validate=script_qc.validate)
+    assert [m for m, _ in c.prompts] == ["p5_d", "p5_d"]
+
+
+def test_capitalised_word_after_a_colon_is_not_a_name():
+    text = ("At the core of Water on Mars is this finding: Small amounts of water vapor are present in the "
+            "atmosphere. NASA measured it with Curiosity.")
+    names = script_qc.proper_names(text)
+    assert "Small" not in names
+    assert {"Water", "Mars", "NASA", "Curiosity"} <= names           # real names and acronyms are still required

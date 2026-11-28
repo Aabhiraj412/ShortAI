@@ -201,10 +201,15 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
 
     Per model: up to two attempts (the second with the first one's problems as feedback). A provider error moves to
     the next model. A model that answered but broke the rules twice ends the chain with TranslationRejected; if no
-    model ever answered, ProviderUnavailable."""
+    model ever answered, ProviderUnavailable.
+
+    2026-11-28 fix (production localization #5): a provider error on the FEEDBACK attempt is not a second failed
+    draft. The model is cooled down, the next model continues with the first draft's problems as feedback, and when
+    none can answer it is ProviderUnavailable (a wait), never a creative rejection after only one draft."""
     from google.genai import types
     attempts: List[Dict[str, Any]] = []
-    rule_problems: List[str] = []
+    rule_problems: List[str] = []                        # set only when a model answered BOTH attempts and broke the rules
+    carried: List[str] = []                              # a one-draft model's problems, fed to the next model
     waits: List[Tuple[float, bool]] = []                 # (epoch usable again, quota?) per unavailable model
     for model in models:
         cd = _cooling(model, time.time())
@@ -213,7 +218,7 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
                              "until_utc": datetime.fromtimestamp(cd[0], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
             waits.append((cd[0], "quota" in cd[1] or "rate limit" in cd[1]))
             continue
-        feedback: List[str] = list(initial_feedback)
+        feedback: List[str] = list(carried) + list(initial_feedback)
         for attempt in (1, 2):
             t0 = time.perf_counter()
             cfg = (types.GenerateContentConfig(temperature=0.6, response_mime_type="application/json")
@@ -239,7 +244,10 @@ def translate(req: Dict[str, Any], *, client: Any, models: Sequence[str], valida
             if not problems:
                 hindi["_model"] = model
                 return hindi, attempts
-            rule_problems = problems
+            if attempt == 2:
+                rule_problems = problems                 # two answered drafts, both broke the rules
+            else:
+                carried = list(problems)
             feedback = list(problems) + list(initial_feedback)
         if rule_problems:
             break                                # the model answered but broke the rules: another model is not the fix

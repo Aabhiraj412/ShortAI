@@ -73,9 +73,11 @@ def roman_numbers(text: str) -> Set[str]:
 
 
 def proper_names(text: str) -> Set[str]:
-    """Capitalised words that are not sentence-initial, plus acronyms; a deterministic, conservative heuristic."""
+    """Capitalised words that are not sentence-initial, plus acronyms; a deterministic, conservative heuristic.
+    A word right after a colon starts a clause ("this finding: Small amounts of water ..."), so it is treated as
+    sentence-initial (2026-11-28 false positive on production localization #5)."""
     names: Set[str] = set()
-    for sent in re.split(r"(?<=[.!?])\s+", text or ""):
+    for sent in re.split(r"(?<=[.!?:])\s+", text or ""):
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", sent)
         for i, w in enumerate(words):
             core = w.strip("'-")
