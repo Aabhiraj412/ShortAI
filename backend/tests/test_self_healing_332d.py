@@ -194,8 +194,10 @@ def build(tmp_path, *, level="RECOMMEND", startup=True, environ=None, explainer=
         (data / "autonomy_startup.json").write_text('{"autonomy_execution": "enabled"}', encoding="utf-8")
     clock = Clock()
     oi = OperationalIntelligence(db_path=str(db), data_dir=str(tmp_path / "nodata"), cache_ttl=0, clock=clock)
+    # retry_backoff: no real wait between retries (the production default sleeps 2 s per retry; these tests only
+    # waited through it and never asserted its length). Retry counts and outcomes are asserted unchanged.
     cp = ControlPlane(str(db), str(data), environ={}, intelligence=lambda: oi, clock=clock,
-                      automatic_policy=None if policy else {})
+                      automatic_policy=None if policy else {}, retry_backoff=lambda attempt: 0.0)
     if level:
         cp.set_level("global", "APPROVED_EXECUTION", OP, "test")
         cp.set_level("self_healing", level, OP, "test")

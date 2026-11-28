@@ -40,11 +40,27 @@ JOBS = [
 
 
 # -- world ---------------------------------------------------------------------------------------------------------
+# Encoding 900x700 random noise as PNG takes 2-5 s per world (18 images) and every test builds a fresh world. The
+# images depend only on (seed, size), so each is encoded once per test session and its bytes are written into every
+# world's own folder: same files, same hashes, nothing shared on disk (immutable bytes only).
+_PNG_BYTES: dict = {}
+
+
+def _png_bytes(seed: int, size) -> bytes:
+    key = (seed, tuple(size))
+    if key not in _PNG_BYTES:
+        import io
+        rnd = random.Random(seed)
+        img = Image.frombytes("RGB", size, rnd.randbytes(size[0] * size[1] * 3))
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        _PNG_BYTES[key] = buf.getvalue()
+    return _PNG_BYTES[key]
+
+
 def _png(path: Path, seed: int, size=(900, 700)) -> str:
-    rnd = random.Random(seed)
-    img = Image.frombytes("RGB", size, rnd.randbytes(size[0] * size[1] * 3))
     path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(path, "PNG")
+    path.write_bytes(_png_bytes(seed, size))
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

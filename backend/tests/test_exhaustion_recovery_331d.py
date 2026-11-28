@@ -11,6 +11,20 @@ from backend.app.orchestration import crazzydocs_master_orchestrator as om
 from topic_fakes_331 import make_engine, web_for_every_query
 
 
+@pytest.fixture(autouse=True)
+def no_real_pacing_sleep(monkeypatch):
+    """Recovery paces its requests with real sleeps (min_request_interval_seconds, ~21 s per test here). A call that
+    does not inject ``sleep`` gets a no-op (requests, bounds and outcomes are unchanged); tests that verify pacing pass
+    their own recorder (test_time_budget_and_politeness) and keep it. Pacing itself: test_wikimedia_rate_limit_335b."""
+    from backend.app.content.curiosity_topic_engine import CuriosityTopicEngine
+    real = CuriosityTopicEngine.recover_from_exhaustion
+
+    def recover(self, *args, **kwargs):
+        kwargs.setdefault("sleep", lambda s: None)
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(CuriosityTopicEngine, "recover_from_exhaustion", recover)
+
+
 def _seed(eng, title):
     eng.ledger.record_content(ContentRecord(
         topic_id=f"t_{title}", topic_title=title, opening_hook=f"Hook {title}", main_subject=title, key_entities=[title],

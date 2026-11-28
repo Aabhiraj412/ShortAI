@@ -124,6 +124,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | `13e846b` | **3.37** Multi-pipeline production and resource coordinator (deployed; long-form OFF, no executor) |
 | (2026-11-28, queue) | One YouTube Publishing Queue (All / English / Hindi; `/api/publishing/unified`, display only); channel administration moved to a Channels & Localization tab |
 | (2026-11-28, this deploy) | Free AI provider layer (`services/llm_providers.py`, Groq integrated but disabled, `docs/AI_PROVIDERS.md`); dashboard Analytics (re)authorization with verify-before-save and one Analytics state model; complete Edit Cycle window (English + Hindi times) |
+| (2026-11-28, test suite phase 1) | Test-suite speed-up, no production code: cached community test images, short real animation clips in the 3_21m priority test (3_21i keeps full rendering, marked `slow`), no real pacing / retry sleeps in the exhaustion and self-healing tests, `pytest.ini` (marker, keep only failed tests' tmp dirs), `backend/scripts/select_tests.py` (FAST / RELATED / FULL). Full suite 22:04 -> 15:38, same 4 failures and 175 skips |
 | (2026-11-28, retry rewrite) | A retry rewrites a cached script that the topic rule blocks, never reuses that attempt's video; bracketed disambiguators optional in topic coverage |
 | `aed5b10` (2026-11-28, topic coverage) | Shared topic-coverage rule (`content/topic_coverage.py`) used by the script writer (one revision with feedback) and QC CHECK_A (never stricter than before; accepts inflections, clippings and the title acronym; generic title words not required) |
 | `fed2845` | **3.36** Autopilot continuous production controller (deployed; Autopilot OFF) |
@@ -169,7 +170,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3 | **QC duration failures** | Duration 49.2 s, outside the 50–58 s window; seen after rendering. |
 | 4 | **High recovery-window expiry rate** | 40 of 98 jobs; YouTube daily quota exhaustion also delays publishing. |
 | 5 | **Monitor false unhealthy** | **Fixed in 3.32H** (2 s timeout on a ~2 s aggregate endpoint). The monitor now uses liveness/readiness probes and persists every decision. |
-| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite (remediation closure): 2015 passed, 4 failed, 174 skipped)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
+| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite (2026-11-28, test-suite phase 1): 2155 passed, 4 failed, 175 skipped, 15 min 38 s serial; before phase 1: same results in 22 min 4 s)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
 | 7 | **DNS rebinding** | Could expose the CSRF token through a read (pre-existing; writes still need an allow-listed Origin). A Host-header allow-list is the suggested fix. |
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
@@ -276,7 +277,12 @@ Outside these stages, still open:
 # tests against the dev worktree (Git Bash; Windows-style PYTHONPATH, otherwise imports resolve to the main checkout)
 W='D:\Agents\CrazzyDocs\.claude\worktrees\crazzy-docs-handover-b1a088'
 PYTHONPATH="$W;$W\\backend;$W\\backend\\tests" /d/Agents/CrazzyDocs/.venv/Scripts/python.exe -m pytest backend/tests/<file>.py -q -p no:cacheprovider
-# full suite: about 23 min, run it in the background; baseline = 4 failures (section 4, item 6)
+# test levels (serial; CLAUDE.md step 3 says which level a change needs): FAST ~1.5 min, RELATED ~5-10 min, FULL ~16 min
+/d/Agents/CrazzyDocs/.venv/Scripts/python.exe backend/scripts/select_tests.py                     # plan: required level + selection
+/d/Agents/CrazzyDocs/.venv/Scripts/python.exe backend/scripts/select_tests.py --level fast --run
+/d/Agents/CrazzyDocs/.venv/Scripts/python.exe backend/scripts/select_tests.py --level related --run
+/d/Agents/CrazzyDocs/.venv/Scripts/python.exe backend/scripts/select_tests.py --level full --run   # in the background
+# baseline = 4 failures (section 4, item 6); 175 skipped (152 path-guarded, 17 live-DB audits, 6 others)
 
 # live state (read-only)
 curl -s http://127.0.0.1:8000/api/control-center/deployment      # daemon/dashboard revision, active job, restart safety

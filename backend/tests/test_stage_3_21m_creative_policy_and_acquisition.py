@@ -334,7 +334,17 @@ def test_category_script_identical_across_validation_and_production():
     assert 90 <= s_val["word_count"] <= 135
 
 
-def test_storyboard_priority_abcd_reuse_limits_and_integrity_parity(tmp_path):
+def test_storyboard_priority_abcd_reuse_limits_and_integrity_parity(tmp_path, monkeypatch):
+    # This test covers sourcing priority, reuse limits and context parity, not animation quality. The real renderer
+    # still runs (real MP4s, real metadata), each clip cut to 0.2 s: two 20-beat storyboards otherwise render ~30
+    # full-length 1080x1920 clips (136 s). Full-length rendering stays covered by test_stage_3_21i (marked slow).
+    from backend.app.rendering.explainer_animation_engine import ExplainerAnimationEngine
+    real_render = ExplainerAnimationEngine.render_explainer_animation_mp4
+
+    def short_render(self, **kw):
+        kw["duration_sec"] = min(float(kw["duration_sec"]), 0.2)
+        return real_render(self, **kw)
+    monkeypatch.setattr(ExplainerAnimationEngine, "render_explainer_animation_mp4", short_render)
     topic = _make_sample_topic()
     ws = ProductionWorkspace(
         production_id="test_3_21m_sb",

@@ -143,6 +143,7 @@ def test_force_topic_id_cannot_bypass_duplicate_check_in_production_or_validatio
         assert "duplicate/cooldown" in str(exc.value)
 
 
+@pytest.mark.slow          # renders 15 full-length explainer animations (~80 s): the real-rendering coverage
 def test_structured_script_and_20_beat_storyboard_builder(tmp_path):
     sample_topic = ScoredTopic(
         id="live_antikythera",
