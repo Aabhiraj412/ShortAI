@@ -149,10 +149,14 @@ def evaluate(channel_key: str, item: Dict[str, Any], *, registry, media_dir: Opt
     check("path_inside_channel_media", real is not None,
           "the video file is missing or outside the Hindi media folder")
     current = sha256_file(real) if real is not None else None
-    check("hash_matches_qc", bool(current and qc_hash and current == qc_hash),
-          "the video file differs from the QC-passed output (SHA-256 mismatch)")
-    check("hash_matches_approval", bool(current and item.get("approved_sha256") == current),
-          "the video file differs from the approved file (SHA-256 mismatch)")
+    approved_hash = item.get("approved_sha256")
+    # a mismatch is reported only when there is a recorded hash to compare (a missing hash has its own reason)
+    checks["hash_matches_qc"] = bool(current and qc_hash and current == qc_hash)
+    if qc_hash and current and current != qc_hash:
+        reasons.append("the video file differs from the QC-passed output (SHA-256 mismatch)")
+    checks["hash_matches_approval"] = bool(current and approved_hash == current)
+    if approved_hash and current and current != approved_hash:
+        reasons.append("the video file differs from the approved file (SHA-256 mismatch)")
     at = item.get("scheduled_at_utc")
     try:
         when = datetime.fromisoformat(str(at).replace("Z", "+00:00")) if at else None

@@ -633,11 +633,15 @@ def test_unauthorized_hindi_row_is_labelled_internal_and_has_no_publish_now(env)
     env.pub.sync()
     env.pub.schedule_item(1)
     row = hindi_row(env.pub.queue()["items"][0])
-    assert "publish_now" not in row["actions"] and "schedule" in row["actions"]
+    assert "publish_now" not in row["actions"] and "schedule" not in row["actions"]   # unapproved too
     assert row["youtube_status"].startswith("Scheduled internally")
     authorize(env)
     row = hindi_row(env.pub.queue()["items"][0])
-    assert "publish_now" in row["actions"] and row["youtube_status"].startswith("Scheduled (uploads")
+    assert "publish_now" not in row["actions"] and "approve" in row["actions"]          # still unapproved
+    env.pub.approve(1, actor="op")
+    row = hindi_row(env.pub.queue()["items"][0])
+    assert {"schedule", "publish_now"} <= set(row["actions"]) and row["approval_source"] == "operator"
+    assert row["youtube_status"].startswith("Scheduled (uploads")
 
 
 def test_replan_keeps_an_operator_chosen_time_of_day(env):
@@ -650,3 +654,53 @@ def test_replan_keeps_an_operator_chosen_time_of_day(env):
     env.clock.t = want + timedelta(days=1, minutes=5)                # missed again: still the operator's time
     env.pub.tick()
     assert env.pub.get(1)["scheduled_at_utc"] == (want + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Stage 4.04 fixes: quota attribution, hash wording, health, attention
+# ---------------------------------------------------------------------------------------------------------------
+def test_localized_channel_identity_checks_are_counted_as_hindi_quota(tmp_path):
+    from backend.app.channels.registry import _default_oauth_factory
+    assert _default_oauth_factory(str(tmp_path / "t.json"), False).quota_purpose == "hindi_identity_verification"
+    assert _default_oauth_factory(str(tmp_path / "t.json"), True).quota_purpose == "dashboard_auth_status"
+    assert yq.channel_of("hindi_identity_verification") == "hi"
+
+
+def test_no_mismatch_reason_without_a_recorded_hash(env):
+    env.pub.sync()
+    reasons = env.pub.eligibility(env.pub.get(1))["reasons"]
+    assert "no QC-verified SHA-256 is recorded for this video" in reasons
+    assert not any("mismatch" in r for r in reasons)
+    _ready(env)
+    _video(env).write_bytes(b"" * 64)
+    assert any("mismatch" in r for r in env.pub.eligibility(env.pub.get(1))["reasons"])     # real change reported
+
+
+def test_queue_health_reports_next_and_last_upload_and_attention(env, monkeypatch):
+    monkeypatch.setattr(hp.HindiPublisher, "_thumbnails", lambda self: [])
+    env.pub.quota.usage_by_channel = lambda: {"hi": {"general": 3}}
+    _ready(env)
+    h = env.pub.queue()["health"]
+    assert h["next_upload"]["id"] == 1 and h["last_upload"] is None and h["approved"] == 1
+    env.pub.tick()
+    h = env.pub.queue()["health"]
+    assert h["last_upload"]["youtube_video_id"] == "hv1" and h["next_upload"] is None
+    assert h["quota_today_by_channel"] == {"hi": {"general": 3}}
+
+
+def test_attention_lists_hindi_upload_failures_and_stale_english_entries(tmp_path):
+    from backend.app.services import operator_attention as oa
+    db = tmp_path / "s.db"
+    with sqlite3.connect(db) as c:
+        c.executescript(hp.SCHEMA)
+        c.execute("INSERT INTO hindi_publications (localization_id, source_job_id, video_path, title, state, attempts, "
+                  "last_error, created_at_utc, updated_at_utc) VALUES (1,'j1','/v','t','NEEDS_CHECK',1,'interrupted','x','x')")
+        c.execute("INSERT INTO hindi_publications (localization_id, source_job_id, video_path, title, state, attempts, "
+                  "created_at_utc, updated_at_utc) VALUES (2,'j2','/v','t','FAILED',1,'x','x')")       # retry left
+        c.execute("CREATE TABLE publishing_ledger (id INTEGER PRIMARY KEY, upload_status TEXT, upload_timestamp TEXT, "
+                  "error_details TEXT)")
+        c.execute("INSERT INTO publishing_ledger VALUES (362,'pending_queue','2026-11-22T04:47:31Z','Needs a new time')")
+        c.execute("INSERT INTO publishing_ledger VALUES (363,'pending_queue','2026-11-28T10:00:00Z',NULL)")
+    pa = oa._publishing_attention(str(db), now=datetime(2026, 11, 28, 12, tzinfo=timezone.utc))
+    assert [r["id"] for r in pa["hindi"]] == [1] and [r["id"] for r in pa["english_stale"]] == [362]

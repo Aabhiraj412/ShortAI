@@ -1663,7 +1663,7 @@ function uqActionButtons(r) {
     if (a.includes("retry")) b.push(`<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'retry')">RETRY</button>`);
     if (a.includes("approve")) b.push(`<button class="btn ok sm" data-i="${id}" onclick="hpApprove(this.dataset.i)">APPROVE VIDEO</button>`);
     if (a.includes("unapprove")) b.push(`<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'unapprove')">UNAPPROVE</button>`);
-    b.push(`<div style="color:var(--muted);font-size:11px;max-width:260px;overflow-wrap:anywhere;">${r.approved ? "Approved" : "Not approved"}${(r.blocked_by || []).length ? "<br>Blocked by: " + (r.blocked_by || []).slice(0, 4).map(x => escHtml(x)).join("; ") : ""}</div>`);
+    b.push(`<div style="color:var(--muted);font-size:11px;max-width:260px;overflow-wrap:anywhere;">${r.approved ? (r.approval_source === "automatic" ? "Approved automatically after QC" : "Approved by operator") : "Not approved"}${(r.blocked_by || []).length ? "<br>Blocked by: " + (r.blocked_by || []).slice(0, 4).map(x => escHtml(x)).join("; ") : ""}</div>`);
   }
   if (a.includes("view") && r.youtube_url) b.push(`<a href="${escHtml(r.youtube_url)}" target="_blank" rel="noopener" class="btn sm">VIEW ON YOUTUBE</a>`);
   return b.join("") || `<span style="color:var(--muted)">--</span>`;
@@ -4558,9 +4558,15 @@ async function refreshHindiPublishing() {
   try {
     const d = await apiJson("/api/hindi-publishing");
     const g = d.gates || {}, sc = d.schedule || {};
-    document.getElementById("hpGates").innerHTML = g.can_publish
+    const h = d.health || {}, q = h.quota_today_by_channel || {}, qs = k => `${((q[k] || {}).general || 0)} units, ${((q[k] || {})["videos.insert"] || 0)} uploads`;
+    document.getElementById("hpGates").innerHTML = (g.can_publish
       ? `<span class="auto-on">Hindi publishing can run</span>`
-      : `<span style="color:#fcd34d">Hindi publishing is off:</span> ${escHtml((g.reasons || []).join("; "))}`;
+      : `<span style="color:#fcd34d">Hindi publishing is off:</span> ${escHtml((g.reasons || []).join("; "))}`)
+      + `<div style="color:var(--muted);margin-top:4px;">Last Hindi upload: ${h.last_upload ? autoTime(h.last_upload.at_utc) + " · " + escHtml(h.last_upload.youtube_video_id || "") : "none yet"}`
+      + ` · Next eligible upload: ${h.next_upload ? autoTime(h.next_upload.publish_at_utc) + " (#" + escHtml(String(h.next_upload.id)) + ")" : "none (no approved video scheduled)"}`
+      + ` · Approved: ${escHtml(String(h.approved || 0))} (${escHtml(String(h.auto_approved || 0))} automatic)`
+      + ` · Needs attention: ${(h.needs_attention || []).length ? (h.needs_attention || []).map(a => "#" + escHtml(String(a.id)) + " " + escHtml(a.state)).join(", ") : "none"}`
+      + `<br>Quota today (Pacific day): English ${qs("en")} · Hindi ${qs("hi")}</div>`;
     document.getElementById("hpEnabled").checked = !!sc.enabled;
     document.getElementById("hpLimit").value = sc.daily_limit || 1;
     document.getElementById("hpAttempts").value = sc.max_attempts || 3;

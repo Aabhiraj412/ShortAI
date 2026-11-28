@@ -567,6 +567,28 @@ class HindiPublisher:
         except Exception as exc:  # noqa: BLE001 - a display helper never breaks the queue view
             return {"eligible": False, "reasons": [f"eligibility unavailable ({type(exc).__name__})"], "checks": {}}
 
+    def _health(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Stage 4.04: last upload, next eligible upload, rows needing the operator, today's quota by channel."""
+        with self._connect() as c:
+            last = c.execute("SELECT e.ts_utc, p.id, p.youtube_video_id, p.scheduled_at_utc FROM hindi_publication_events e "
+                             "JOIN hindi_publications p ON p.id = e.publication_id WHERE e.event IN "
+                             "('UPLOADED','ADOPTED_REMOTE_UPLOAD') ORDER BY e.id DESC LIMIT 1").fetchone()
+        nxt = next((i for i in items if i["state"] == SCHEDULED and (i.get("eligibility") or {}).get("eligible")), None)
+        attention = [{"id": i["id"], "state": i["state"], "attempts": i["attempts"], "error": i["last_error"]}
+                     for i in items if i["state"] in (FAILED, NEEDS_CHECK)]
+        try:
+            quota = self.quota.usage_by_channel()
+        except Exception:  # noqa: BLE001
+            quota = {}
+        return {"last_upload": ({"at_utc": last[0], "id": last[1], "youtube_video_id": last[2],
+                                 "publish_at_utc": last[3]} if last else None),
+                "next_upload": ({"id": nxt["id"], "publish_at_utc": nxt["scheduled_at_utc"], "title": nxt["title"]}
+                                if nxt else None),
+                "needs_attention": attention, "quota_today_by_channel": quota,
+                "approved": sum(1 for i in items if i.get("approved") and i["state"] not in (UPLOADED, WITHDRAWN)),
+                "auto_approved": sum(1 for i in items if str(i.get("approved_by") or "").startswith("auto:")
+                                     and i["state"] not in (UPLOADED, WITHDRAWN))}
+
     def _safe_authorization(self) -> Dict[str, Any]:
         try:
             return self.reg.publishing_authorization(TARGET)
@@ -600,7 +622,7 @@ class HindiPublisher:
             logger.warning("Hindi cycle times unavailable: %s", type(exc).__name__)
             cycles = []
         return {"items": items, "events": events, "schedule": self.schedule(), "gates": self.gates(),
-                "authorization": self._safe_authorization(),
+                "authorization": self._safe_authorization(), "health": self._health(items),
                 "cycle_times": cycles,
                 "note": "Hindi videos only (QC passed). Uploads use the Hindi channel's own authorization; nothing "
                         "is published unless the channel is active, Hindi publishing is authorized and the "

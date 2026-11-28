@@ -127,7 +127,11 @@ def _backend_dir() -> Path:
 
 def _default_oauth_factory(token_path: str, is_master: bool):
     from backend.app.services.youtube_publishing_engine import YouTubeOAuthManager
-    return YouTubeOAuthManager(token_file=token_path, record_connection_events=is_master)
+    if is_master:
+        return YouTubeOAuthManager(token_file=token_path, record_connection_events=True)
+    # a localized channel's identity checks are counted as that channel's quota (hindi_ purpose)
+    return YouTubeOAuthManager(token_file=token_path, record_connection_events=False,
+                               quota_purpose="hindi_identity_verification")
 
 
 class ChannelRegistry:

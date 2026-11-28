@@ -783,8 +783,11 @@ class YouTubeOAuthManager:
         token_file: str = DEFAULT_TOKEN_FILE,
         scopes: Optional[List[str]] = None,
         record_connection_events: bool = True,
+        quota_purpose: str = "dashboard_auth_status",
     ):
         self.client_secrets_file = client_secrets_file
+        # Stage 4.03: the quota ledger attributes a request to a channel by its purpose ("hindi_" = Hindi)
+        self.quota_purpose = quota_purpose
         self.token_file = token_file
         self.scopes = scopes or YOUTUBE_SCOPES
         # Stage 4.01: the connection history belongs to the English (master) channel. A manager for another
@@ -933,7 +936,8 @@ class YouTubeOAuthManager:
                     _ledger = QuotaLedger(DB_PATH)
                 except Exception:
                     _ledger = None
-                res = (_ledger.execute(req, "channels.list", purpose="dashboard_auth_status")
+                res = (_ledger.execute(req, "channels.list",
+                                       purpose=getattr(self, "quota_purpose", "dashboard_auth_status"))
                        if _ledger else req.execute())
                 items = res.get("items", [])
                 if items:

@@ -86,8 +86,11 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
     # Hindi channel publishing authorization (from the shared guard); None when unknown (older callers)
     authorized = ((it.get("eligibility") or {}).get("checks") or {}).get("publishing_authorized")
     if qc_ok:                                  # never an action on a video that has not passed Hindi QC
+        # scheduling or publishing an unapproved video cannot publish it: those actions wait for its approval
+        unapproved = it.get("eligibility") is not None and not it.get("approved")
         if state in ("DRAFT", "SCHEDULED", "FAILED"):
-            actions += ["edit", "schedule"] + ([] if authorized is False else ["publish_now"])
+            actions += ["edit"] + ([] if unapproved else ["schedule"]) + \
+                ([] if authorized is False or unapproved else ["publish_now"])
         if state in ("SCHEDULED", "FAILED"):
             actions.append("unschedule")
         if state in ("FAILED", "NEEDS_CHECK"):
@@ -112,6 +115,8 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
         "youtube_video_id": vid, "youtube_url": f"https://youtu.be/{vid}" if vid else None,
         "error": it.get("last_error"), "actions": actions,
         "approved": bool(it.get("approved")), "approved_by": it.get("approved_by"),
+        "approval_source": (None if not it.get("approved") else
+                            "automatic" if str(it.get("approved_by") or "").startswith("auto:") else "operator"),
         "approved_at_utc": it.get("approved_at_utc"),
         "blocked_by": list((it.get("eligibility") or {}).get("reasons") or [])
         if state not in ("UPLOADED", "WITHDRAWN") else [],

@@ -16,6 +16,7 @@ Every source is optional: an unavailable one is listed under ``unavailable`` and
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -36,7 +37,8 @@ def _safe(name: str, fn: Callable[[], Any], unavailable: List[str]) -> Any:
 def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]]] = None,
               creative: Optional[Callable[[], Dict[str, Any]]] = None,
               topic_supply: Optional[Callable[[], Dict[str, Any]]] = None,
-              localizations: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
+              localizations: Optional[Callable[[], Dict[str, Any]]] = None,
+              publishing: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
     unavailable: List[str] = []
     if cp is None:
         from backend.app.autonomy.control_plane import get_control_plane
@@ -47,6 +49,8 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
         from backend.app.creative_intel.feedback import feedback_report as creative
     if topic_supply is None:
         topic_supply = _topic_supply
+    if publishing is None:
+        publishing = _publishing_attention
     if localizations is None:
         def localizations():
             from backend.app.localization.pipeline import overview
@@ -118,6 +122,19 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
                           "title": f"Hindi QC rejected {l.get('source_job_id')}",
                           "why": "; ".join(((l.get("qc") or {}).get("creative") or [])[:2]) or l.get("error"),
                           "action": "Retranslate it, or leave it (it never publishes)."})
+    # Stage 4.04: uploads that need the operator (bounded automatic retries have stopped) and stale English entries
+    pa = _safe("publishing", publishing, unavailable) or {}
+    for r in pa.get("hindi") or []:
+        needs.append({"kind": "failed_recovery", "severity": "high" if r["state"] == "NEEDS_CHECK" else "medium",
+                      "title": f"Hindi upload {r['state'].lower().replace('_', ' ')}: #{r['id']} {r['source_job_id']}",
+                      "why": (r.get("last_error") or "")[:200] or f"{r['attempts']} attempt(s)",
+                      "action": "Publishing Queue (Hindi): RETRY checks the Hindi channel for the video first, then "
+                                "uploads only if it is not there."})
+    for r in pa.get("english_stale") or []:
+        needs.append({"kind": "decision", "severity": "low",
+                      "title": f"English queue entry waiting since {str(r['upload_timestamp'])[:10]}: #{r['id']}",
+                      "why": (r.get("error_details") or r["upload_status"])[:200],
+                      "action": "Publishing Queue (English): give it a new publication time or cancel it."})
     passed = [l for l in locs if l.get("status") == "QC_PASSED"]
     if passed:
         reasons = (passed[0].get("publishing") or {}).get("reasons") or []
@@ -156,6 +173,35 @@ def attention(*, cp: Any = None, providers: Optional[Callable[[], Dict[str, Any]
             "rule": "You are asked only for credentials, approvals outside the automatic policy, human decisions and "
                     "recoveries that failed after their permitted attempts. Routine recoverable failures are handled "
                     "automatically and appear under done automatically or blocked, with the reason."}
+
+
+def _publishing_attention(db_path: Optional[str] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Read only. Hindi rows waiting for the operator (NEEDS_CHECK; FAILED with no automatic retry left) and English
+    ledger entries still pending more than a day after they were queued."""
+    import sqlite3 as _sq
+    from pathlib import Path as _P
+    if db_path is None:
+        from backend.app.core.paths import DATABASE_PATH
+        db_path = str(DATABASE_PATH)
+    now = now or datetime.now(timezone.utc)
+    out: Dict[str, Any] = {"hindi": [], "english_stale": []}
+    with _sq.connect(_P(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=10) as c:
+        c.row_factory = _sq.Row
+        try:
+            out["hindi"] = [dict(r) for r in c.execute(
+                "SELECT id, source_job_id, state, attempts, last_error FROM hindi_publications "
+                "WHERE state='NEEDS_CHECK' OR (state='FAILED' AND attempts >= 3) ORDER BY id")]
+        except _sq.OperationalError:
+            pass
+        try:
+            cutoff = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+            out["english_stale"] = [dict(r) for r in c.execute(
+                "SELECT id, upload_status, upload_timestamp, error_details FROM publishing_ledger WHERE upload_status IN "
+                "('pending_queue','approved','upload_interrupted') AND upload_timestamp < ? ORDER BY id LIMIT 20",
+                (cutoff,))]
+        except _sq.OperationalError:
+            pass
+    return out
 
 
 FLAGS = ("production_query_rotation", "exhaustion_recovery")
