@@ -392,8 +392,16 @@ def test_existing_production_paths_do_not_depend_on_the_registry():
     from backend.app.scheduler import scheduler
     from backend.app.orchestration import crazzydocs_master_orchestrator as mo
     from backend.app.services import youtube_publishing_engine as ype
-    for mod in (scheduler, mo, ype):
+    for mod in (scheduler, mo):
         assert "backend.app.channels" not in inspect.getsource(mod)
+    # Stage 4.03: the English engine reads the registry ONLY for the destination identity check before an upload
+    # (the shared publishing guard); nothing else in it depends on the registry.
+    src = inspect.getsource(ype)
+    allowed = {inspect.getsource(ype.YouTubePublishingEngine._channel_registry),
+               inspect.getsource(ype.YouTubePublishingEngine._english_publish_guard)}
+    for part in allowed:
+        src = src.replace(part, "")
+    assert src.count("backend.app.channels") == 1 and "import live_channel_id" in src   # duplicate check reuses it
 
 
 def test_progress_store_is_reloaded_only_when_the_file_changes(tmp_path):

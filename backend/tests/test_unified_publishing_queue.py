@@ -66,7 +66,7 @@ def test_hindi_without_qc_pass_has_no_action():
     r = uq.hindi_row(hi(9, state="DRAFT", qc=False))
     assert r["actions"] == [] and r["qc_passed"] is False and "not passed" in r["qc_status"]
     ok = uq.hindi_row(hi(9, state="DRAFT"))
-    assert ok["actions"] == ["edit", "schedule", "publish_now"] and ok["thumbnail"]["editable"] is False
+    assert ok["actions"] == ["edit", "schedule", "publish_now", "approve"] and ok["thumbnail"]["editable"] is False
     assert uq.hindi_row(hi(9, state="UPLOADED", vid="v1"))["actions"] == ["view"]
     assert "retry" in uq.hindi_row(hi(9, state="NEEDS_CHECK"))["actions"]
 
@@ -163,7 +163,7 @@ def test_row_buttons_call_only_their_own_channel(tmp_path):
     assert out.returncode == 0, out.stderr
     btns, hi_keys = [json.loads(l) for l in out.stdout.strip().splitlines()]
     en_fns, hi_fns = {"openPubEditModal", "cancelQueueItemSchedule", "publishQueueItemNow"}, \
-        {"hpEdit", "hpAct", "openHiSched", "hiPublishSoon"}
+        {"hpEdit", "hpAct", "openHiSched", "hiPublishSoon", "hpApprove"}       # hpApprove: Stage 4.03
     called = [set(re.findall(r'onclick="(\w+)\(', b)) for b in btns]
     assert called[0] == en_fns and called[1] == {"openPubEditModal", "publishQueueItemNow"}
     assert called[2] == hi_fns and called[3] <= hi_fns and "hpAct" in called[3]

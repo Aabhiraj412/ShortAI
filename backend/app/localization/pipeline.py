@@ -61,7 +61,7 @@ class HindiLocalizer:
     def __init__(self, registry=None, *, media_dir: Optional[Path] = None, translate_fn: Optional[Callable] = None,
                  voice_fn: Optional[Callable] = None, render_fn: Optional[Callable] = None,
                  qc_fn: Optional[Callable] = None, ffmpeg: Optional[str] = None, ffprobe: Optional[str] = None,
-                 workspace_root: Optional[Path] = None, target_key: str = "hi"):
+                 workspace_root: Optional[Path] = None, target_key: str = "hi", publisher=None):
         from backend.app.channels.registry import get_registry
         self.reg = registry or get_registry()
         if media_dir is None:
@@ -69,6 +69,7 @@ class HindiLocalizer:
             media_dir = Path(MEDIA_DIR)
         self.media_dir = Path(media_dir)
         self.target = target_key
+        self._publisher = publisher
         self.translate_fn = translate_fn or self._default_translate
         self.voice_fn = voice_fn or self._default_voice
         self.render_fn = render_fn or self._default_render
@@ -149,6 +150,10 @@ class HindiLocalizer:
             elif step == "qc":
                 qc = self.qc_fn(loc, self.work_dir(loc), arts)
                 (self.work_dir(loc) / "qc_hi.json").write_text(json.dumps(qc, ensure_ascii=False, indent=1), encoding="utf-8")
+                if qc["passed"]:                      # Stage 4.03: the exact file QC verified
+                    digest = self._qc_output_sha256(arts)
+                    arts["final_mp4_sha256"] = digest
+                    qc = dict(qc, final_mp4_sha256=digest)
                 status = ("QC_PASSED" if qc["passed"] else
                           "QC_REJECTED" if qc["classification"] == "CREATIVE_REJECTION" else "FAILED")
                 self._update(loc_id, status=status, step="qc", qc=qc, artifacts=arts,
@@ -175,6 +180,19 @@ class HindiLocalizer:
         self._update(loc_id, status="IN_PROGRESS", step=step, artifacts=arts, error_kind=None, error=None)
         return {"status": "IN_PROGRESS", "step": step}
 
+    @staticmethod
+    def _qc_output_sha256(arts: Dict[str, Any]) -> Optional[str]:
+        from backend.app.channels.publish_guard import sha256_file
+        mp4 = Path(str(arts.get("final_mp4") or ""))
+        return sha256_file(mp4) if mp4.is_file() else None
+
+    @property
+    def publisher(self):
+        if self._publisher is None:
+            from backend.app.localization.publishing import HindiPublisher
+            self._publisher = HindiPublisher(self.reg.db_path, registry=self.reg, media_dir=self.media_dir)
+        return self._publisher
+
     def reopen(self, loc_id: int, *, actor: str, from_step: Optional[str] = None) -> Dict[str, Any]:
         """Retry a WAITING / FAILED localization (completed steps are kept), or, with ``from_step`` (e.g.
         "translate" after a creative rejection), archive that step's and later steps' outputs into
@@ -188,6 +206,15 @@ class HindiLocalizer:
             raise ValueError("a creative rejection needs a new adaptation: retry from 'translate'")
         if loc["status"] == "IN_PROGRESS":
             raise ValueError("this localization is running")
+        # Stage 4.03: a re-opened localization withdraws its pending publication and clears its approval first
+        # (refused while the video is being published or once it is on YouTube, so nothing below runs then). A new
+        # render must pass QC again and be approved again.
+        from backend.app.localization.publishing import PublishingError
+        try:
+            self.publisher.withdraw_for_localization(loc_id, reason=f"re-opened from {from_step or 'retry'}",
+                                                     actor=actor)
+        except PublishingError as exc:
+            raise ValueError(str(exc)) from exc
         arts = dict(loc["artifacts"])
         if from_step:
             if from_step not in STEPS:

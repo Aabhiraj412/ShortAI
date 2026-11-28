@@ -73,7 +73,7 @@ class FakeQuota:
         self.calls.append(method)
         return req.execute()
 
-    def check(self, bucket, cost):
+    def check(self, bucket, cost, **kw):
         return {"allowed": True}
 
 
@@ -177,6 +177,7 @@ def test_missed_time_is_replanned_not_published(env, monkeypatch):
     env.pub.tick()
     assert env.pub.get(1)["scheduled_at_utc"] == "2026-11-29T14:30:00Z" and not env.svc.inserted
     authorize(env)                                                       # authorized later: uploads for the next time
+    env.pub.approve(1, actor="test")                                   # Stage 4.03: per-video approval
     env.clock.t = datetime(2026, 11, 29, 13, 0, tzinfo=timezone.utc)
     env.pub.tick()
     assert env.svc.inserted[0]["status"]["publishAt"] == "2026-11-29T14:30:00Z"
@@ -215,6 +216,7 @@ def test_upload_once_with_hindi_identity(env, monkeypatch):
     authorize(env)
     env.pub.queue()
     env.pub.schedule_item(1)
+    env.pub.approve(1, actor="test")                                   # Stage 4.03: per-video approval
     env.clock.t = NOW + timedelta(hours=7)                               # within the upload lead
     res = env.pub.tick()
     assert res["upload"]["uploaded"] and len(env.svc.inserted) == 1
@@ -230,6 +232,7 @@ def test_wrong_identity_is_refused(env):
     env.svc.channel_id = "UC_english"
     env.pub.queue()
     env.pub.schedule_item(1)
+    env.pub.approve(1, actor="test")                                   # Stage 4.03: per-video approval
     env.clock.t = NOW + timedelta(hours=7)
     with pytest.raises(hp.PublishingError, match="does not belong"):
         env.pub.tick()
@@ -240,6 +243,7 @@ def test_interrupted_upload_adopts_the_remote_video_instead_of_reuploading(env):
     authorize(env)
     env.pub.queue()
     env.pub.schedule_item(1)
+    env.pub.approve(1, actor="test")                                   # Stage 4.03: per-video approval
     env.clock.t = NOW + timedelta(hours=7)
     env.svc.fail_insert = ConnectionError("network dropped")              # no answer from YouTube
     env.pub.tick()

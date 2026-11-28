@@ -199,6 +199,20 @@ def fresh_youtube_auth_status_cache():
 
 
 @pytest.fixture(autouse=True)
+def mock_youtube_services_identify_as_test_channel(monkeypatch):
+    """Stage 4.03: every upload confirms the token's channel id from a channels.list response. Tests that fake the
+    YouTube service with MagicMock get MagicMock responses (no channel id), which the guard correctly refuses. Such
+    mock responses identify as one fixed test channel; real dict responses (the Stage 4.03 tests) keep the strict
+    behaviour, including refusal when the id is missing or different."""
+    from unittest.mock import NonCallableMock
+    from backend.app.channels import publish_guard as pg
+    real = pg.live_channel_id
+    monkeypatch.setattr(pg, "live_channel_id",
+                        lambda resp: "UC_TEST_MOCK_SERVICE" if isinstance(resp, NonCallableMock) else real(resp))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def ensure_test_context(monkeypatch):
     """Guarantees that CRAZZYDOCS_EXECUTION_CONTEXT is always TEST during every test."""
     monkeypatch.setenv("CRAZZYDOCS_EXECUTION_CONTEXT", "TEST")

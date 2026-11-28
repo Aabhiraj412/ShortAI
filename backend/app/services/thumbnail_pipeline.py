@@ -365,7 +365,8 @@ def processing_status(service: Any, quota: Any, video_id: str, purpose: str) -> 
 
 def set_and_verify(service: Any, quota: Any, video_id: str, thumbnail_path: Optional[str], *, kind: str = SHORT,
                    previous: Optional[Dict[str, Any]] = None, purpose: str = "thumbnail",
-                   fetch: Optional[Callable[[str], bytes]] = None) -> Dict[str, Any]:
+                   fetch: Optional[Callable[[str], bytes]] = None,
+                   channel_key: Optional[str] = None) -> Dict[str, Any]:
     """One step of the thumbnail state machine (used by the Hindi publisher; the English engine has the same rules):
     awaiting_processing -> attempted -> set (YouTube accepted) -> verified (YouTube shows our image), or rejected /
     invalid / quota_deferred. A thumbnail already set with the same artifact is never uploaded again."""
@@ -384,7 +385,7 @@ def set_and_verify(service: Any, quota: Any, video_id: str, thumbnail_path: Opti
         return {"state": "awaiting_processing", "processing": st["processing"], "checks": checks, "error": None}
     already = prev.get("state") in ("set", "verified") and prev.get("artifact") == artifact
     if not already:
-        gate = quota.check("general", 50)
+        gate = quota.check("general", 50, channel_key=channel_key) if channel_key else quota.check("general", 50)
         if not gate["allowed"]:
             return {**prev, "state": "quota_deferred", "error": gate["reason"], "checks": checks}
         try:

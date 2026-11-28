@@ -2658,6 +2658,44 @@ async def api_channel_deactivate(key: str, req: ChannelChangeRequest, _: None = 
     return await _channel_call(lambda: get_registry().deactivate(k, actor="dashboard"))
 
 
+# -- Stage 4.03: channel publishing authorization (operator only; audited; never granted by code) --------------
+AUTHORIZE_PUBLISHING_PHRASE = "AUTHORIZE HINDI PUBLISHING"
+
+
+class PublishingAuthorizationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    action: Literal["authorize", "revoke"]
+    confirm: bool = False
+    phrase: Optional[str] = Field(default=None, max_length=60)
+    reason: Optional[str] = Field(default=None, max_length=300)       # optional (no reason input on the card)
+
+
+@app.get("/api/channels/{key}/publishing-authorization")
+async def api_channel_publishing_authorization(key: str, _: None = Depends(require_local_control)):
+    from backend.app.channels.registry import get_registry
+    k = _channel_key(key)
+    return await _channel_call(lambda: get_registry().publishing_authorization(k))
+
+
+@app.post("/api/channels/{key}/publishing-authorization")
+async def api_channel_set_publishing_authorization(key: str, req: PublishingAuthorizationRequest,
+                                                   _: None = Depends(require_local_control),
+                                                   __: None = Depends(require_autonomy_write)):
+    """Authorize or revoke publishing for a localized channel. Local access, same-origin + CSRF token, explicit
+    confirmation, and for authorizing the typed phrase. Recorded in channel_events (atomic) and the audit chain."""
+    from backend.app.channels.registry import get_registry
+    _require_confirm(req.confirm)
+    k = _channel_key(key)
+    if req.action == "authorize" and (req.phrase or "").strip() != AUTHORIZE_PUBLISHING_PHRASE:
+        raise HTTPException(status_code=400, detail=f"type {AUTHORIZE_PUBLISHING_PHRASE} to authorize publishing")
+    res = await _channel_call(lambda: get_registry().set_publishing_authorization(
+        k, req.action == "authorize", actor="dashboard", reason=req.reason))
+    _audit_dashboard_action(f"channel_publishing_{req.action}",
+                            {"channel": k, "reason": (req.reason or "")[:200],
+                             "authorization_id": res.get("authorization_id")})
+    return res
+
+
 # -- Stage 4.02: Hindi localization of completed English Shorts (never publishes) ------------------------------
 class LocalizationRequest(BaseModel):
     model_config = {"extra": "forbid"}
@@ -2863,10 +2901,17 @@ async def api_hindi_item(pid: int, action: str, req: HindiSlotRequest, _: None =
     _require_confirm(req.confirm)
     pub = get_publisher()
     fns = {"schedule": lambda: pub.schedule_item(pid, req.at_utc), "unschedule": lambda: pub.unschedule(pid),
-           "retry": lambda: pub.retry(pid)}
+           "retry": lambda: pub.retry(pid),
+           # Stage 4.03: per-video approval, bound to the file's SHA-256; never authorizes channel publishing
+           "approve": lambda: pub.approve(pid, actor="dashboard"),
+           "unapprove": lambda: pub.unapprove(pid, actor="dashboard")}
     if action not in fns:
         raise HTTPException(status_code=404, detail="unknown action")
-    return await _hindi_call(fns[action])
+    res = await _hindi_call(fns[action])
+    if action in ("approve", "unapprove"):
+        _audit_dashboard_action(f"hindi_video_{action}", {"publication_id": pid,
+                                                           "sha256": (res or {}).get("approved_sha256")})
+    return res
 
 
 @app.get("/api/thumbnails/overview")

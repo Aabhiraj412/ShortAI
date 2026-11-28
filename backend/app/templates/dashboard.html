@@ -907,6 +907,7 @@
       <p class="card-desc">Each channel's identity is verified with YouTube <code>channels.list?mine=true</code>, never from its name. English is the master channel and owns the existing production. Hindi localizes completed English Shorts with its own authorization (never the English one) and stays pending until its own channel is verified.</p></div>
       <div class="btn-row" style="flex-wrap:wrap;gap:6px;"><button class="btn sm" onclick="refreshChannels()">Refresh</button></div></div>
       <div id="chList" style="font-size:12px;overflow-x:auto;">--</div>
+      <h3 style="font-size:13px;margin:10px 0 4px;">Hindi publishing authorization</h3><div id="chAuth" style="font-size:12px;overflow-x:auto;">--</div>
       <h3 style="font-size:13px;margin:10px 0 4px;">Channel history</h3><div id="chEvents" style="font-size:12px;overflow-x:auto;">--</div>
     </div>
     <!-- STAGE 4.02: Hindi localization of completed English Shorts -->
@@ -1660,6 +1661,9 @@ function uqActionButtons(r) {
     if (a.includes("unschedule")) b.push(`<button class="btn danger sm" data-i="${id}" onclick="hpAct(this.dataset.i,'unschedule')">UNSCHEDULE</button>`);
     if (a.includes("publish_now")) b.push(`<button class="btn ok sm" data-i="${id}" onclick="hiPublishSoon(this.dataset.i)">PUBLISH NOW</button>`);
     if (a.includes("retry")) b.push(`<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'retry')">RETRY</button>`);
+    if (a.includes("approve")) b.push(`<button class="btn ok sm" data-i="${id}" onclick="hpApprove(this.dataset.i)">APPROVE VIDEO</button>`);
+    if (a.includes("unapprove")) b.push(`<button class="btn sm" data-i="${id}" onclick="hpAct(this.dataset.i,'unapprove')">UNAPPROVE</button>`);
+    b.push(`<div style="color:var(--muted);font-size:11px;max-width:260px;overflow-wrap:anywhere;">${r.approved ? "Approved" : "Not approved"}${(r.blocked_by || []).length ? "<br>Blocked by: " + (r.blocked_by || []).slice(0, 4).map(x => escHtml(x)).join("; ") : ""}</div>`);
   }
   if (a.includes("view") && r.youtube_url) b.push(`<a href="${escHtml(r.youtube_url)}" target="_blank" rel="noopener" class="btn sm">VIEW ON YOUTUBE</a>`);
   return b.join("") || `<span style="color:var(--muted)">--</span>`;
@@ -4477,6 +4481,40 @@ async function refreshChannels() {
       `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.channel_key)}</td><td>${escHtml(e.event)}</td><td>${escHtml((e.previous_status || "") + " → " + (e.new_status || ""))}</td></tr>`))
       : `<div style="color:var(--muted)">No channel events yet.</div>`;
   } catch (err) { el.innerHTML = `<span class="auto-kill">channels unavailable: ${escHtml(err.message || String(err))}</span>`; }
+  refreshChannelAuthorization();
+}
+
+// -- Stage 4.03: Hindi publishing authorization (operator only; audited). Approval of each video is separate. --
+async function refreshChannelAuthorization() {
+  const el = document.getElementById("chAuth");
+  if (!el) return;
+  try {
+    const a = await apiJson("/api/channels/hi/publishing-authorization");
+    const state = a.authorized
+      ? `<span class="auto-on">Authorized</span> ${a.authorized_at_utc ? autoTime(a.authorized_at_utc) : ""}`
+      : `<span style="color:#fcd34d">Not authorized</span>${a.revoked_at_utc ? " (revoked " + autoTime(a.revoked_at_utc) + ")" : ""}`;
+    const btn = a.authorized
+      ? `<button class="btn danger sm" onclick="chSetAuthorization('revoke')">REVOKE</button>`
+      : `<button class="btn sm" onclick="chSetAuthorization('authorize')">AUTHORIZE…</button>`;
+    const ev = a.events || [];
+    el.innerHTML = `<div>${state} ${btn}</div><div style="color:var(--muted)">Each Hindi video also needs its own approval in the publishing queue.</div>`
+      + (ev.length ? apTable(["When", "Event"], ev.slice(0, 5).map(e =>
+        `<tr><td>${autoTime(e.ts_utc)}</td><td>${escHtml(e.event)}</td></tr>`)) : "");
+  } catch (err) { el.innerHTML = `<span class="auto-kill">authorization unavailable: ${escHtml(err.message || String(err))}</span>`; }
+}
+async function chSetAuthorization(action) {
+  let phrase = null;
+  if (action === "authorize") {
+    phrase = prompt("Type AUTHORIZE HINDI PUBLISHING to confirm:");
+    if (phrase !== "AUTHORIZE HINDI PUBLISHING") { showToast("Not authorized (phrase did not match).", true); return; }
+  } else if (!(await askConfirm("Revoke Hindi publishing?", "No Hindi video is uploaded after this until it is authorized again."))) return;
+  try { await dashWrite("/api/channels/hi/publishing-authorization", { action, confirm: true, phrase }); showToast(`Hindi publishing ${action === "authorize" ? "authorized" : "revoked"}`); }
+  catch (err) { showToast(err.message || String(err), true); }
+  refreshChannelAuthorization(); refreshPublishing(); refreshHindiPublishing();
+}
+async function hpApprove(id) {
+  if (!(await askConfirm("Approve this Hindi video?", "Approves this exact file (its SHA-256). It does not authorize Hindi publishing; a re-render or metadata edit clears the approval."))) return;
+  hpAct(id, "approve");
 }
 
 // -- Stage 4.02 Hindi localization: status, QC, video and publishing eligibility (never publishes). --

@@ -13,6 +13,13 @@ the UTC date and refused uploads once 6 x 1,650 = 9,900 was reached. Google chan
 Sources (verified 2026-11-20): https://developers.google.com/youtube/v3/determine_quota_cost and
 https://developers.google.com/youtube/v3/revision_history
 
+Stage 4.03 (channels): both channels authorize through the SAME Google Cloud project (one client secret), so quota
+is project-wide and this stays ONE ledger. Each request is attributed to a channel by its purpose: localized-channel
+calls carry the ``hindi_`` prefix (``record(..., channel_key="hi")`` adds it), everything else is English. A
+non-master channel's ``check`` additionally applies that channel's own daily caps and keeps the English reserve
+free: the project remainder after the call must still cover what English may yet need today. English checks are
+unchanged, and Google's exhaustion blocks stay project-wide (they block both channels).
+
 This ledger records requests that were actually SENT to Google (one row per method call; the chunks of a
 resumable upload are one videos.insert call). It is a LOCAL ESTIMATE. Google's own usage numbers are only
 available in the Cloud Console / Cloud Monitoring, which the existing OAuth token cannot read, so they are never
@@ -62,6 +69,31 @@ METHOD_COSTS: Dict[str, tuple] = {
     "playlistItems.list": (GENERAL, 1),
     "playlists.list": (GENERAL, 1),
 }
+
+
+ENGLISH = "en"
+CHANNEL_PURPOSE_PREFIX = {"hi": "hindi_"}
+# Per-day defaults (Pacific day). English observed 2026-11-21..28: at most 24 uploads and ~4,600 general units
+# (thumbnail backfill day); the reserve covers that with headroom. Overridable in the Hindi channel's
+# publishing_config "quota" (validated, see channel_quota_limits).
+CHANNEL_QUOTA_DEFAULTS = {"hi": {"own_limits": {UPLOADS: 6, GENERAL: 1500},
+                                 "english_reserve": {UPLOADS: 30, GENERAL: 5000}}}
+
+
+def channel_of(purpose: Optional[str]) -> str:
+    p = purpose or ""
+    return next((k for k, pre in CHANNEL_PURPOSE_PREFIX.items() if p.startswith(pre)), ENGLISH)
+
+
+def channel_quota_limits(channel_key: str, override: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, int]]:
+    """Defaults merged with a validated override ({"own_limits": {bucket: n}, "english_reserve": {bucket: n}})."""
+    base = CHANNEL_QUOTA_DEFAULTS.get(channel_key) or {"own_limits": {}, "english_reserve": {}}
+    out = {k: dict(v) for k, v in base.items()}
+    for part in ("own_limits", "english_reserve"):
+        for b, n in ((override or {}).get(part) or {}).items():
+            if b in BUCKETS and isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= BUCKETS[b]["daily_limit"]:
+                out[part][b] = n
+    return out
 
 
 def method_cost(method: str) -> Dict[str, Any]:
@@ -174,9 +206,12 @@ class QuotaLedger:
     def record(self, method: str, *, purpose: str, outcome: str, job_id: Optional[str] = None,
                video_id: Optional[str] = None, attempt: int = 1, retry_reason: Optional[str] = None,
                http_status: Optional[int] = None, error_category: Optional[str] = None,
-               correlation_id: Optional[str] = None) -> str:
+               correlation_id: Optional[str] = None, channel_key: Optional[str] = None) -> str:
         """Records ONE request that was sent to Google. Replaying the same correlation_id is a no-op."""
         cid = correlation_id or uuid.uuid4().hex
+        pre = CHANNEL_PURPOSE_PREFIX.get(channel_key or "")
+        if pre and not (purpose or "").startswith(pre):       # channel attribution (no schema change)
+            purpose = pre + (purpose or "")
         info = method_cost(method)
         now = self.clock()
         try:   # bookkeeping must never break the API operation it describes
@@ -199,7 +234,8 @@ class QuotaLedger:
         return cid
 
     def execute(self, request: Any, method: str, *, purpose: str, job_id: Optional[str] = None,
-                video_id: Optional[str] = None, attempt: int = 1, retry_reason: Optional[str] = None) -> Any:
+                video_id: Optional[str] = None, attempt: int = 1, retry_reason: Optional[str] = None,
+                channel_key: Optional[str] = None) -> Any:
         """Runs request.execute() and records it. A request that raises before reaching Google (no HTTP
         response, e.g. local validation) is recorded as a transport failure only if it carried a response."""
         try:
@@ -208,10 +244,10 @@ class QuotaLedger:
             c = classify_http_error(exc)
             if c["http_status"] is not None:   # Google answered: the call counts
                 self.record(method, purpose=purpose, outcome="error", job_id=job_id, video_id=video_id,
-                            attempt=attempt, retry_reason=retry_reason, **c)
+                            attempt=attempt, retry_reason=retry_reason, channel_key=channel_key, **c)
             raise
         self.record(method, purpose=purpose, outcome="ok", job_id=job_id, video_id=video_id, attempt=attempt,
-                    retry_reason=retry_reason, http_status=200)
+                    retry_reason=retry_reason, http_status=200, channel_key=channel_key)
         return resp
 
     # ---- exhaustion ------------------------------------------------------------------------------------------
@@ -263,9 +299,47 @@ class QuotaLedger:
                       "blocked": self.blocked(b)}
         return out
 
-    def check(self, bucket: str, cost: int) -> Dict[str, Any]:
+    def usage_by_channel(self, day: Optional[str] = None) -> Dict[str, Dict[str, int]]:
+        """{channel: {bucket: used}} for the Pacific day (channel from the request purpose)."""
+        day = day or pacific_day(self.clock())
+        conn = self._conn()
+        try:
+            rows = conn.execute("SELECT purpose, bucket, SUM(cost) FROM youtube_api_requests WHERE pt_day=? "
+                                "GROUP BY purpose, bucket", (day,)).fetchall()
+        finally:
+            conn.close()
+        out: Dict[str, Dict[str, int]] = {}
+        for purpose, bucket, used in rows:
+            ch = out.setdefault(channel_of(purpose), {})
+            ch[bucket] = ch.get(bucket, 0) + int(used or 0)
+        return out
+
+    def check(self, bucket: str, cost: int, *, channel_key: Optional[str] = None,
+              limits: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """May an operation that needs `cost` from `bucket` run now? Uses Google's own exhaustion signal first,
-        then the local estimate. Never blocks on another bucket."""
+        then the local estimate. Never blocks on another bucket. For a non-master channel (``channel_key`` other
+        than "en") also: its own daily cap, and the English reserve stays available."""
+        res = self._check_project(bucket, cost)
+        if not res["allowed"] or not channel_key or channel_key == ENGLISH:
+            return res
+        lim = channel_quota_limits(channel_key, limits)
+        by = self.usage_by_channel()
+        own = (by.get(channel_key) or {}).get(bucket, 0)
+        cap = lim["own_limits"].get(bucket)
+        if cap is not None and own + cost > cap:
+            return {"allowed": False, "bucket": bucket, "channel_key": channel_key, "deferred": True,
+                    "reason": f"{channel_key} daily cap reached in {bucket} ({own}/{cap}); deferred to the next "
+                              "Pacific day"}
+        reserve = lim["english_reserve"].get(bucket, 0)
+        en_used = (by.get(ENGLISH) or {}).get(bucket, 0)
+        total = sum(v.get(bucket, 0) for v in by.values())
+        if BUCKETS[bucket]["daily_limit"] - total - cost < max(0, reserve - en_used):
+            return {"allowed": False, "bucket": bucket, "channel_key": channel_key, "deferred": True,
+                    "reason": f"the English reserve in {bucket} must stay available ({reserve} per day, English "
+                              f"used {en_used}); {channel_key} deferred"}
+        return res
+
+    def _check_project(self, bucket: str, cost: int) -> Dict[str, Any]:
         blk = self.blocked(bucket)
         if blk:
             return {"allowed": False, "reason": f"Google reported {blk['reason']} for {bucket}; resets {blk['blocked_until_ist']}",

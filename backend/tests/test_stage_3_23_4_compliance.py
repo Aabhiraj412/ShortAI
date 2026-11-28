@@ -148,7 +148,7 @@ def test_scheduled_private_upload_and_timeline(tmp_path: Path):
             "snippet": {"thumbnails": {"default": {"url": "https://example.com/t.jpg"}}},
         }]
     }
-    mock_service.channels.return_value.list.return_value.execute.return_value = {"items": []}
+    mock_service.channels.return_value.list.return_value.execute.return_value = {"items": [{"id": "UC_TEST_MOCK_SERVICE"}]}  # the token's channel (Stage 4.03 identity check)
     mock_service.thumbnails.return_value.set.return_value.execute.return_value = {"items": [{"default": {}}]}
     mock_auth.get_authenticated_service.return_value = mock_service
 

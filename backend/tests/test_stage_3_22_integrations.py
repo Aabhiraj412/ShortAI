@@ -127,7 +127,7 @@ def test_upload_session_survives_restart_and_completes_from_ledger(tmp_path):
     api = MagicMock()
     oauth.get_authenticated_service.return_value = api
     api.channels().list.return_value.execute.return_value = {
-        "items": [{"contentDetails": {"relatedPlaylists": {"uploads": "uploads-playlist"}}}]
+        "items": [{"id": "UC_TEST_MOCK_SERVICE", "contentDetails": {"relatedPlaylists": {"uploads": "uploads-playlist"}}}]
     }
     api.playlistItems().list.return_value.execute.return_value = {"items": []}
     request = MagicMock()

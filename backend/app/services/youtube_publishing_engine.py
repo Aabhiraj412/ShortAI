@@ -1644,6 +1644,8 @@ class YouTubePublishingEngine:
         try:
             channels_resp = self.quota.execute(service.channels().list(mine=True, part="contentDetails"),
                                                "channels.list", purpose="upload_duplicate_check")
+            from backend.app.channels.publish_guard import live_channel_id
+            self._last_live_channel_id = live_channel_id(channels_resp)   # Stage 4.03: reused, no extra call
             items = channels_resp.get("items", [])
             if not items:
                 return False, None
@@ -1689,6 +1691,47 @@ class YouTubePublishingEngine:
             if fail_closed:
                 raise RuntimeError("YouTube duplicate check is unavailable; upload was not started.")
             return False, None
+
+    def _channel_registry(self):
+        reg = getattr(self, "_registry", None)
+        if reg is None:
+            from backend.app.channels.registry import ChannelRegistry
+            reg = self._registry = ChannelRegistry(self.db.db_path)
+        return reg
+
+    def _english_publish_guard(self, service: Any, video_path: str, visibility: str, publish_at_iso: Optional[str],
+                               ledger_id: Optional[int], auto_policy_authorized: bool) -> Optional[Dict]:
+        """Stage 4.03: ``publish_guard.evaluate("en", ...)`` plus the live identity check. Returns a refusal result
+        (nothing uploaded, the ledger entry is left as it is) or None when the upload may proceed."""
+        from backend.app.channels import publish_guard as pg
+        reg = self._channel_registry()
+        item: Dict[str, Any] = {"video_path": video_path, "visibility": visibility, "publish_at": None}
+        if publish_at_iso:
+            item["publish_at"] = datetime.fromisoformat(publish_at_iso.replace("Z", "+00:00"))
+        if ledger_id is not None:
+            item["ledger"] = self.db.get_publication(ledger_id) or {}
+            item["allowed_statuses"] = {"approved", "pending_queue"} if auto_policy_authorized else {"approved"}
+        now = datetime.now(item["publish_at"].tzinfo) if item["publish_at"] else None   # same clock as step 2
+        decision = pg.evaluate(pg.ENGLISH, item, registry=reg, now=now)
+        if not decision.eligible:
+            err = "Upload refused by the publishing guard: " + "; ".join(decision.reasons)
+            logger.error("[PUBLISH GUARD] en ledger=%s refused: %s", ledger_id, "; ".join(decision.reasons))
+            return {"success": False, "video_id": None, "error": err, "status": "publish_guard_refused",
+                    "reasons": decision.reasons}
+        live_id = getattr(self, "_last_live_channel_id", None)
+        if live_id is None:            # the duplicate check could not identify the channel: one explicit lookup
+            try:
+                live_id = pg.live_channel_id(self.quota.execute(service.channels().list(part="id", mine=True),
+                                                                "channels.list", purpose="upload_identity_check"))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[PUBLISH GUARD] identity lookup failed: %s", type(exc).__name__)
+        try:
+            pg.confirm_identity(reg, pg.ENGLISH, live_id, actor="english_upload")
+        except pg.IdentityRefused as exc:
+            logger.error("[PUBLISH GUARD] en ledger=%s identity refused: %s", ledger_id, exc)
+            return {"success": False, "video_id": None, "error": str(exc), "status": "identity_refused"}
+        logger.info("[PUBLISH GUARD] en ledger=%s eligible; destination identity confirmed (%s)", ledger_id, live_id)
+        return None
 
     def upload_short(
         self,
@@ -1767,12 +1810,20 @@ class YouTubePublishingEngine:
             return {"success": False, "video_id": None, "error": err, "status": "unauthenticated"}
 
         # 4b. Remote YouTube Duplicate Check (Resolves upload uncertainty & crash recovery)
+        self._last_live_channel_id = None
         is_remote_dup, remote_id = self.check_remote_channel_duplicate(
             service=service,
             topic_title=topic_title,
             metadata_title=metadata.title,
             fail_closed=ledger_id is not None,
         )
+        # 4c. Stage 4.03: the shared publishing guard and the destination identity, before anything is recorded or
+        # uploaded. Every English upload (automatic, manual, retry, recovery) reaches this point.
+        refusal = self._english_publish_guard(service, video_path, visibility, publish_at_iso, ledger_id,
+                                              auto_policy_authorized)
+        if refusal:
+            return refusal
+
         if is_remote_dup and remote_id:
             logger.info("Reconciling local publishing ledger with existing remote YouTube video ID: %s", remote_id)
             status_code = f"uploaded_{visibility}"

@@ -23,7 +23,8 @@ CHANNELS = {"en": "English", "hi": "Hindi"}
 
 HINDI_STATUS = {"DRAFT": "Not scheduled", "SCHEDULED": "Scheduled (uploads before its time)",
                 "UPLOADING": "Uploading", "UPLOADED": "Uploaded (private until its publish time)",
-                "FAILED": "Failed", "NEEDS_CHECK": "Needs check (upload result unknown)"}
+                "FAILED": "Failed", "NEEDS_CHECK": "Needs check (upload result unknown)",
+                "WITHDRAWN": "Withdrawn (re-rendered; needs QC and approval again)"}
 
 
 def _parse(ts: Optional[str]) -> Optional[datetime]:
@@ -89,6 +90,8 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
             actions.append("unschedule")
         if state in ("FAILED", "NEEDS_CHECK"):
             actions.append("retry")
+        if state in ("DRAFT", "SCHEDULED", "FAILED"):       # Stage 4.03: per-video approval
+            actions.append("unapprove" if it.get("approved") else "approve")
     if vid:
         actions.append("view")
     th = it.get("thumbnail") or {}
@@ -104,6 +107,10 @@ def hindi_row(it: Dict[str, Any]) -> Dict[str, Any]:
         "youtube_status": HINDI_STATUS.get(state, state), "state": state, "privacy": "private until publish time",
         "youtube_video_id": vid, "youtube_url": f"https://youtu.be/{vid}" if vid else None,
         "error": it.get("last_error"), "actions": actions,
+        "approved": bool(it.get("approved")), "approved_by": it.get("approved_by"),
+        "approved_at_utc": it.get("approved_at_utc"),
+        "blocked_by": list((it.get("eligibility") or {}).get("reasons") or [])
+        if state not in ("UPLOADED", "WITHDRAWN") else [],
     }
 
 

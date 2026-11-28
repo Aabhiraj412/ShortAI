@@ -19,6 +19,10 @@ Separate from the English publishing ledger and the English 24-cycle schedule (n
   Videos are uploaded private with ``publishAt`` = the scheduled slot (YouTube publishes at that time).
 * **Gates** (all required, re-checked at every tick): Hindi channel ACTIVE and verified, ``publishing_authorized`` in
   its publishing config (operator authorization, never set by code), schedule enabled, localization QC_PASSED.
+  Stage 4.03: plus, per video, the shared guard (``channels/publish_guard.evaluate``): an operator approval bound to
+  the file's SHA-256, the QC-recorded SHA-256, the resolved path inside ``media/localizations/hi`` and the publish
+  time. A re-opened (re-rendered) localization WITHDRAWS its pending entry and clears the approval; uploaded rows
+  are never changed.
 * **Duplicates**: one row per localization, one video id per row (UNIQUE), an atomic claim before upload, and an
   interrupted upload (no answer from YouTube) becomes NEEDS_CHECK: its retry first looks for the title on the Hindi
   channel's uploads and adopts that video instead of uploading again.
@@ -41,7 +45,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 TARGET = "hi"
 DRAFT, SCHEDULED, UPLOADING, UPLOADED, FAILED, NEEDS_CHECK = (
     "DRAFT", "SCHEDULED", "UPLOADING", "UPLOADED", "FAILED", "NEEDS_CHECK")
+WITHDRAWN = "WITHDRAWN"                   # Stage 4.03: the localization was re-opened (re-render); never uploaded
 EDITABLE = (DRAFT, SCHEDULED, FAILED)
+APPROVABLE = (DRAFT, SCHEDULED, FAILED)
+# Stage 4.03: additive, nullable columns (ALTER TABLE ADD COLUMN only; existing rows keep every value)
+PUBLICATION_COLUMNS = (("qc_sha256", "TEXT"), ("approved_by", "TEXT"), ("approved_at_utc", "TEXT"),
+                       ("approved_sha256", "TEXT"), ("withdrawn_at_utc", "TEXT"))
+CLEAR_APPROVAL = {"approved_by": None, "approved_at_utc": None, "approved_sha256": None}
 DEFAULT_SCHEDULE = {"strategy": "MANUAL", "enabled": False, "timezone": "Asia/Kolkata", "daily_limit": 24,
                     "max_attempts": 3, "cycles": {}}
 STRATEGIES = ("MANUAL",)                  # reserved for later: "ANALYTICAL" (per-video timestamps)
@@ -173,6 +183,10 @@ class HindiPublisher:
         self._english_cycles = english_cycles
         with self._connect() as c:
             c.executescript(SCHEMA)
+            have = {r[1] for r in c.execute("PRAGMA table_info(hindi_publications)")}
+            for col, ddl in PUBLICATION_COLUMNS:
+                if col not in have:
+                    c.execute(f"ALTER TABLE hindi_publications ADD COLUMN {col} {ddl}")
 
     # -- plumbing ------------------------------------------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
@@ -320,7 +334,7 @@ class HindiPublisher:
         ch = self.reg.get(TARGET)
         if ch["status"] != "ACTIVE" or not ch.get("youtube_channel_id"):
             reasons.append(f"Hindi channel not verified and active ({ch['status']})")
-        if not (ch.get("publishing_config") or {}).get("publishing_authorized"):
+        if (ch.get("publishing_config") or {}).get("publishing_authorized") is not True:
             reasons.append("Hindi publishing is not authorized (operator authorization required)")
         if not self.schedule()["enabled"]:
             reasons.append("the Hindi publishing schedule is disabled")
@@ -357,6 +371,9 @@ class HindiPublisher:
                 inside = False
             if not inside:
                 continue                                 # never an English (or foreign) file
+            qc_hash = arts.get("final_mp4_sha256")
+            if self._revive_withdrawn(loc, mp4, qc_hash):
+                continue
             src = self._english_metadata(loc["source_job_id"])
             m = src["meta"]
             base = (m.get("title") or loc.get("source_topic_title") or loc["source_job_id"]).strip()
@@ -367,11 +384,11 @@ class HindiPublisher:
             with self._connect() as c:
                 cur = c.execute(
                     "INSERT OR IGNORE INTO hindi_publications (localization_id, source_job_id, video_path, title, "
-                    "description, tags_json, category_id, thumbnail_path, state, created_at_utc, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "description, tags_json, category_id, thumbnail_path, state, created_at_utc, updated_at_utc, "
+                    "qc_sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (loc["id"], loc["source_job_id"], str(mp4), title.replace("<", "").replace(">", ""),
                      desc.replace("<", "").replace(">", ""), json.dumps(tags, ensure_ascii=False),
-                     str(m.get("category_id") or "27"), src["thumbnail"], DRAFT, now, now))
+                     str(m.get("category_id") or "27"), src["thumbnail"], DRAFT, now, now, qc_hash))
                 if cur.rowcount:
                     added += 1
                     self._event(c, cur.lastrowid, "QUEUED", {"localization_id": loc["id"]})
@@ -384,6 +401,112 @@ class HindiPublisher:
                 except PublishingError as exc:
                     self._update(new_id, "NOT_PLANNED", str(exc), last_error=str(exc)[:300])
         return added
+
+    def _revive_withdrawn(self, loc: Dict[str, Any], mp4: Path, qc_hash: Optional[str]) -> bool:
+        """A WITHDRAWN row whose localization passed QC again returns as DRAFT with the new file and QC hash and NO
+        approval (a re-render needs a fresh approval). True if the localization already has a row."""
+        with self._connect() as c:
+            r = c.execute("SELECT id, state FROM hindi_publications WHERE localization_id=?", (loc["id"],)).fetchone()
+        if r is None:
+            return False
+        if r["state"] == WITHDRAWN and self._update(
+                r["id"], "REQUEUED_AFTER_RERENDER", {"qc_sha256": qc_hash}, expect=(WITHDRAWN,), state=DRAFT,
+                video_path=str(mp4), qc_sha256=qc_hash, scheduled_at_utc=None, last_error=None, attempts=0,
+                withdrawn_at_utc=None, **CLEAR_APPROVAL):
+            try:
+                self.schedule_item(r["id"])
+            except PublishingError as exc:
+                self._update(r["id"], "NOT_PLANNED", str(exc), last_error=str(exc)[:300])
+        return True
+
+    def withdraw_for_localization(self, loc_id: int, *, reason: str, actor: str = "system") -> Dict[str, Any]:
+        """Stage 4.03: called before a localization is re-opened (re-render). Every not-yet-uploaded entry is
+        withdrawn and its approval cleared; uploaded history is never changed. Refuses (PublishingError) while an
+        upload is running or after the video was uploaded, so the re-open does not happen either."""
+        with self._connect() as c:
+            r = c.execute("SELECT * FROM hindi_publications WHERE localization_id=?", (loc_id,)).fetchone()
+        if r is None:
+            return {"withdrawn": False, "state": None}
+        r = dict(r)
+        if r["state"] == UPLOADING:
+            raise PublishingError("this video is being uploaded to the Hindi channel; re-open it after the upload "
+                                  "finishes")
+        if r["state"] == UPLOADED:
+            raise PublishingError("this video is already uploaded to the Hindi channel; its history is kept and it "
+                                  "cannot be re-rendered here")
+        detail = {"reason": reason, "actor": actor, "previous_state": r["state"],
+                  "previous_scheduled_at_utc": r["scheduled_at_utc"], "had_approval": bool(r.get("approved_at_utc"))}
+        if r["state"] == NEEDS_CHECK:        # a video may exist on YouTube: keep the state for the check
+            self._update(r["id"], "APPROVAL_CLEARED_PENDING_CHECK", detail, expect=(NEEDS_CHECK,), **CLEAR_APPROVAL)
+            return {"withdrawn": False, "state": NEEDS_CHECK, "approval_cleared": True}
+        if r["state"] == WITHDRAWN:
+            return {"withdrawn": True, "state": WITHDRAWN}
+        if not self._update(r["id"], "WITHDRAWN", detail, expect=(DRAFT, SCHEDULED, FAILED), state=WITHDRAWN,
+                            scheduled_at_utc=None, withdrawn_at_utc=_ts(self.clock()), **CLEAR_APPROVAL):
+            raise PublishingError("the publication changed; refresh and try again")
+        return {"withdrawn": True, "state": WITHDRAWN, "previous_state": r["state"]}
+
+    # -- per-video approval (Stage 4.03; independent of channel publishing authorization) ------------------------
+    def _localization(self, loc_id: int) -> Optional[Dict[str, Any]]:
+        return next((l for l in self.reg.localizations(TARGET, limit=500) if l["id"] == loc_id), None)
+
+    def approve(self, pid: int, *, actor: str) -> Dict[str, Any]:
+        """Approves ONE video, bound to the SHA-256 of its file now. Never authorizes channel publishing."""
+        from backend.app.channels.publish_guard import resolve_inside, sha256_file
+        row = self.get(pid)
+        if row["state"] not in APPROVABLE:
+            raise PublishingError(f"only a draft, scheduled or failed video can be approved (state {row['state']})")
+        loc = self._localization(row["localization_id"])
+        if not loc or loc["status"] != "QC_PASSED":
+            raise PublishingError("only a video that passed Hindi QC can be approved")
+        real = resolve_inside(row["video_path"], self.media_dir / "localizations" / TARGET)
+        if real is None:
+            raise PublishingError("the video file is missing or outside the Hindi media folder")
+        digest = sha256_file(real)
+        actor = (actor or "dashboard")[:80]
+        values: Dict[str, Any] = {"approved_by": actor, "approved_at_utc": _ts(self.clock()), "approved_sha256": digest}
+        detail: Dict[str, Any] = {"sha256": digest, "actor": actor}
+        event = "APPROVED"
+        if row.get("qc_sha256"):
+            if row["qc_sha256"] != digest:
+                raise PublishingError("the video file differs from the QC-passed output; it cannot be approved")
+        else:                                # a row queued before Stage 4.03 recorded no QC hash
+            values["qc_sha256"] = digest
+            event = "LEGACY_HASH_CAPTURED_AT_APPROVAL"
+        if not self._update(pid, event, detail, expect=APPROVABLE, **values):
+            raise PublishingError("the item changed; refresh and try again")
+        return self.get(pid)
+
+    def unapprove(self, pid: int, *, actor: str) -> Dict[str, Any]:
+        row = self.get(pid)
+        if row["state"] in (UPLOADING, UPLOADED):
+            raise PublishingError(f"approval cannot be withdrawn in state {row['state']}")
+        if not self._update(pid, "UNAPPROVED", {"actor": (actor or "dashboard")[:80]},
+                            expect=(DRAFT, SCHEDULED, FAILED, NEEDS_CHECK, WITHDRAWN), **CLEAR_APPROVAL):
+            raise PublishingError("the item changed; refresh and try again")
+        return self.get(pid)
+
+    def eligibility(self, row: Dict[str, Any], loc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The shared guard's verdict for one row (read only, no API call)."""
+        from backend.app.channels import publish_guard as pg
+        loc = loc if loc is not None else self._localization(row["localization_id"])
+        item = dict(row, localization_status=(loc or {}).get("status"))
+        return pg.evaluate(TARGET, item, registry=self.reg, media_dir=self.media_dir, now=self.clock(),
+                           schedule_enabled=self.schedule()["enabled"]).as_dict()
+
+    def _safe_eligibility(self, row: Dict[str, Any], loc: Dict[str, Any]) -> Dict[str, Any]:
+        if row["state"] in (UPLOADED, WITHDRAWN):
+            return {"eligible": False, "reasons": [], "checks": {}}
+        try:
+            return self.eligibility(row, loc)
+        except Exception as exc:  # noqa: BLE001 - a display helper never breaks the queue view
+            return {"eligible": False, "reasons": [f"eligibility unavailable ({type(exc).__name__})"], "checks": {}}
+
+    def _safe_authorization(self) -> Dict[str, Any]:
+        try:
+            return self.reg.publishing_authorization(TARGET)
+        except Exception:  # noqa: BLE001
+            return {"authorized": False, "events": []}
 
     def queue(self) -> Dict[str, Any]:
         self.sync()
@@ -402,13 +525,17 @@ class HindiPublisher:
                           "youtube_video_id": r["youtube_video_id"], "attempts": r["attempts"],
                           "last_error": r["last_error"], "localization_status": loc.get("status"),
                           "qc_passed": bool(qc.get("passed")), "thumbnail": json.loads(r["thumbnail_json"] or "{}"),
-                          "thumbnail_asset": bool(r["thumbnail_path"] and Path(r["thumbnail_path"]).is_file())})
+                          "thumbnail_asset": bool(r["thumbnail_path"] and Path(r["thumbnail_path"]).is_file()),
+                          "approved": bool(r.get("approved_at_utc")), "approved_by": r.get("approved_by"),
+                          "approved_at_utc": r.get("approved_at_utc"),
+                          "eligibility": self._safe_eligibility(r, loc)})
         try:
             cycles = self.cycle_times()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Hindi cycle times unavailable: %s", type(exc).__name__)
             cycles = []
         return {"items": items, "events": events, "schedule": self.schedule(), "gates": self.gates(),
+                "authorization": self._safe_authorization(),
                 "cycle_times": cycles,
                 "note": "Hindi videos only (QC passed). Uploads use the Hindi channel's own authorization; nothing "
                         "is published unless the channel is active, Hindi publishing is authorized and the "
@@ -418,8 +545,9 @@ class HindiPublisher:
         problems = validate_metadata(title, description, tags)
         if problems:
             raise PublishingError("; ".join(problems), 400)
-        if not self._update(pid, "METADATA_EDITED", None, expect=EDITABLE, title=title.strip(),
-                            description=description, tags_json=json.dumps(tags, ensure_ascii=False)):
+        if not self._update(pid, "METADATA_EDITED", {"approval_cleared": True}, expect=EDITABLE, title=title.strip(),
+                            description=description, tags_json=json.dumps(tags, ensure_ascii=False),
+                            **CLEAR_APPROVAL):                  # changed metadata needs a fresh approval
             raise PublishingError(f"metadata can be edited only in {', '.join(EDITABLE)} (state {self.get(pid)['state']})")
         return self.get(pid)
 
@@ -488,13 +616,14 @@ class HindiPublisher:
 
     # -- upload --------------------------------------------------------------------------------------------------
     def _check_identity(self, svc) -> None:
-        ch = self.reg.get(TARGET)
+        from backend.app.channels import publish_guard as pg
         res = self.quota.execute(svc.channels().list(part="id", mine=True), "channels.list",
-                                 purpose="hindi_identity_check")
-        ids = [i.get("id") for i in res.get("items") or []]
-        if ids != [ch.get("youtube_channel_id")]:
-            raise PublishingError("the Hindi authorization does not belong to the verified Hindi channel; nothing "
-                                  "was uploaded", 403)
+                                 purpose="hindi_identity_check", channel_key=TARGET)
+        try:
+            pg.confirm_identity(self.reg, TARGET, pg.live_channel_id(res), actor="hindi_upload")
+        except pg.IdentityRefused as exc:
+            raise PublishingError(f"the Hindi authorization does not belong to the verified Hindi channel; nothing "
+                                  f"was uploaded ({exc})", 403) from exc
 
     def _find_remote(self, svc, title: str) -> Optional[str]:
         res = self.quota.execute(svc.channels().list(part="contentDetails", mine=True), "channels.list",
@@ -544,12 +673,20 @@ class HindiPublisher:
             raise PublishingError("; ".join(gates["reasons"]), 403)
         row = self.get(pid)
         cfg = self.schedule()
-        gate = self.quota.check("uploads", 1)
-        if not gate["allowed"]:
-            return {"uploaded": False, "reason": gate["reason"]}
         if not row["scheduled_at_utc"] or _parse(row["scheduled_at_utc"]) < self.clock() + PUBLISH_MIN_LEAD:
             return {"uploaded": False, "reason": "the planned time has passed: it is re-planned, never published now"}
-        if not self._update(pid, "UPLOAD_STARTED", None, expect=(SCHEDULED,), state=UPLOADING):
+        # Stage 4.03: the shared publishing guard (authorization, approval, QC, file path + SHA-256, schedule). A
+        # refusal changes nothing and is not an attempt.
+        verdict = self.eligibility(row)
+        if not verdict["eligible"]:
+            return {"uploaded": False, "reason": "; ".join(verdict["reasons"]), "reasons": verdict["reasons"]}
+        from backend.app.services.youtube_quota import UPLOADS          # (was "uploads": not a ledger bucket)
+        gate = self.quota.check(UPLOADS, 1, channel_key=TARGET,
+                                limits=(self.reg.get(TARGET).get("publishing_config") or {}).get("quota"))
+        if not gate["allowed"]:
+            return {"uploaded": False, "reason": gate["reason"], "deferred": True}
+        if not self._update(pid, "UPLOAD_STARTED", {"sha256": row.get("approved_sha256")}, expect=(SCHEDULED,),
+                            state=UPLOADING):
             return {"uploaded": False, "reason": "not claimable (already uploading or changed)"}
         try:
             from googleapiclient.http import MediaFileUpload
@@ -564,7 +701,8 @@ class HindiPublisher:
             req = svc.videos().insert(part="snippet,status", body=body,
                                       media_body=MediaFileUpload(row["video_path"], mimetype="video/mp4",
                                                                  resumable=True))
-            res = self.quota.execute(req, "videos.insert", purpose="hindi_upload", job_id=row["source_job_id"])
+            res = self.quota.execute(req, "videos.insert", purpose="hindi_upload", job_id=row["source_job_id"],
+                                     channel_key=TARGET)
         except PublishingError as exc:
             self._update(pid, "UPLOAD_REFUSED", str(exc), state=FAILED, last_error=str(exc)[:500],
                          attempts=int(row["attempts"]) + 1)
@@ -598,7 +736,8 @@ class HindiPublisher:
                 self._update(r["id"], "THUMBNAIL_NO_ASSET", None, thumbnail_json=json.dumps({"state": "no_asset"}))
                 continue
             res = tpl.set_and_verify(self._service(), self.quota, r["youtube_video_id"], r["thumbnail_path"],
-                                     kind="SHORT", previous=st, purpose="hindi_thumbnail")
+                                     kind="SHORT", previous=st, purpose="hindi_thumbnail",
+                                     channel_key=TARGET)
             self._update(r["id"], "THUMBNAIL_" + res["state"].upper(), res.get("error"),
                          thumbnail_json=json.dumps(res, default=str))
             out.append({"id": r["id"], **res})
@@ -614,9 +753,21 @@ class HindiPublisher:
             return {"ran": False, "reasons": gates["reasons"]}
         now = self.clock()
         with self._connect() as c:
-            due = c.execute("SELECT id FROM hindi_publications WHERE state='SCHEDULED' AND scheduled_at_utc <= ? "
-                            "ORDER BY scheduled_at_utc, id LIMIT 1", (_ts(now + UPLOAD_LEAD),)).fetchone()
-        res = self.upload(due[0]) if due else {"uploaded": False, "reason": "nothing due"}
+            due = [r[0] for r in c.execute("SELECT id FROM hindi_publications WHERE state='SCHEDULED' AND "
+                                           "scheduled_at_utc <= ? ORDER BY scheduled_at_utc, id LIMIT 20",
+                                           (_ts(now + UPLOAD_LEAD),))]
+        res: Dict[str, Any] = {"uploaded": False, "reason": "nothing due"}
+        skipped = []
+        for pid in due:                       # the first due video the guard allows (unapproved ones wait)
+            if not self.eligibility(self.get(pid))["eligible"]:
+                skipped.append(pid)
+                continue
+            res = self.upload(pid)
+            break
+        else:
+            if skipped:
+                res = {"uploaded": False, "reason": "due videos are not eligible (see each video's reasons)",
+                       "not_eligible": skipped}
         return {"ran": True, "upload": res, "thumbnails": self._thumbnails()}
 
 

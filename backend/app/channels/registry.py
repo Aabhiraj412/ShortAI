@@ -379,6 +379,105 @@ class ChannelRegistry:
         return self._set(key, actor, "DEACTIVATED", None, status=INACTIVE if verified else ch["status"],
                          status_reason="deactivated" if verified else ch["status_reason"])
 
+    # -- Stage 4.03: upload identity and publishing authorization -----------------------------------------------
+    def confirm_upload_identity(self, key: str, live_id: Optional[str], *, actor: str = "upload") -> str:
+        """Immediately before an upload: the channel the upload token belongs to (``live_id``, from a
+        channels.list?mine=true response the upload already made) must be this channel's verified identity, and the
+        channel must be ACTIVE. Raises ``publish_guard.IdentityRefused`` otherwise (nothing is uploaded).
+
+        English (master) with no stored id yet adopts the first identity, exactly as ``verify`` does; a different id
+        later blocks English (IDENTITY_CHANGED). A localized channel needs a stored verified id; a live id equal to
+        the English channel blocks it (IDENTITY_CONFLICT)."""
+        from backend.app.channels.publish_guard import IdentityRefused
+        ch = self.get(key)
+        if ch["status"] != ACTIVE:
+            raise IdentityRefused(f"channel '{key}' is not active ({ch['status']}: {ch['status_reason']}); "
+                                  "nothing was uploaded")
+        if not isinstance(live_id, str) or not live_id:
+            raise IdentityRefused(f"the upload token's channel could not be identified for '{key}'; nothing was "
+                                  "uploaded")
+        stored = ch.get("youtube_channel_id")
+        if ch["role"] == MASTER:
+            if not stored:
+                self._set(key, actor, "VERIFIED", {"channel_id": live_id, "via": "upload identity check"},
+                          youtube_channel_id=live_id, verified_at_utc=_ts(self.clock()),
+                          status_reason="verified with channels.list?mine=true")
+                return live_id
+            if stored != live_id:
+                self._set(key, actor, "IDENTITY_CHANGED", {"stored": stored, "now": live_id, "via": "upload"},
+                          status=BLOCKED, status_reason="IDENTITY_CHANGED: the English token now belongs to a "
+                                                        "different channel; reconnect the English channel")
+                raise IdentityRefused("the English upload token belongs to a different channel than the verified "
+                                      "English channel; English is BLOCKED and nothing was uploaded")
+            return live_id
+        master = next((c for c in self.list() if c["role"] == MASTER), None)
+        if master and master.get("youtube_channel_id") == live_id:
+            self._set(key, actor, "IDENTITY_CONFLICT", {"channel_id": live_id, "via": "upload"}, status=BLOCKED,
+                      status_reason="IDENTITY_CONFLICT: this authorization is the English channel")
+            raise IdentityRefused(f"the '{key}' upload token is the English channel; '{key}' is BLOCKED and nothing "
+                                  "was uploaded")
+        if not stored or stored != live_id:
+            raise IdentityRefused(f"the '{key}' upload token does not belong to the verified '{key}' channel; "
+                                  "nothing was uploaded")
+        return live_id
+
+    def publishing_authorization(self, key: str) -> Dict[str, Any]:
+        ch = self.get(key)
+        cfg = ch.get("publishing_config") or {}
+        return {"channel_key": key, "authorized": cfg.get("publishing_authorized") is True,
+                "authorized_by": cfg.get("authorized_by"), "authorized_at_utc": cfg.get("authorized_at_utc"),
+                "revoked_by": cfg.get("revoked_by"), "revoked_at_utc": cfg.get("revoked_at_utc"),
+                "authorization_id": cfg.get("authorization_id"),
+                "events": [e for e in self.events(key, limit=50)
+                           if e["event"] in ("PUBLISHING_AUTHORIZED", "PUBLISHING_REVOKED")][:20]}
+
+    def set_publishing_authorization(self, key: str, authorized: bool, *, actor: str, reason: str) -> Dict[str, Any]:
+        """The ONLY writer of ``publishing_authorized`` (a static test enforces this). Operator action only: the
+        flag and its channel_events record are written in one transaction (no event, no change). Authorizing needs
+        an ACTIVE, verified localized channel; revoking is always allowed. English is governed by its existing
+        publishing policy and cannot be changed here."""
+        import uuid
+        if authorized is not True and authorized is not False:
+            raise ChannelError("authorized must be true or false", 400)
+        reason = (reason or "").strip() or ("operator authorization" if authorized else "operator revocation")
+        if len(reason) > 300:
+            raise ChannelError("the reason is limited to 300 characters", 400)
+        actor = (actor or "").strip()[:80] or "dashboard"
+        ch = self.get(key)
+        if ch["role"] == MASTER:
+            raise ChannelError("English publishing is governed by the existing publishing policy, not by this "
+                               "authorization", 400)
+        if authorized and (ch["status"] != ACTIVE or not ch.get("youtube_channel_id")):
+            raise ChannelError(f"only an active, verified channel can be authorized (status {ch['status']})")
+        now = _ts(self.clock())
+        conn = self._connect(True)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT publishing_config_json, status FROM channel_registry WHERE channel_key=?",
+                               (key,)).fetchone()
+            cfg = json.loads(row["publishing_config_json"] or "{}")
+            before = cfg.get("publishing_authorized") is True
+            if authorized:
+                cfg.update(publishing_authorized=True, authorized_by=actor, authorized_at_utc=now,
+                           authorization_id=uuid.uuid4().hex[:12])
+            else:
+                cfg.update(publishing_authorized=False, revoked_by=actor, revoked_at_utc=now)
+            conn.execute("UPDATE channel_registry SET publishing_config_json=?, updated_at_utc=? WHERE channel_key=?",
+                         (json.dumps(cfg), now, key))
+            self._event(conn, key, "PUBLISHING_AUTHORIZED" if authorized else "PUBLISHING_REVOKED", actor,
+                        row["status"], row["status"], {"from": before, "to": authorized, "reason": reason,
+                                                       "authorization_id": cfg.get("authorization_id")})
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
+        return self.publishing_authorization(key)
+
     def is_active(self, key: str) -> bool:
         try:
             ch = self.get(key)
@@ -428,7 +527,7 @@ class ChannelRegistry:
         reasons = []
         if ch["status"] != ACTIVE or not ch.get("youtube_channel_id"):
             reasons.append(f"channel not verified and active ({ch['status']}: {ch['status_reason']})")
-        if not (ch.get("publishing_config") or {}).get("publishing_authorized"):
+        if (ch.get("publishing_config") or {}).get("publishing_authorized") is not True:
             reasons.append("Hindi publishing has not been authorized (separate milestone)")
         if localization is not None and localization.get("status") != "QC_PASSED":
             reasons.append(f"video has not passed Hindi QC (status {localization.get('status')})")

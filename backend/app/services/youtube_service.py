@@ -89,6 +89,9 @@ class YouTubePublisherService:
     ) -> Dict:
         if not os.path.isfile(video_path) or not video_path.lower().endswith(".mp4"):
             raise ValueError("A completed local MP4 is required.")
+        from backend.app.channels.publish_guard import _media_dir, is_localized_media
+        if is_localized_media(video_path, _media_dir()):          # Stage 4.03: channel isolation
+            raise ValueError("Localized media cannot enter the English publishing queue.")
         if thumbnail_path and not os.path.isfile(thumbnail_path):
             raise ValueError("The production thumbnail does not exist.")
         metadata.source_publication_id = publication_id
