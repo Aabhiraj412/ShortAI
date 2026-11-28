@@ -167,3 +167,66 @@ def test_two_off_topic_drafts_fall_back_to_an_extractive_script_that_passes_qc(m
     assert c.calls == ["primary", "primary"]                                    # bounded: one revision, no more
     assert out["script_source"] == "extractive_fallback"
     assert tc.check(TOPIC.title, out["full_script"]).passed and _gate(TOPIC.title, out["full_script"], tmp_path).passed
+
+
+# -- retries: a cached script the topic rule blocks is rewritten (cycle_12_20261128_1100) ---------------------------
+CYCLE12_TITLE = "Amazon (company)"
+CYCLE12 = ("If Amazon's push to same\u2011day delivery goes unchecked, local grocery shops could disappear. That would "
+           "leave neighborhoods without quick access to fresh food. Amazon started as an online bookstore in 1994, grew "
+           "into the world's biggest online retailer by 2026, and now owns cloud, AI, and streaming giants. Amazon is "
+           "closing its Go and Fresh physical stores to focus on online same\u2011day delivery, while buying Whole Foods "
+           "to widen its grocery reach. This move shows Amazon uses AI and data to predict customer needs, turning every "
+           "purchase into a quick, friction\u2011free experience. Soon, the only thing left to buy on a street corner "
+           "might be an Amazon box.")
+
+
+def test_bracketed_disambiguator_is_optional(tmp_path):
+    c = tc.check(CYCLE12_TITLE, CYCLE12)
+    assert c.legacy_passed is False and c.passed and c.essential == ["amazon"]     # blocked twice in production
+    assert _gate(CYCLE12_TITLE, CYCLE12, tmp_path).passed
+    assert tc.check("Fiona (hippopotamus)", "Fiona was born six weeks early.").passed
+    assert not tc.check("Amazon (company)", "A rainforest river floods every year.").passed   # still needs the name
+    assert tc.check("(Turner)", "Turner painted it.").passed                               # only bracketed words
+
+
+def test_cache_rejects_a_cached_script_that_the_topic_rule_blocks(tmp_path):
+    from backend.app.orchestration.stage_artifact_cache import StageArtifactCache
+    cache = StageArtifactCache(tmp_path / "stage_cache")
+    title = "Dead Sea Scrolls"
+    bad = {"full_script": "Shepherds found clay jars in a cave near Qumran."}
+    good = {"full_script": "The Dead Sea Scrolls were found in a cave near Qumran."}
+    cache.save("script", "fp", bad, [])
+    reject = lambda s: gsw.cached_script_problem(title, s)           # noqa: E731
+    computed = []
+    value, reused = cache.get_or_compute("script", "fp", lambda: computed.append(1) or good, reject=reject)
+    assert value == good and reused is False and computed == [1]   # rewritten, not resent
+    value, reused = cache.get_or_compute("script", "fp", lambda: computed.append(2) or bad, reject=reject)
+    assert value == good and reused is True and computed == [1]    # a script that passes is still reused
+    value, reused = cache.get_or_compute("script", "fp", lambda: good, reject=lambda s: 1 / 0)
+    assert reused is False                                          # a broken check recomputes, never reuses blindly
+    assert gsw.cached_script_problem(title, good) is None and "missing dead, scrolls" in gsw.cached_script_problem(title, bad)
+    assert gsw.cached_script_problem(CYCLE12_TITLE, {"full_script": CYCLE12}) is None
+
+
+def test_orchestrator_revalidates_the_cached_script_and_never_pairs_it_with_the_old_video():
+    src = (Path(__file__).resolve().parents[1] / "app" / "orchestration" / "crazzydocs_master_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index('"script",\n')
+    call = src[i:src.index(")", src.index("reject=", i)) + 1]
+    assert "reject=_reject_cached_script" in call and "cached_script_problem(selected_topic.title" in src
+    j = src.index('if _reuse_video and locals().get("_script_rejections"):')
+    assert src.index("_reuse_video = True") < j < src.index("if _reuse_video:\n", j)      # decided before reuse is used
+    assert "_reuse_video = False" in src[j:j + 200]
+
+
+def test_extractive_fallback_passes_for_a_bracketed_title(monkeypatch, clock, tmp_path):
+    from types import SimpleNamespace
+    from backend.app.core.execution_context import ExecutionContext
+    topic = SimpleNamespace(**{**vars(TOPIC), "title": "Breakthrough Prize (award)"})
+    monkeypatch.setattr(gsw.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gsw, "_deferred_sleep", lambda s: None)
+    monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "backup")
+    c = ScriptedClient({"primary": [{"sections": OFF_TOPIC}, {"sections": OFF_TOPIC}], "backup": []})
+    out = gsw.write_grounded_script(topic, "", job_id="j1", execution_context=ExecutionContext.VALIDATION,
+                                    client=c, model="primary")
+    assert out["script_source"] == "extractive_fallback" and "(" not in out["full_script"]
+    assert _gate(topic.title, out["full_script"], tmp_path).passed

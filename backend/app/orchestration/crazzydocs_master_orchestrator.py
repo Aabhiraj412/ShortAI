@@ -724,6 +724,17 @@ class CrazzyDocsMasterOrchestrator:
                 # A retry of this production reuses script, narration, media and storyboard
                 # from the previous attempt when they are still valid (stage_artifact_cache).
                 stage_cache = StageArtifactCache(os.path.join(prod_ws.reports_dir, "stage_cache"))
+                # A cached script the deployed QC topic rule would block is rewritten, not resent
+                # (cycle_12_20261128_1100); its old video then carries the old narration and is never reused.
+                _script_rejections: List[str] = []
+
+                def _reject_cached_script(cached) -> Optional[str]:
+                    from backend.app.content.grounded_script_writer import cached_script_problem
+                    why = cached_script_problem(selected_topic.title, cached)
+                    if why:
+                        _script_rejections.append(why)
+                    return why
+
                 script_data, _script_reused = stage_cache.get_or_compute(
                     "script",
                     cache_fingerprint(job_id, selected_topic.title, best_hook.hook_text),
@@ -733,6 +744,7 @@ class CrazzyDocsMasterOrchestrator:
                         job_id=job_id,
                         execution_context=execution_context,
                     ),
+                    reject=_reject_cached_script,
                 )
                 narration_text = script_data["full_script"]
                 script_path = os.path.join(prod_ws.scripts_dir, f"script_{job_id}.json")
@@ -1058,6 +1070,10 @@ class CrazzyDocsMasterOrchestrator:
                 except Exception:
                     _reuse_video = False
 
+            if _reuse_video and locals().get("_script_rejections"):
+                _reuse_video = False      # the script was rewritten: the old video speaks the rejected narration
+                logger.info("[PRODUCTION WORKSPACE IDEMPOTENCY] Not reusing %s: the cached script was rewritten (%s).",
+                            final_video_path, "; ".join(locals().get("_script_rejections")))
             # Stage 3.30: a retry of a post-render failure reuses the preserved video; it is never re-rendered.
             _post_render_retry = bool(((existing_cp or {}).get("cycle_state") or {}).get("reuse_rendered_video"))
             if _post_render_retry and not _reuse_video:

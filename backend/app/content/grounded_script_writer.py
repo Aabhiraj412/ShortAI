@@ -153,6 +153,16 @@ def validate_sections(sections: Sequence[Dict[str, Any]], corpus: str, title: st
     return problems
 
 
+def cached_script_problem(title: str, script: Any) -> Optional[str]:
+    """Why a script cached by an earlier attempt must not be reused, or None. Only the production QC topic rule
+    (CHECK_A, content.topic_coverage): a retry after that block must write a new script, not resend the rejected one
+    (cycle_12_20261128_1100 reused its blocked script and was blocked again)."""
+    from backend.app.content import topic_coverage
+    text = (script or {}).get("full_script", "") if isinstance(script, dict) else ""
+    cov = topic_coverage.check(title or "", text)
+    return None if cov.passed else f"fails the topic-coverage rule (missing {', '.join(cov.missing)})"
+
+
 def build_prompt(topic: Any, hook_type: Tuple[str, str], suggested_hook: str,
                  feedback: Sequence[str] = ()) -> str:
     research = fact_corpus(topic)[:6000]

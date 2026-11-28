@@ -98,9 +98,18 @@ class StageArtifactCache:
         inputs_fp: str,
         compute: Callable[[], Any],
         files_of: Callable[[Any], Iterable[str]] = lambda _v: (),
+        reject: Optional[Callable[[Any], Optional[str]]] = None,
     ) -> Tuple[Any, bool]:
-        """Returns (value, reused)."""
+        """Returns (value, reused). ``reject(cached)`` may return a reason the cached value is no longer acceptable
+        under the current rules (e.g. a script the deployed QC would block); the stage is then recomputed."""
         hit, value, reason = self.load(stage, inputs_fp)
+        if hit and reject is not None:
+            try:
+                why = reject(value)
+            except Exception as exc:          # a broken check never blocks reuse silently: recompute instead
+                why = f"revalidation failed ({type(exc).__name__})"
+            if why:
+                hit, reason = False, f"cached result no longer acceptable: {why}"
         if hit:
             logger.info("[RENDER RECOVERY] Reusing cached %s from the previous attempt.", stage)
             return value, True

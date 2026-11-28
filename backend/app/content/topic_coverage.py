@@ -13,7 +13,10 @@ Live failures it produced although the narration was on topic: "Generative pre-t
 This rule keeps the same threshold (two essential concepts, or the only one there is) but
   * drops generic framing words ("ancient", "industry", "finding", "into", ...) from the required set,
   * accepts inflections ("generate" for "generative", "training" for "trained", "economy" for "economics"),
-    clippings of five letters or more ("hippo" for "hippopotamus") and the title's acronym ("GPT").
+    clippings of five letters or more ("hippo" for "hippopotamus") and the title's acronym ("GPT"),
+  * treats a bracketed disambiguator as optional when the title has other essential words: "Amazon (company)",
+    "Market (economics)" (cycle_12_20261128_1100 was blocked twice for a narration that said "Amazon" five times;
+    the extractive fallback strips brackets too, so it could never pass the legacy rule on such a title).
 It is never stricter than the legacy rule: a narration the legacy rule accepts is still accepted.
 """
 from __future__ import annotations
@@ -100,7 +103,9 @@ def check(title: str, narration: str) -> Coverage:
     terms = title_terms(title)
     legacy = [w for w in terms if w in narr_lower]
     legacy_ok = not (len(legacy) < 2 and len(terms) >= 2)
-    essential = [w for w in terms if w not in GENERIC] or terms
+    bracketed = set(title_terms(" ".join(re.findall(r"\(([^)]*)\)", title or ""))))
+    specific = [w for w in terms if w not in GENERIC]
+    essential = [w for w in specific if w not in bracketed] or specific or terms
     tokens = re.findall(r"[a-z0-9]+", narr_lower)
     acronyms = _acronyms(title)
     # written in capitals, as narration writes acronyms ("GPTs"), so the word "cat" never counts as CAT
