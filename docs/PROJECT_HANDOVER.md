@@ -117,6 +117,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 |---|---|
 | `2de67d6`, `3eb938a` | **Remediation closure**: controller identity health (live PID plus registered daemon), six-state self-healing outcomes, readiness-metric window, attention groups, autonomous Hinglish localization (`localization_auto_daily_max` = 6). `docs/OPERATOR_DEPENDENCY_REDUCTION.md` §7 |
 | `ec92063` | **4.02 follow-up**: natural Hinglish narration, English or Roman-Hinglish on-screen text |
+| `f4ddb51` (2026-11-28, deployed 17:24 IST) | **4.03** Independent channel publishing: shared publishing guard (`channels/publish_guard.py`) before each channel's only `videos().insert`; English destination identity from the existing duplicate-check `channels.list`; localized media refused by the English queue; Hindi QC SHA-256, re-render withdrawal, per-video approval bound to the hash; audited operator-only Hindi publishing authorization; channel-attributed quota with Hindi caps and an English reserve. Hindi stays unauthorized. `docs/STAGE_4_03_INDEPENDENT_CHANNEL_PUBLISHING.md` |
 | (4.02 commit, see `git log`) | **4.02** Hindi localization pipeline (translate, voice, render in the shared slot, Hindi QC). Publishing disabled. `docs/STAGE_4_02_HINDI_LOCALIZATION.md` |
 | `9ce835b` | **4.01** Multi-channel foundation (English verified, Hindi PENDING_VERIFICATION) |
 | (remediation commit, see `git log`) | **Remediation WS1 (part 2) to WS7 and the operator-attention feed** |
@@ -170,7 +171,7 @@ Everything lives under `backend/app/autonomy/` and is **OFF by default**.
 | 3 | **QC duration failures** | Duration 49.2 s, outside the 50–58 s window; seen after rendering. |
 | 4 | **High recovery-window expiry rate** | 40 of 98 jobs; YouTube daily quota exhaustion also delays publishing. |
 | 5 | **Monitor false unhealthy** | **Fixed in 3.32H** (2 s timeout on a ~2 s aggregate endpoint). The monitor now uses liveness/readiness probes and persists every decision. |
-| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite (2026-11-28, test-suite phase 1): 2155 passed, 4 failed, 175 skipped, 15 min 38 s serial; before phase 1: same results in 22 min 4 s)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
+| 6 | **Known test failures (baseline, 2026-11-27: 4; latest full suite (2026-11-28, Stage 4.03 `f4ddb51`): 2184 passed, 4 failed, 175 skipped, 16 min 12 s serial; test-suite phase 1: 2155 passed, same 4 failures and skips)** | `test_dashboard_html_page_served`, `test_end_to_end_orchestration_run`, two in `test_youtube_branding`. The timing-sensitive `test_slow_youtube_status_does_not_block_other_dashboard_requests` can also fail intermittently. |
 | 7 | **DNS rebinding** | Could expose the CSRF token through a read (pre-existing; writes still need an allow-listed Origin). A Host-header allow-list is the suggested fix. |
 | 8 | **Stage 3.31 flags** | Their final state still awaits the user's approval. |
 | 10 | **3.37 long-form executor missing** | The queue, admission and recovery are in place, but no long-form pipeline (renderer or step executor) exists. Long-form jobs wait with "no executor registered". Executor contract: `docs/STAGE_3_37_MULTI_PIPELINE_PRODUCTION.md` §8. |
@@ -231,6 +232,8 @@ Detail: `docs/STAGE_3_32_IMPLEMENTATION_PLAN.md`.
 - Run the full suite (about 13–19 minutes) in the background.
 
 ## 7. Exact next task
+
+**Stage 4.03 (Independent Channel Publishing)** is deployed (`f4ddb51`, daemon PID 8968 and dashboard PID 4652 since 17:24 IST, backup `D:\Agents\CrazzyDocs_backups\predeploy_stage403_1725_20261128_172309`). Hindi publishing is **not authorized** (`publishing_authorized` unset, `can_publish: false`); the five pre-4.03 Hindi rows (1, 8, 15, 45, 57) and rows 97 and 121 (queued 16:21 / 16:42 IST by the old code) are SCHEDULED, unapproved and have no QC hash, so the guard blocks them. Still to verify: the next English upload logs `[PUBLISH GUARD] en ... destination identity confirmed` in `logs/scheduler_daemon.log`. Hindi publishing needs, in order: operator approval of each video (dashboard queue: APPROVE VIDEO) and the operator's channel authorization (Channels card: AUTHORIZE…, typed phrase). Neither is done by code.
 
 **2026-11-28 follow-ups (operator):**
 - Press **Test Analytics Connection** in API Providers; press **Reauthorize** only if it fails (Google's consent screen needs the operator; choose the English channel).
