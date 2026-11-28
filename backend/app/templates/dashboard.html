@@ -3568,33 +3568,36 @@ function autoTime(ts) {
 }
 
 // Confirmed dashboard writes that take no operator name (channels, localizations): same CSRF/origin protection.
-async function dashWrite(url, body) {
-  if (!autoState.csrf) {
+// The CSRF token lives only in the dashboard process: a restart (deploy) issues a new one while an open page still
+// holds the old one. The server's CSRF refusal happens before any action runs, so a refused write is safe to repeat:
+// fetch a fresh token and retry exactly once. Any other error (including other 403s) is never retried.
+const CSRF_REFUSED = "Missing or invalid CSRF token for autonomy controls.";
+async function csrfToken(refresh) {
+  if (refresh || !autoState.csrf) {
     const s = await apiJson("/api/autonomy/session");
     autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
   }
+  return autoState.csrf;
+}
+async function csrfWrite(url, method, body) {
+  const send = async () => {
+    await csrfToken(false);
+    return apiJson(url, { method, headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
+                          body: JSON.stringify(body || {}) });
+  };
   try {
-    return await apiJson(url, { method: "POST", headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
-                                body: JSON.stringify(body || {}) });
+    return await send();
   } catch (err) {
-    if (/CSRF/i.test(err.message || "")) autoState.csrf = null;
-    throw err;
+    if ((err.message || "") !== CSRF_REFUSED) throw err;
+    autoState.csrf = null;
+    await csrfToken(true);                      // the dashboard was restarted: one retry with the new token
+    try { return await send(); }
+    catch (err2) { if ((err2.message || "") === CSRF_REFUSED) autoState.csrf = null; throw err2; }
   }
 }
+async function dashWrite(url, body) { return csrfWrite(url, "POST", body); }
 
-async function autoWrite(url, method, body) {
-  if (!autoState.csrf) {
-    const s = await apiJson("/api/autonomy/session");
-    autoState.csrf = s.csrf_token; autoState.header = s.csrf_header || autoState.header;
-  }
-  try {
-    return await apiJson(url, { method, headers: { "Content-Type": "application/json", [autoState.header]: autoState.csrf },
-                                body: JSON.stringify(body || {}) });
-  } catch (err) {
-    if (/CSRF/i.test(err.message || "")) autoState.csrf = null;   // dashboard restarted: fetch a new token next time
-    throw err;
-  }
-}
+async function autoWrite(url, method, body) { return csrfWrite(url, method, body); }
 
 async function autoDo(label, fn) {
   try { await fn(); showToast(label); }

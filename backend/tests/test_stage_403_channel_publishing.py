@@ -704,3 +704,54 @@ def test_attention_lists_hindi_upload_failures_and_stale_english_entries(tmp_pat
         c.execute("INSERT INTO publishing_ledger VALUES (363,'pending_queue','2026-11-28T10:00:00Z',NULL)")
     pa = oa._publishing_attention(str(db), now=datetime(2026, 11, 28, 12, tzinfo=timezone.utc))
     assert [r["id"] for r in pa["hindi"]] == [1] and [r["id"] for r in pa["english_stale"]] == [362]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Dashboard writes: a stale CSRF token (dashboard restarted) is refreshed and the write retried exactly once
+# ---------------------------------------------------------------------------------------------------------------
+def test_dashboard_csrf_constant_matches_the_server_refusal():
+    import re as _re
+    html = (APP / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    js = _re.search(r'const CSRF_REFUSED = "([^"]+)";', html).group(1)
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    assert f'detail="{js}"' in src                    # the exact message require_autonomy_write raises
+
+
+def test_dashboard_write_refreshes_a_stale_token_and_retries_once():
+    import shutil
+    import subprocess
+    from test_unified_publishing_queue import _fn
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    html = (APP / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    import re as _re
+    const = _re.search(r'const CSRF_REFUSED = "[^"]+";', html).group(0)
+    code = "\n".join([const, _fn(html, "csrfToken"), _fn(html, "csrfWrite"), _fn(html, "dashWrite"), _fn(html, "autoWrite")])
+    harness = code + r'''
+const autoState = { csrf: "OLD", header: "X-CrazzyDocs-CSRF" };
+let server = "NEW", log = [], failAlways = false, otherError = null;
+async function apiJson(url, opts = {}) {
+  if (url === "/api/autonomy/session") { log.push("session"); return { csrf_token: server, csrf_header: "X-CrazzyDocs-CSRF" }; }
+  const tok = opts.headers["X-CrazzyDocs-CSRF"]; log.push("POST " + tok);
+  if (otherError) throw new Error(otherError);
+  if (failAlways || tok !== server) throw new Error(CSRF_REFUSED);
+  return { ok: true };
+}
+(async () => {
+  const out = {};
+  out.stale = await dashWrite("/x", {}); out.staleLog = log.slice(); log = [];
+  out.fresh = await autoWrite("/x", "POST", {}); out.freshLog = log.slice(); log = [];
+  failAlways = true; try { await dashWrite("/x", {}); } catch (e) { out.twice = e.message; } out.twiceLog = log.slice(); log = [];
+  failAlways = false; otherError = "Cross-site request refused."; autoState.csrf = server;
+  try { await dashWrite("/x", {}); } catch (e) { out.other = e.message; } out.otherLog = log.slice();
+  console.log(JSON.stringify(out));
+})();
+'''
+    res = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout.strip())
+    assert out["stale"] == {"ok": True} and out["staleLog"] == ["POST OLD", "session", "POST NEW"]   # one retry
+    assert out["freshLog"] == ["POST NEW"]                                                          # no extra calls
+    assert out["twiceLog"] == ["POST NEW", "session", "POST NEW"] and "CSRF" in out["twice"]       # never a 2nd retry
+    assert out["otherLog"] == ["POST NEW"] and out["other"] == "Cross-site request refused."       # others not retried
