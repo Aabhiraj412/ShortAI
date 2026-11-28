@@ -52,6 +52,7 @@ APPROVABLE = (DRAFT, SCHEDULED, FAILED)
 PUBLICATION_COLUMNS = (("qc_sha256", "TEXT"), ("approved_by", "TEXT"), ("approved_at_utc", "TEXT"),
                        ("approved_sha256", "TEXT"), ("withdrawn_at_utc", "TEXT"))
 CLEAR_APPROVAL = {"approved_by": None, "approved_at_utc": None, "approved_sha256": None}
+AUTO_APPROVER = "auto:qc_passed"          # Stage 4.03 refinement: per-video approval only, never authorization
 DEFAULT_SCHEDULE = {"strategy": "MANUAL", "enabled": False, "timezone": "Asia/Kolkata", "daily_limit": 24,
                     "max_attempts": 3, "cycles": {}}
 STRATEGIES = ("MANUAL",)                  # reserved for later: "ANALYTICAL" (per-video timestamps)
@@ -359,6 +360,7 @@ class HindiPublisher:
     def sync(self) -> int:
         """Adds every QC_PASSED Hindi localization not yet in the queue (as DRAFT, metadata to review)."""
         added = 0
+        self._invalidate_stale_approvals()
         root = (self.media_dir / "localizations" / TARGET).resolve()
         for loc in self.reg.localizations(TARGET, limit=200):
             if loc["status"] != "QC_PASSED" or loc["target_channel_key"] != TARGET:
@@ -400,7 +402,67 @@ class HindiPublisher:
                     self.schedule_item(new_id)                    # its cycle's Hindi time (strategy plan)
                 except PublishingError as exc:
                     self._update(new_id, "NOT_PLANNED", str(exc), last_error=str(exc)[:300])
+                self._auto_approve(new_id, loc)
         return added
+
+    # -- automatic per-video approval (Stage 4.03 refinement) ----------------------------------------------------
+    def _auto_approve(self, pid: int, loc: Dict[str, Any]) -> bool:
+        """Approves a NEWLY queued (or re-queued after a re-render) video whose Hindi QC passed, bound to the exact
+        QC-passed SHA-256: the localization is QC_PASSED, its QC result passed and recorded the hash, the queue row
+        carries the same hash, and the file inside the Hindi media folder still has it. Anything else: no approval.
+        Never touches channel publishing authorization. Rows queued before QC hashes existed are never approved
+        here (they have no QC hash and are never re-inserted)."""
+        from backend.app.channels.publish_guard import resolve_inside, sha256_file
+        row = self.get(pid)
+        if row["state"] not in APPROVABLE or row.get("approved_at_utc"):
+            return False
+        qc = json.loads(loc.get("qc_json") or "null") or {}
+        arts = json.loads(loc.get("artifacts_json") or "{}")
+        want = row.get("qc_sha256")
+        if (loc.get("status") != "QC_PASSED" or qc.get("passed") is not True or not want
+                or qc.get("final_mp4_sha256") != want or arts.get("final_mp4_sha256") != want):
+            return False
+        real = resolve_inside(row["video_path"], self.media_dir / "localizations" / TARGET)
+        if real is None or sha256_file(real) != want:
+            return False
+        return self._update(pid, "AUTO_APPROVED_AFTER_QC", {"sha256": want, "localization_id": loc["id"]},
+                            expect=APPROVABLE, approved_by=AUTO_APPROVER, approved_at_utc=_ts(self.clock()),
+                            approved_sha256=want)
+
+    def _invalidate_stale_approvals(self) -> int:
+        """Clears any approval (automatic or manual) that no longer matches: the localization is no longer
+        QC_PASSED or its QC hash differs, or the file is missing, outside the Hindi folder or changed since
+        approval. Unapproved, uploading and uploaded rows are never touched."""
+        from backend.app.channels.publish_guard import resolve_inside, sha256_file
+        with self._connect() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM hindi_publications WHERE approved_at_utc IS NOT NULL "
+                                               "AND state IN ('DRAFT','SCHEDULED','FAILED')")]
+        if not rows:
+            return 0
+        locs = {l["id"]: l for l in self.reg.localizations(TARGET, limit=500)}
+        n = 0
+        for r in rows:
+            loc = locs.get(r["localization_id"]) or {}
+            qc = json.loads(loc.get("qc_json") or "null") or {}
+            why = None
+            if loc.get("status") != "QC_PASSED":             # QC failed, re-opened or otherwise not passed
+                why = "APPROVAL_CLEARED_QC_NOT_PASSED"
+            elif r.get("qc_sha256") and qc.get("final_mp4_sha256") and qc["final_mp4_sha256"] != r["approved_sha256"]:
+                why = "APPROVAL_CLEARED_QC_HASH_CHANGED"
+            else:
+                real = resolve_inside(r["video_path"], self.media_dir / "localizations" / TARGET)
+                if real is None:
+                    why = "APPROVAL_CLEARED_FILE_MISSING"
+                else:
+                    approved = _parse(r["approved_at_utc"])
+                    changed_after = datetime.fromtimestamp(real.stat().st_mtime, timezone.utc) > approved - timedelta(seconds=2)
+                    if changed_after and sha256_file(real) != r["approved_sha256"]:   # hash only a touched file
+                        why = "APPROVAL_CLEARED_FILE_CHANGED"
+            if why and self._update(r["id"], why, {"previous_sha256": r["approved_sha256"],
+                                                   "approved_by": r["approved_by"]},
+                                    expect=(DRAFT, SCHEDULED, FAILED), **CLEAR_APPROVAL):
+                n += 1
+        return n
 
     def _revive_withdrawn(self, loc: Dict[str, Any], mp4: Path, qc_hash: Optional[str]) -> bool:
         """A WITHDRAWN row whose localization passed QC again returns as DRAFT with the new file and QC hash and NO
@@ -417,6 +479,7 @@ class HindiPublisher:
                 self.schedule_item(r["id"])
             except PublishingError as exc:
                 self._update(r["id"], "NOT_PLANNED", str(exc), last_error=str(exc)[:300])
+            self._auto_approve(r["id"], loc)                 # fresh approval only from the fresh QC pass
         return True
 
     def withdraw_for_localization(self, loc_id: int, *, reason: str, actor: str = "system") -> Dict[str, Any]:

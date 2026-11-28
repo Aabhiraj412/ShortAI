@@ -498,3 +498,110 @@ def test_quota_override_is_validated():
                                          "english_reserve": {yq.UPLOADS: True}})
     assert lim["own_limits"] == {yq.UPLOADS: 3, yq.GENERAL: 1500}
     assert lim["english_reserve"][yq.UPLOADS] == 30
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Refinement: automatic per-video approval after a QC pass (never channel authorization)
+# ---------------------------------------------------------------------------------------------------------------
+def _qc_pass(env, loc_id=1, passed=True, record_hash=True):
+    mp4 = Path(json.loads(sqlite3.connect(env.db).execute(
+        "SELECT artifacts_json FROM content_localizations WHERE id=?", (loc_id,)).fetchone()[0])["final_mp4"])
+    h = pg.sha256_file(mp4)
+    arts = {"final_mp4": str(mp4), **({"final_mp4_sha256": h} if record_hash else {})}
+    qc = {"passed": passed, **({"final_mp4_sha256": h} if record_hash else {})}
+    with sqlite3.connect(env.db) as c:
+        c.execute("UPDATE content_localizations SET status=?, artifacts_json=?, qc_json=? WHERE id=?",
+                  ("QC_PASSED" if passed else "FAILED", json.dumps(arts), json.dumps(qc), loc_id))
+    return mp4, h
+
+
+def test_qc_pass_auto_approves_the_new_row_bound_to_the_qc_hash(env):
+    mp4, h = _qc_pass(env)
+    env.pub.sync()
+    r = env.pub.get(1)
+    assert r["approved_by"] == hp.AUTO_APPROVER and r["approved_sha256"] == h == r["qc_sha256"]
+    assert env.reg.publishing_authorization("hi")["authorized"] is False           # never authorizes
+    assert (env.reg.get("hi").get("publishing_config") or {}).get("publishing_authorized") is None
+    with sqlite3.connect(env.db) as c:
+        assert c.execute("SELECT COUNT(*) FROM hindi_publication_events WHERE event='AUTO_APPROVED_AFTER_QC'"
+                         ).fetchone()[0] == 1
+    v = env.pub.eligibility(r)
+    assert v["eligible"] is False and v["checks"]["approved"] and not v["checks"]["publishing_authorized"]
+
+
+def test_no_auto_approval_without_a_passed_qc_with_recorded_hash(env):
+    _qc_pass(env, record_hash=False)                       # QC passed before hashes existed: no approval
+    env.pub.sync()
+    assert env.pub.get(1)["approved_at_utc"] is None
+    with sqlite3.connect(env.db) as c:                     # a QC result that did not pass never approves
+        c.execute("UPDATE content_localizations SET qc_json=? WHERE id=1", (json.dumps({"passed": False}),))
+    env.pub._auto_approve(1, env.reg.localizations("hi")[-1])
+    assert env.pub.get(1)["approved_at_utc"] is None
+
+
+def test_file_mismatch_at_qc_time_prevents_auto_approval(env):
+    mp4, h = _qc_pass(env)
+    mp4.write_bytes(b"\x07" * 64)                          # changed between QC and queueing
+    env.pub.sync()
+    assert env.pub.get(1)["approved_at_utc"] is None
+
+
+def test_existing_rows_are_never_approved_retroactively(env):
+    env.pub.sync()                                         # row queued without QC hash (pre-refinement)
+    env.pub.schedule_item(1)
+    before = env.pub.get(1)
+    _qc_pass(env)                                          # even if the localization now shows a hash
+    env.pub.sync()
+    after = env.pub.get(1)
+    assert after["approved_at_utc"] is None and after["state"] == before["state"]
+    assert after["scheduled_at_utc"] == before["scheduled_at_utc"]
+
+
+def test_auto_approval_is_invalidated_by_file_change_qc_failure_rerender_and_metadata(env):
+    mp4, h = _qc_pass(env)
+    env.pub.sync()
+    assert env.pub.get(1)["approved_at_utc"]
+    # file change
+    mp4.write_bytes(b"\x08" * 64)
+    os.utime(mp4, None)
+    env.clock.t = datetime.now(timezone.utc) - timedelta(minutes=5)   # approval older than the file change
+    with sqlite3.connect(env.db) as c:
+        c.execute("UPDATE hindi_publications SET approved_at_utc=? WHERE id=1",
+                  ((datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),))
+    env.pub.sync()
+    assert env.pub.get(1)["approved_at_utc"] is None
+    # QC failure: an approval matching the current file is cleared once the localization is no longer QC_PASSED
+    mp4, h = _qc_pass(env)
+    with sqlite3.connect(env.db) as c:
+        c.execute("UPDATE hindi_publications SET approved_by='x', approved_at_utc='2099-01-01T00:00:00Z', "
+                  "approved_sha256=? WHERE id=1", (h,))
+        c.execute("UPDATE content_localizations SET status='FAILED' WHERE id=1")
+    env.pub.sync()
+    assert env.pub.get(1)["approved_at_utc"] is None
+    with sqlite3.connect(env.db) as c:
+        ev = [r[0] for r in c.execute("SELECT event FROM hindi_publication_events ORDER BY id")]
+    assert "APPROVAL_CLEARED_FILE_CHANGED" in ev and "APPROVAL_CLEARED_QC_NOT_PASSED" in ev
+
+
+def test_rerender_then_fresh_qc_pass_gets_a_fresh_auto_approval_for_the_new_hash(env):
+    mp4, h1 = _qc_pass(env)
+    env.pub.sync()
+    env.pub.withdraw_for_localization(1, reason="re-opened from render")
+    assert env.pub.get(1)["approved_at_utc"] is None and env.pub.get(1)["state"] == "WITHDRAWN"
+    with sqlite3.connect(env.db) as c:
+        c.execute("UPDATE content_localizations SET status='PLANNED' WHERE id=1")
+    env.pub.sync()
+    assert env.pub.get(1)["state"] == "WITHDRAWN" and env.pub.get(1)["approved_at_utc"] is None
+    mp4.write_bytes(b"\x09" * 64)                          # the new render
+    mp4, h2 = _qc_pass(env)
+    env.pub.sync()
+    r = env.pub.get(1)
+    assert h2 != h1 and r["approved_sha256"] == h2 and r["approved_by"] == hp.AUTO_APPROVER
+
+
+def test_metadata_edit_clears_auto_approval_and_it_is_not_reapplied(env):
+    _qc_pass(env)
+    env.pub.sync()
+    env.pub.update_metadata(1, title="Edited | Hinglish", description="d", tags=["a"])
+    env.pub.sync()
+    assert env.pub.get(1)["approved_at_utc"] is None       # an edit needs a manual re-approval
